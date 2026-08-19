@@ -1,4 +1,4 @@
-// THE GLASS — serve.mjs   ·   node serve.mjs 8460
+// DON'T TOUCH — serve.mjs   ·   node serve.mjs 8460
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
@@ -13,4 +13,4 @@ createServer(async (req, res) => {
     res.writeHead(200, { 'content-type': TYPES[extname(f)] || 'application/octet-stream', 'cache-control': 'no-store' });
     res.end(body);
   } catch (e) { res.writeHead(404); res.end('not here'); }
-}).listen(port, () => console.log(`the glass → http://localhost:${port}`));
+}).listen(port, () => console.log(`don't touch → http://localhost:${port}`));

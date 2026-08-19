@@ -1,4 +1,4 @@
-// THE GLASS — test-view.mjs
+// DON'T TOUCH — test-view.mjs
 // Browser battery. Start the server first:  node serve.mjs 8460
 // Then:  node test-view.mjs
 // Needs playwright:  npm i -D playwright
@@ -25,10 +25,10 @@ const tilted = await p.evaluate(()=>Math.abs(__G.sim.tilt.x)+Math.abs(__G.sim.ti
 await p.evaluate(()=>__G.run(6));
 const w1 = await p.evaluate(()=>{let l=0;const s=__G.sim;for(let i=0;i<s.N*s.N;i++) if(i%s.N<s.N/2) l+=s.water[i]; return l;});
 await p.mouse.up(); await p.keyboard.up('Shift');
-check('shift-drag tilts the jar', tilted>0.02, tilted.toFixed(3));
+check('shift-drag lifts the board', tilted>0.02, tilted.toFixed(3));
 check('tilting moves the water', Math.abs(w1-w0)>0.05, `${w0.toFixed(2)}→${w1.toFixed(2)}`);
 await p.waitForTimeout(400);
-check('the jar rights itself', await p.evaluate(()=>Math.abs(__G.sim.tilt.x)<0.001));
+check('the board settles back', await p.evaluate(()=>Math.abs(__G.sim.tilt.x)<0.001));
 
 // WARM + fingerprint
 const t0 = await p.evaluate(()=>__G.sim.temp[__G.sim.idx(32,32)]);
@@ -37,13 +37,13 @@ await p.waitForTimeout(300); await p.mouse.move(645,432); await p.waitForTimeout
 await p.evaluate(()=>__G.run(2));
 await p.mouse.up();
 const t1 = await p.evaluate(()=>{let m=0;const s=__G.sim;for(let i=0;i<s.N*s.N;i++) m=Math.max(m,s.temp[i]); return m;});
-check('the finger heats the glass', t1>t0+8, `${t0.toFixed(1)}→${t1.toFixed(1)}`);
+check('the finger heats the ground', t1>t0+8, `${t0.toFixed(1)}→${t1.toFixed(1)}`);
 
 // BREATHE
 const h0 = await p.evaluate(()=>__G.sim.humid);
 await p.keyboard.down(' '); await p.waitForTimeout(2600); await p.keyboard.up(' ');
 const h1 = await p.evaluate(()=>__G.sim.humid + __G.sim.rainLeft);
-check('space breathes weather into the jar', h1>h0, `${h0.toFixed(1)}→${h1.toFixed(1)}`);
+check('space breathes weather onto the town', h1>h0, `${h0.toFixed(1)}→${h1.toFixed(1)}`);
 
 // SELECT a kin (before we do anything cruel)
 await p.evaluate(()=>{ __G.app.ui.select(__G.app.view.kinScreen[0]); __G.app.ui.paintInspector(); });
@@ -55,10 +55,10 @@ check('needs decompose into causes', await p.evaluate(()=>document.querySelector
 
 // LID
 await p.keyboard.press('l');
-check('L opens the lid', await p.evaluate(()=>__G.sim.lid===true));
+check('L pulls the cover off', await p.evaluate(()=>__G.sim.lid===true));
 const tot = () => p.evaluate(()=>{const s=__G.sim;let w=s.humid+s.rainLeft;for(let i=0;i<s.N*s.N;i++)w+=s.water[i];return w;});
 const v0 = await tot(); await p.evaluate(()=>__G.run(40)); const v1 = await tot();
-check('an open lid dries the jar out', v1<v0*0.96, `${v0.toFixed(1)}→${v1.toFixed(1)}`);
+check('the cover off dries the town out', v1<v0*0.96, `${v0.toFixed(1)}→${v1.toFixed(1)}`);
 await p.keyboard.press('l');
 
 // TAP
@@ -90,7 +90,7 @@ const snap2 = await p.evaluate(()=>({g:__G.sim.graves.length,b:__G.sim.stats.bor
 check('the colony survives a reload', day2===day, `day ${day} → ${day2}`);
 check('and restores byte-identically', fp===fp2, fp+' / '+fp2);
 check('graves, births, deaths and names all survive', JSON.stringify(snap)===JSON.stringify(snap2), JSON.stringify(snap2));
-check('the house contract save key exists', await p.evaluate(()=>!!localStorage.getItem('theglass-save')));
+check('the house contract save key exists', await p.evaluate(()=>!!localStorage.getItem('donttouch-save')));
 
 await p.screenshot({path:'/tmp/final.png'});
 console.log(T.join('\n'));

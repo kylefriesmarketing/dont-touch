@@ -1,4 +1,4 @@
-// THE GLASS — ui.js
+// DON'T TOUCH — ui.js
 // DOM overlay. The game must be fully playable with every panel closed. (Invariant 7)
 
 import { LOCI, L, NEEDS, STAGE, STAGE_NAME, expressed, carried, marrowHomozygous, LANTERN_HUE } from './sim.js';
@@ -40,8 +40,8 @@ export class UI {
 
   sync() {
     $('mute').textContent = this.app.sfx.muted ? 'sound off' : 'sound on';
-    $('lamp').textContent = this.sim.lampOn ? 'lamp on' : 'lamp off';
-    $('lidBtn').textContent = this.sim.lid ? 'lid open' : 'lid shut';
+    $('lamp').textContent = this.sim.lampOn ? 'bulb on' : 'bulb off';
+    $('lidBtn').textContent = this.sim.lid ? 'cover off' : 'cover on';
     [...$('speed').children].forEach(b => b.classList.toggle('on', +b.dataset.s === this.app.speed));
   }
 
@@ -142,7 +142,7 @@ export class UI {
     const s = this.sim;
     const p = s.page();
     const body = $('pageBody');
-    let h = `<h2>the book of the jar</h2><div class="sub">day ${s.day} · ${s.alive || 0} alive · ${s.graves.length} on the shelf</div><ol>`;
+    let h = `<h2>the book of the town</h2><div class="sub">day ${s.day} · ${s.alive || 0} alive · ${s.graves.length} in the yard</div><ol>`;
     p.forEach(e => { h += `<li><span>${e.day}</span>${e.text}</li>`; });
     h += '</ol>';
     h += `<div class="foot">a DIRTY BOY DEVS game</div>`;
@@ -172,10 +172,10 @@ export class UI {
 
     g.fillStyle = '#e8eef7';
     g.font = '600 76px Georgia, serif';
-    g.fillText('the book of the jar', 80, 640);
+    g.fillText('the book of the town', 80, 640);
     g.fillStyle = '#8b97a8';
     g.font = '300 38px Georgia, serif';
-    g.fillText(`day ${s.day} · ${s.alive || 0} alive · ${s.graves.length} on the shelf`, 80, 700);
+    g.fillText(`day ${s.day} · ${s.alive || 0} alive · ${s.graves.length} in the yard`, 80, 700);
 
     g.font = '300 42px Georgia, serif';
     let y = 830;
@@ -195,12 +195,12 @@ export class UI {
     });
 
     g.fillStyle = '#5a6675'; g.font = '300 30px Georgia, serif';
-    g.fillText('THE GLASS · a DIRTY BOY DEVS game', 80, H - 90);
+    g.fillText('DON’T TOUCH · a DIRTY BOY DEVS game', 80, H - 90);
 
     c.toBlob((b) => {
       const a = document.createElement('a');
       a.href = URL.createObjectURL(b);
-      a.download = `the-glass-day-${s.day}.png`;
+      a.download = `dont-touch-day-${s.day}.png`;
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 4000);
     });

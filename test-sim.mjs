@@ -1,4 +1,4 @@
-// THE GLASS — test-sim.mjs
+// DON'T TOUCH — test-sim.mjs
 // Headless battery. `node test-sim.mjs`
 // Invariant 4: every era gets a soak, zero errors, no NaN, nothing outside the jar.
 
@@ -13,7 +13,7 @@ const eq = (a, b, m) => { if (a !== b) throw new Error(`${m || ''} expected ${b}
 const ok = (c, m) => { if (!c) throw new Error(m || 'assertion failed'); };
 const run = (s, days) => { const n = days * C.TICKS_PER_DAY; for (let i = 0; i < n; i++) s.step(); return s; };
 
-console.log('THE GLASS — sim battery\n');
+console.log("DON'T TOUCH — sim battery\n");
 
 // --- RNG -------------------------------------------------------------------
 console.log('rng');
@@ -60,7 +60,7 @@ t('thermal field relaxes toward ambient with no hand', () => {
   let mx = -1e9; for (let i = 0; i < s.N * s.N; i++) mx = Math.max(mx, s.temp[i]);
   ok(mx < 30, `did not cool: ${mx.toFixed(1)}`);
 });
-t('the hand heats the glass, and only near the finger', () => {
+t('the hand heats the ground, and only near the finger', () => {
   const s = new Sim({ seed: 'a', founders: 0 });
   s.setHand(20, 20); run(s, 2);
   const near = s.temp[s.idx(20, 20)], far = s.temp[s.idx(55, 55)];

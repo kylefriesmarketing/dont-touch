@@ -1,12 +1,46 @@
-# THE GLASS — THE COMPLETE BIBLE
-**Dirty Boy Devs · a flagship of THE HOUSE (the bedroom windowsill) · HTML5 browser · Age of Toys scale · Steam-ready**
-*Working title. Shortlist at §23.*
+# DON'T TOUCH — THE COMPLETE BIBLE
+**Dirty Boy Devs · a flagship of THE HOUSE (the basement layout) · HTML5 browser · Age of Toys scale · Steam-ready**
+*Title locked by Kyle, 2026-08-19.*
 
-> **Logline:** Something is alive in the jar on your windowsill, and it has begun to notice that the weather has a pattern.
+> **Logline:** Dad built a miniature town in the basement, and the one rule of the house is that you don't touch it. Nobody knows it woke up.
 >
-> **Pitch in one breath:** A god game where every divine power is something a kid can do to a terrarium — warm the glass with a finger, tilt it, breathe on it, open the lid — and the little glowing people inside build a civilization out of what you did to them, including the parts you didn't mean.
+> **Pitch in one breath:** A god game where every divine power is something a kid can do to a 4×8 model layout — press a finger to the board, lift one edge off the sawhorses, breathe on the town, pull the plastic sheeting, pull the light cord — and the little glowing people inside build a civilization out of what you did to them, including the parts you didn't mean. Every mark you leave stays, and dad will see it.
 >
 > **Format:** browser, no build step, vanilla ES modules + Three.js, single diorama · **Session:** 10–20 min a sitting, forever · **Tone:** cozy on the surface, no guardrails underneath · **Production:** 100% procedural art + WebAudio synth, zero generated-asset spend · **Design school:** Populous's one-verb discipline, *Creatures*' interiority, Dwarf Fortress's silence, the Sims' refusal to moralise.
+
+---
+
+## ⚠️ THE PIVOT (2026-08-19, Kyle) — read this before the rest of the document
+
+This bible was written as **THE GLASS**: the same game inside a terrarium jar on the kid's
+bedroom windowsill. On 2026-08-19 — the day v0.1 shipped — Kyle pivoted the fiction to
+**DON'T TOUCH**: a 90s dad's model-railroad-style miniature town on a plywood 4×8 over
+sawhorses in the basement, kept from the kids because one touch ruins it. An **open table** —
+no glass case; the law is dad's, not physics.
+
+**Not one sim mechanic changed.** Every jar noun below maps onto the layout like this:
+
+| The bible says | It now means |
+|---|---|
+| the jar / the glass | dad's layout on the plywood table; "the glass" survives only in history |
+| the circular jar wall (`inJar`) | **the track loop — the rails are the edge of the world** |
+| warm the glass with a finger | press a fingertip to the board (the literal forbidden touch) |
+| tilt the jar | lift one edge of the board off the sawhorses |
+| breathe on the glass / fog drawing | breathe on the town directly; the fog board (§8) becomes the **dust layer** you draw in |
+| the lid (open = vent) | **the plastic sheeting** — draped, their rain comes back; pulled off, the basement air drinks the pond |
+| the curtain + the lamp | the grimy **window well** + the **pull-chain bulb** |
+| the sill, the room, the year (§11.4) | the basement; the seasonal cold is **the furnace and the concrete** |
+| moss | ground-foam flocking (that grows — it's alive) |
+| the graveyard shelf | the yard — the cemetery corner every layout has |
+| fingerprints on the glass (§15.3) | **the evidence**: flocking pressed flat wherever a finger landed, forever |
+| backlit-window art direction (§15.1) | a lamplit table in a dark basement; silhouette + lantern glow unchanged |
+| the marrow rule rotting a closed pool | reads as **lead rot** — old pewter corroding in a damp basement |
+
+Everything else in this document — the verbs' numbers, the kin, the blood, the mind, the
+weave, the fog, the theonym, the eras, the chronicle, the invariants, the build order — is
+**still the design authority as written**. Where a section says "jar", read the table above.
+A full prose revision of the fiction layer is deliberately deferred; `HANDOFF.md` is the
+live build-state authority.
 
 ---
 

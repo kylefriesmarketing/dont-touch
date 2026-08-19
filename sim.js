@@ -1,4 +1,4 @@
-// THE GLASS — sim.js
+// DON'T TOUCH — sim.js
 // The ENTIRE deterministic simulation. No THREE. No DOM. Node-testable.
 // Invariants (bible §17): seeded RNG only, no Math.random, no Math.sin/cos/pow in sim code.
 
@@ -330,7 +330,7 @@ export class Sim {
       this.k.age[id] = this.k.stage[id] === STAGE.HALF ? rr(rng, 12, 20) : rr(rng, 30, 70);
       this._name(id, 'founder');
     }
-    this.log('open', `the jar. ${this.count} of them, and nothing yet has a name for the sky.`);
+    this.log('open', `the town. ${this.count} of them, and nothing yet has a name for the sky.`);
   }
 
   _spawn(x, y, genome, mo, fa, gen) {
@@ -453,8 +453,8 @@ export class Sim {
       this.rainLeft = this.humid * 0.85; this.humid -= this.rainLeft;
       if (this.day - (this._lastRainLog || -99) > 11) {
         this._lastRainLog = this.day;
-        const how = ['the glass wept, and it rained inside.',
-                     'the inside of the sky ran down the walls.',
+        const how = ['the air gave back its water, and it rained.',
+                     'the underside of the sky ran with rain.',
                      'the weather came back down.'][(this.day / 11 | 0) % 3];
         this.log('rain', how, 0.6);
       }
@@ -484,7 +484,7 @@ export class Sim {
       }
     }
     // the player's breath is a cloud you make on purpose
-    if (this.fog > 0.999) { this.humid += 4.5; this.fog = 0; this.log('breath', 'you breathed on the glass, and weather happened.', 1.1); }
+    if (this.fog > 0.999) { this.humid += 4.5; this.fog = 0; this.log('breath', 'you breathed on the town, and weather happened.', 1.1); }
   }
 
   _growth(F) {
@@ -869,7 +869,7 @@ export class Sim {
       this.stats.born++;
       this.stats.generations = Math.max(this.stats.generations, k.gen[id]);
       if (novel >= 0) {
-        this._name(id, `born with something no one in the jar has carried before`);
+        this._name(id, `born with something no one in the town has carried before`);
         this.log('mutation', `a new ${LOCI[novel].key} in the blood.`, 2.6);
         novel = -1;
       }
@@ -912,7 +912,7 @@ export class Sim {
     this.graves.push({ x: gx, y: gy, nameId: c.nameId, day: this.day, gen: c.gen });
     this.stats.buried++;
     const carrier = this._name(id, `who carried the dead to the shelf`);
-    if (c.nameId >= 0) this.log('burial', `${carrier} carried ${this.names[c.nameId]} to the shelf.`, 1.8);
+    if (c.nameId >= 0) this.log('burial', `${carrier} carried ${this.names[c.nameId]} to the yard.`, 1.8);
   }
 
   _corpses() {
@@ -922,7 +922,7 @@ export class Sim {
         const c = this.corpses.splice(i, 1)[0];
         const j = this.idx(c.x, c.y);
         this.moss[j] = Math.min(1, this.moss[j] + 0.5);
-        this.log('unburied', `nobody came for one of them. the moss took it.`, 2.2);
+        this.log('unburied', `nobody came for one of them. the grass took it.`, 2.2);
       }
     }
   }
@@ -931,7 +931,7 @@ export class Sim {
     // seasonal room temperature from the real calendar is applied by the view via setRoom()
     if (this.alive === 0 && !this._ended) {
       this._ended = true;
-      this.log('end', `the jar is quiet. ${this.graves.length} graves on the shelf.`, 9);
+      this.log('end', `the town is quiet. ${this.graves.length} graves in the yard.`, 9);
     }
   }
 
@@ -941,7 +941,7 @@ export class Sim {
     const dy_ = Math.abs(x - this.yard.x) + Math.abs(y - this.yard.y);
     if (this.water[i] > 0.02) return 'water';
     if (dp < 9) return 'bank';
-    if (dy_ < 7) return 'shelf';
+    if (dy_ < 7) return 'yard';
     return this.height[i] > 0.55 ? 'high ground' : 'flat';
   }
 

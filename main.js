@@ -1,4 +1,4 @@
-// THE GLASS — main.js
+// DON'T TOUCH — main.js
 // Boot, fixed-timestep loop, input, persistence. View and sim never touch. (§17)
 
 import { Sim, C, STAGE } from './sim.js';
@@ -6,8 +6,8 @@ import { View } from './view.js';
 import { UI } from './ui.js';
 import { Sfx } from './sfx.js';
 
-const SAVE_KEY = 'theglass-save';         // the house contract summary (§21)
-const DB = 'theglass', STORE = 'colony';
+const SAVE_KEY = 'donttouch-save';        // the house contract summary (§21)
+const DB = 'donttouch', STORE = 'colony';
 
 // ---------------------------------------------------------------------------
 // IndexedDB — the colony itself. localStorage holds only the hub's summary.
@@ -104,7 +104,7 @@ class App {
     const fromDay = this.sim.day;
     const note = document.getElementById('boot');
     note.classList.remove('hide');
-    note.innerHTML = '<div class="bootin"><h1>THE GLASS</h1><p>while you were away…</p></div>';
+    note.innerHTML = '<div class="bootin"><h1>DON&rsquo;T TOUCH</h1><p>while you were away…</p></div>';
     await new Promise(r => setTimeout(r, 40));
     const t0 = performance.now();
     let n = 0;
@@ -161,7 +161,7 @@ class App {
         const hit = v.pickGround(nx, ny);
         if (hit) {
           s.setHand(hit.cell[0], hit.cell[1]);
-          if (performance.now() - lastPrint > 260) { v.fingerprint(hit.glass); lastPrint = performance.now(); }
+          if (performance.now() - lastPrint > 260) { v.fingerprintAt(hit.cell[0], hit.cell[1]); lastPrint = performance.now(); }
         }
       }
     });
@@ -172,7 +172,7 @@ class App {
       if (mode === 'warm') {
         const [nx, ny] = norm(e);
         const hit = v.pickGround(nx, ny);
-        if (hit) v.fingerprint(hit.glass);
+        if (hit) v.fingerprintAt(hit.cell[0], hit.cell[1]);
         s.setHand(null);
         if (moved < 6) {                       // a tap, not a hold: try to select a kin
           const id = v.pickKin(nx, ny);
@@ -216,7 +216,7 @@ class App {
       k.need[id * 6 + 5] = Math.max(0, k.need[id * 6 + 5] - 0.12);
       k.hold[id] = 0;
     }
-    s.log('tap', 'something struck the sky and every one of them stopped.', 2.4);
+    s.log('tap', 'the whole world knocked, once, and every one of them stopped.', 2.4);
   }
 
   // -- loop ----------------------------------------------------------------
@@ -274,7 +274,7 @@ window.__G = {
 };
 app.boot().catch(e => {
   document.getElementById('boot').innerHTML =
-    `<div class="bootin"><h1>THE GLASS</h1><p style="color:#f88">${e.message}</p>
+    `<div class="bootin"><h1>DON&rsquo;T TOUCH</h1><p style="color:#f88">${e.message}</p>
      <p style="opacity:.6;font-size:13px">serve this folder over http — es modules do not load from file://</p></div>`;
   console.error(e);
 });

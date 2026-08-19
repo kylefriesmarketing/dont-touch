@@ -1,12 +1,23 @@
-# THE GLASS — HANDOFF
-**v0.1 · 2026-08-19 · read this before writing a line.**
-Companion to `THE_GLASS_BIBLE.md` (the design authority) and `README.md` (how to run it).
+# DON'T TOUCH — HANDOFF
+**v0.2 · 2026-08-19 · read this before writing a line.**
+Companion to `DONT_TOUCH_BIBLE.md` (the design authority — read its ⚠️ PIVOT preface first)
+and `README.md` (how to run it).
+
+**THE PIVOT (same day v0.1 shipped):** Kyle re-themed the game from a windowsill terrarium
+(THE GLASS) to a 90s dad's miniature town on a basement layout table (DON'T TOUCH). **Zero
+sim mechanics changed** — the bible preface carries the full jar→layout mapping table. What
+moved: `view.js` (basement/table/track-loop/town/plastic-cover replaced room/jar/glass —
+the track ring IS the sim's circular `inJar` boundary), all player-facing copy, fingerprints
+now press into the GROUND texture (`view.fpGrid` + `fingerprintAt(cx,cy)`, composited every
+frame in `_paintGround`) instead of a glass-cylinder canvas, and the save keys renamed
+`theglass*` → `donttouch*` (repo + URL renamed the same day). The jar-era bug history below
+is kept verbatim — every one of those bugs is still real, just wearing new nouns.
 
 | File | What it is | State |
 |---|---|---|
-| `THE_GLASS_BIBLE.md` | the complete design bible, 24 parts | **v1.0. Four decisions locked with Kyle. §22 is the redline list.** |
+| `DONT_TOUCH_BIBLE.md` | the complete design bible, 24 parts + the pivot preface | **v1.1. Title locked with Kyle; the preface's mapping table governs the fiction.** |
 | `sim.js` | the entire deterministic simulation | **~900 lines. M1–M6 live. No THREE, no DOM.** |
-| `view.js` | Three.js rendering | **live. Backlit, one InstancedMesh + one Points for the whole colony.** |
+| `view.js` | Three.js rendering | **live. Lamplit basement: table, track loop, town, cover; one InstancedMesh + one Points for the colony.** |
 | `ui.js` / `sfx.js` / `main.js` / `index.html` | overlay, audio, loop, shell | **live** |
 | `test-sim.mjs` | headless battery | **40 tests, 40 green** |
 | `test-view.mjs` | browser battery | **19 checks, 19 green, zero console errors** |
@@ -136,6 +147,12 @@ URL: `?newgame` · `?seed=x` · `?pause`.
 6. **Touch.** Pointer events work but the tilt gesture has no touch equivalent, and there is no
    pinch-zoom. Needed before this goes anywhere near a phone.
 7. **`prefers-reduced-motion`** is not honoured yet. House definition-of-done requires it.
+8. **Layout art-pass candidates** (from the pivot, all view-only): the plaster tunnel
+   mountain straddling the track at the back; instancing the trees/houses if the scenery
+   count grows (~70 static meshes today, fine); dust motes biased into the bulb cone.
+9. **The glued-down figure.** Dad glued some people mid-stride. A named kin who is alive
+   and can NEVER move — fed, visited, grieved by the others — is the best character idea
+   the pivot produced. It wants §6.4 memory, so it's an M7 design, not a view hack.
 
 ## For Kyle (bible §22)
 

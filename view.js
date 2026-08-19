@@ -1,7 +1,7 @@
-// THE GLASS — view.js
+// DON'T TOUCH — view.js
 // Rendering only. Reads the sim, never writes it. (Invariant 2)
-// Art direction: backlit silhouette. The window is behind the jar; everything
-// inside reads as shape plus lantern glow. (bible §15)
+// Art direction: a lamplit layout in a dark basement. One bare bulb over dad's
+// plywood table; the town reads as shape plus lantern glow. (bible §15, pivoted)
 
 import * as THREE from './lib/three.module.js';
 import { STAGE, NEEDS, LANTERN_HUE, LOCI, L, expressed } from './sim.js';
@@ -12,6 +12,8 @@ const GR = R * 0.94;    // ground radius
 const YS = 0.38;        // vertical scale of the heightfield
 const BASE = -0.155;     // the jar's floor. Everything is measured from here.
 const EDGE_Y = 0.035;   // the lip where the soil column meets the terrain
+const TW = 4.6;         // dad's plywood: a 4×8 sheet at world scale (2:1)
+const TD = 2.3;
 
 export class View {
   constructor(canvas, sim) {
@@ -26,30 +28,35 @@ export class View {
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(38, 1, 0.05, 60);
     this.orbit = { az: 0.6, el: 0.46, dist: 3.6, tAz: 0.6, tEl: 0.46, tDist: 3.6 };
+    // 'jar' by history: this group is THE BOARD — everything that lifts
+    // together when you tilt one edge of the plywood off the sawhorses.
     this.jar = new THREE.Group();
     this.scene.add(this.jar);
 
     this._room();
     this._ground();
+    this._track();
+    this._scenery();
     this._water();
     this._kin();
     this._graves();
-    this._glass();
+    this._cover();
     this._dust();
 
     this.raycaster = new THREE.Raycaster();
     this.resize();
   }
 
-  // -- the room behind the jar ----------------------------------------------
+  // -- the basement around the table ----------------------------------------
   _room() {
-    // the window: a big soft gradient plane. This is the only real light in the
-    // picture, and it is behind everything, which is the whole art direction.
+    // the window well: a half-window at grade, the only daylight that gets
+    // down here. Painted into a tiny gradient canvas every frame.
     const c = document.createElement('canvas'); c.width = 8; c.height = 256;
     const g = c.getContext('2d');
     this.skyCtx = g; this.skyCanvas = c;
     this.skyTex = new THREE.CanvasTexture(c);
-    // the wall the window is in
+
+    // the back wall
     const wall = new THREE.Mesh(
       new THREE.PlaneGeometry(40, 24),
       new THREE.MeshBasicMaterial({ color: 0x080a0e })
@@ -58,36 +65,33 @@ export class View {
     this.scene.add(wall);
     this.wallMat = wall.material;
 
-    // the window itself — the only real light in the picture
+    // the half-window, high on the wall
     this.sky = new THREE.Mesh(
-      new THREE.PlaneGeometry(4.4, 5.2),
+      new THREE.PlaneGeometry(2.3, 0.92),
       new THREE.MeshBasicMaterial({ map: this.skyTex, depthWrite: false })
     );
-    this.sky.position.set(0, 1.55, -3.0);
+    this.sky.position.set(-1.3, 2.5, -3.0);
     this.scene.add(this.sky);
-
-    // muntins — the cross in the window. Sells the whole read instantly.
-    const barMat = new THREE.MeshBasicMaterial({ color: 0x0b0d12 });
-    [[0, 1.55, 0.09, 5.3], [0, 1.55, 4.5, 0.085]].forEach(([x, y, w, h]) => {
-      const b = new THREE.Mesh(new THREE.PlaneGeometry(w, h), barMat);
-      b.position.set(x, y, -2.98); this.scene.add(b);
-    });
+    const bar = new THREE.Mesh(new THREE.PlaneGeometry(0.07, 1.0),
+      new THREE.MeshBasicMaterial({ color: 0x0b0d12 }));
+    bar.position.set(-1.3, 2.5, -2.98); this.scene.add(bar);
     const frame = new THREE.Mesh(
-      new THREE.PlaneGeometry(4.9, 5.7),
+      new THREE.PlaneGeometry(2.52, 1.12),
       new THREE.MeshBasicMaterial({ color: 0x11141a })
     );
-    frame.position.set(0, 1.55, -3.01); this.scene.add(frame);
+    frame.position.set(-1.3, 2.5, -3.01); this.scene.add(frame);
 
-    // the sill the jar stands on
-    const sill = new THREE.Mesh(
-      new THREE.BoxGeometry(6.4, 0.14, 1.5),
-      new THREE.MeshBasicMaterial({ color: 0x16181f })
+    // bare concrete
+    const floor = new THREE.Mesh(
+      new THREE.PlaneGeometry(40, 30),
+      new THREE.MeshBasicMaterial({ color: 0x0b0c10 })
     );
-    sill.position.set(0, BASE - 0.07, -0.15);
-    this.scene.add(sill);
-    this.sillMat = sill.material;
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.y = BASE - 0.64;
+    this.scene.add(floor);
+    this.floorMat = floor.material;
 
-    // the jar's own shadow on the sill
+    // the table's shadow pooled on it
     const shTex = (() => {
       const c2 = document.createElement('canvas'); c2.width = c2.height = 128;
       const g2 = c2.getContext('2d');
@@ -96,37 +100,80 @@ export class View {
       g2.fillStyle = r2; g2.fillRect(0, 0, 128, 128);
       return new THREE.CanvasTexture(c2);
     })();
-    const shadow = new THREE.Mesh(new THREE.PlaneGeometry(3.0, 2.2),
+    const shadow = new THREE.Mesh(new THREE.PlaneGeometry(5.6, 3.2),
       new THREE.MeshBasicMaterial({ map: shTex, transparent: true, depthWrite: false }));
     shadow.rotation.x = -Math.PI / 2;
-    shadow.position.set(0.35, BASE + 0.006, 0.28);
+    shadow.position.set(0, BASE - 0.635, 0.1);
     this.scene.add(shadow);
 
-    // the light shaft through the glass
-    const shaftGeo = new THREE.PlaneGeometry(2.6, 3.2);
-    this.shaft = new THREE.Mesh(shaftGeo, new THREE.MeshBasicMaterial({
-      color: 0xffe9c4, transparent: true, opacity: 0.05, blending: THREE.AdditiveBlending,
-      depthWrite: false, depthTest: false,
+    // sawhorses. The board only RESTS on them — a tilt lifts it clean off.
+    const wood = new THREE.MeshBasicMaterial({ color: 0x191510 });
+    for (const hx of [-1.55, 1.55]) {
+      const beam = new THREE.Mesh(new THREE.BoxGeometry(0.10, 0.08, TD * 0.96), wood);
+      beam.position.set(hx, BASE - 0.095, 0);
+      this.scene.add(beam);
+      for (const hz of [-TD * 0.40, TD * 0.40]) for (const lean of [-0.3, 0.3]) {
+        const leg = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.56, 0.05), wood);
+        leg.position.set(hx + lean * 0.28, BASE - 0.40, hz);
+        leg.rotation.z = lean;
+        this.scene.add(leg);
+      }
+    }
+
+    // the bulb on its cord — the town's sun when the window gives up
+    const cord = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 1.6),
+      new THREE.MeshBasicMaterial({ color: 0x04050a }));
+    cord.position.set(0.55, 2.85, 0.3); this.scene.add(cord);
+    this.bulb = new THREE.Mesh(new THREE.SphereGeometry(0.052, 12, 10),
+      new THREE.MeshBasicMaterial({ color: 0x2a2a2e }));
+    this.bulb.position.set(0.55, 2.05, 0.3); this.scene.add(this.bulb);
+
+    const glowTex = (() => {
+      const c3 = document.createElement('canvas'); c3.width = c3.height = 128;
+      const g3 = c3.getContext('2d');
+      const r3 = g3.createRadialGradient(64, 64, 2, 64, 64, 64);
+      r3.addColorStop(0, 'rgba(255,236,190,0.9)');
+      r3.addColorStop(0.25, 'rgba(255,220,160,0.28)');
+      r3.addColorStop(1, 'rgba(255,210,140,0)');
+      g3.fillStyle = r3; g3.fillRect(0, 0, 128, 128);
+      return new THREE.CanvasTexture(c3);
+    })();
+    this.bulbGlow = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: glowTex, transparent: true, opacity: 0,
+      blending: THREE.AdditiveBlending, depthWrite: false,
     }));
-    this.shaft.position.set(0, 0.45, -1.5);
+    this.bulbGlow.scale.set(1.3, 1.3, 1);
+    this.bulbGlow.position.copy(this.bulb.position);
+    this.scene.add(this.bulbGlow);
+
+    // the cone of light down onto the table
+    this.shaft = new THREE.Mesh(
+      new THREE.ConeGeometry(2.0, 2.2, 40, 1, true),
+      new THREE.MeshBasicMaterial({
+        color: 0xffe9c4, transparent: true, opacity: 0.05, blending: THREE.AdditiveBlending,
+        depthWrite: false, depthTest: false, side: THREE.DoubleSide,
+      }));
+    this.shaft.position.set(0.55, 0.95, 0.3);
     this.scene.add(this.shaft);
   }
 
   _paintSky() {
     const s = this.sim, g = this.skyCtx;
-    const d = s.daylight;
-    // seasonal window colour: cold blue in winter, amber in summer (§11.4)
+    // the sun through the window well. Subtract the bulb's floor so the window
+    // goes properly dark at night even while the light is on.
+    const sun = (s.lampOn && s.daylight <= 0.221) ? 0 : s.daylight;
+    // seasonal colour: cold blue in winter, amber in summer (§11.4)
     const season = s.season != null ? s.season : 0.5;
     const warm = 0.25 + season * 0.75;
     const top = [
-      16 + d * (95 + warm * 150),
-      19 + d * (108 + warm * 135),
-      30 + d * (140 + warm * 55),
+      16 + sun * (95 + warm * 150),
+      19 + sun * (108 + warm * 135),
+      30 + sun * (140 + warm * 55),
     ];
     const bot = [
-      22 + d * (185 + warm * 70),
-      22 + d * (172 + warm * 72),
-      32 + d * (150 + warm * 30),
+      22 + sun * (185 + warm * 70),
+      22 + sun * (172 + warm * 72),
+      32 + sun * (150 + warm * 30),
     ];
     const grad = g.createLinearGradient(0, 0, 0, 256);
     grad.addColorStop(0, `rgb(${top.map(v => v | 0).join(',')})`);
@@ -134,10 +181,19 @@ export class View {
     grad.addColorStop(1, `rgb(${bot.map(v => (v * 0.35) | 0).join(',')})`);
     g.fillStyle = grad; g.fillRect(0, 0, 8, 256);
     this.skyTex.needsUpdate = true;
+
+    // room ambience: s.daylight already blends window and bulb
+    const d = s.daylight;
     const amb = 0.07 + d * 0.26;
-    this.sillMat.color.setRGB(amb * 0.95, amb * 0.86, amb * 0.74);
+    this.floorMat.color.setRGB(amb * 0.62, amb * 0.60, amb * 0.66);
     this.wallMat.color.setRGB(amb * 0.34, amb * 0.34, amb * 0.42);
-    this.shaft.material.opacity = 0.015 + d * 0.10;
+    this.boardMat.color.setScalar(0.30 + d * 0.72);
+
+    // the bulb itself
+    const on = s.lampOn ? 1 : 0;
+    this.bulb.material.color.setHex(on ? 0xffe9b8 : 0x2a2a2e);
+    this.bulbGlow.material.opacity = on * (0.62 + Math.sin(this.t * 11.3) * 0.03);
+    this.shaft.material.opacity = on * 0.075 + sun * 0.012;
   }
 
   // -- the ground ------------------------------------------------------------
@@ -178,17 +234,17 @@ export class View {
     }));
     this.jar.add(this.ground);
 
-    // a clay wall so the terrain doesn't float
+    // the sculpted scenery shell — plaster over screen wire, painted dirt
     const skirt = new THREE.Mesh(
       new THREE.CylinderGeometry(GR * 0.916, GR * 0.916, EDGE_Y - BASE, 72, 1, true),
-      new THREE.MeshBasicMaterial({ color: 0x241d18, side: THREE.DoubleSide })
+      new THREE.MeshBasicMaterial({ color: 0x3a2f24, side: THREE.DoubleSide })
     );
     skirt.position.y = (BASE + EDGE_Y) / 2;
     this.jar.add(skirt);
-    // a rim ring hides the seam where the cropped heightfield meets the soil
+    // a rim ring hides the seam where the cropped heightfield meets the shell
     const ring = new THREE.Mesh(
       new THREE.RingGeometry(GR * 0.872, GR * 0.918, 72),
-      new THREE.MeshBasicMaterial({ color: 0x2a2119, side: THREE.DoubleSide })
+      new THREE.MeshBasicMaterial({ color: 0x453728, side: THREE.DoubleSide })
     );
     ring.rotation.x = -Math.PI / 2; ring.position.y = EDGE_Y - 0.001;
     this.jar.add(ring);
@@ -199,6 +255,158 @@ export class View {
     );
     base.rotation.x = -Math.PI / 2; base.position.y = BASE;
     this.jar.add(base);
+
+    // the evidence layer: every touch presses the flocking flat, forever (§15.3)
+    this.fpGrid = new Float32Array(N * N);
+
+    // dad's plywood — the 4×8 on the sawhorses. It tilts WITH the world:
+    // lifting the board is lifting all of this.
+    const ply = document.createElement('canvas'); ply.width = 512; ply.height = 256;
+    const pg = ply.getContext('2d');
+    pg.fillStyle = '#8a6b42'; pg.fillRect(0, 0, 512, 256);
+    for (let i = 0; i < 90; i++) {
+      const y0 = Math.random() * 256, len = 80 + Math.random() * 380, x0 = Math.random() * 512;
+      pg.strokeStyle = `rgba(${40 + Math.random() * 30 | 0},${26 + Math.random() * 20 | 0},12,${0.05 + Math.random() * 0.1})`;
+      pg.lineWidth = 0.6 + Math.random() * 1.8;
+      pg.beginPath(); pg.moveTo(x0, y0);
+      pg.bezierCurveTo(x0 + len * 0.3, y0 + 3, x0 + len * 0.7, y0 - 3, x0 + len, y0 + 1);
+      pg.stroke();
+    }
+    pg.fillStyle = 'rgba(52,34,16,0.55)';   // one knot, like always
+    pg.beginPath(); pg.ellipse(392, 74, 9, 5.5, 0.3, 0, 6.3); pg.fill();
+    this.boardMat = new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(ply) });
+    this.board = new THREE.Mesh(new THREE.BoxGeometry(TW, 0.05, TD), this.boardMat);
+    this.board.position.y = BASE - 0.026;
+    this.jar.add(this.board);
+  }
+
+  // -- dad's loop ------------------------------------------------------------
+  _track() {
+    // The rails are the edge of the world. The sim's boundary is a circle
+    // (inJar) — the track ring IS that circle wearing its fiction. Nothing
+    // inside ever crosses them.
+    const RT = GR * 1.075;
+    const ballast = new THREE.Mesh(
+      new THREE.RingGeometry(GR * 0.985, GR * 1.165, 96),
+      new THREE.MeshBasicMaterial({ color: 0x3b362e })
+    );
+    ballast.rotation.x = -Math.PI / 2; ballast.position.y = BASE + 0.004;
+    this.jar.add(ballast);
+
+    const ties = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(0.062, 0.006, 0.015),
+      new THREE.MeshBasicMaterial({ color: 0x231a11 }), 84);
+    const m4 = new THREE.Matrix4(), q = new THREE.Quaternion();
+    const v = new THREE.Vector3(), one = new THREE.Vector3(1, 1, 1);
+    const Y = new THREE.Vector3(0, 1, 0);
+    for (let i = 0; i < 84; i++) {
+      const a = (i / 84) * Math.PI * 2;
+      q.setFromAxisAngle(Y, -a);
+      v.set(Math.cos(a) * RT, BASE + 0.010, Math.sin(a) * RT);
+      m4.compose(v, q, one);
+      ties.setMatrixAt(i, m4);
+    }
+    this.jar.add(ties);
+
+    const railMat = new THREE.MeshBasicMaterial({ color: 0x8f8a80 });
+    for (const r of [RT - 0.021, RT + 0.021]) {
+      const rail = new THREE.Mesh(new THREE.TorusGeometry(r, 0.0042, 6, 120), railMat);
+      rail.rotation.x = Math.PI / 2; rail.position.y = BASE + 0.0145;
+      this.jar.add(rail);
+    }
+
+    // the 6:15, stopped where dad left it, never fixed
+    const carCols = [0x1c2f22, 0x5a2222, 0x3a3a42];
+    const a0 = 2.35;
+    for (let ci = 0; ci < 3; ci++) {
+      const car = new THREE.Group();
+      const long = ci === 0 ? 0.105 : 0.085, tall = ci === 0 ? 0.042 : 0.032;
+      const bodyM = new THREE.Mesh(new THREE.BoxGeometry(long, tall, 0.034),
+        new THREE.MeshBasicMaterial({ color: carCols[ci] }));
+      bodyM.position.y = tall / 2 + 0.004; car.add(bodyM);
+      if (ci === 0) {
+        const stack = new THREE.Mesh(new THREE.CylinderGeometry(0.007, 0.010, 0.03, 8),
+          new THREE.MeshBasicMaterial({ color: 0x14161c }));
+        stack.position.set(-long * 0.32, tall + 0.017, 0); car.add(stack);
+        const cab = new THREE.Mesh(new THREE.BoxGeometry(0.034, 0.026, 0.036),
+          new THREE.MeshBasicMaterial({ color: 0x233528 }));
+        cab.position.set(long * 0.30, tall + 0.011, 0); car.add(cab);
+      }
+      const a = a0 + ci * 0.075;
+      car.position.set(Math.cos(a) * RT, BASE + 0.014, Math.sin(a) * RT);
+      car.rotation.y = -a - Math.PI / 2;
+      this.jar.add(car);
+    }
+  }
+
+  // -- dad's town ------------------------------------------------------------
+  _scenery() {
+    // Deterministic dressing from the WORLD's seed — the same colony must wake
+    // up on the same table every boot. View-local PRNG; the sim's rng stream
+    // is never touched. (Invariant 1 stays intact.)
+    const s = this.sim, N = s.N;
+    let sd = (s.seed ^ 0x9e3779b9) >>> 0;
+    const rnd = () => {
+      sd = (Math.imul(sd, 1664525) + 1013904223) >>> 0;
+      return sd / 4294967296;
+    };
+    const ok = (x, y, hMin) => {
+      const dx = x / (N - 1) - 0.5, dy = y / (N - 1) - 0.5;
+      if (Math.sqrt(dx * dx + dy * dy) > 0.385) return false;
+      const i = y * N + x;
+      return s.height[i] > s.pondLevel + hMin && s.water[i] < 0.002;
+    };
+    const put = (mesh, x, y) => {
+      const [wx, wy, wz] = this.cellToLocal(x, y, 0);
+      mesh.position.set(wx, wy, wz);
+      mesh.rotation.y = rnd() * Math.PI * 2;
+      this.jar.add(mesh);
+    };
+
+    // snap-together houses ring the hearth — the town the kin woke up in.
+    // The kin walk straight through them; at this scale nobody minds yet.
+    const wallCols = [0xd6d0c2, 0xa23f33, 0x8797a6, 0xc7b789, 0xb8a27a];
+    const roofM = new THREE.MeshBasicMaterial({ color: 0x33241b });
+    let homes = 0, tries = 0;
+    while (homes < 6 && tries++ < 160) {
+      const ang = rnd() * Math.PI * 2, rr2 = 3.5 + rnd() * 5.5;
+      const x = Math.round(s.hearth.x + Math.cos(ang) * rr2);
+      const y = Math.round(s.hearth.y + Math.sin(ang) * rr2);
+      if (x < 1 || y < 1 || x > N - 2 || y > N - 2 || !ok(x, y, 0.08)) continue;
+      const w = 0.048 + rnd() * 0.02, hgt = 0.032 + rnd() * 0.014;
+      const house = new THREE.Group();
+      const wallsM = new THREE.Mesh(new THREE.BoxGeometry(w, hgt, w * 0.92),
+        new THREE.MeshBasicMaterial({ color: wallCols[homes % wallCols.length] }));
+      wallsM.position.y = hgt / 2; house.add(wallsM);
+      const roof = new THREE.Mesh(new THREE.ConeGeometry(w * 0.80, hgt * 0.72, 4), roofM);
+      roof.position.y = hgt + hgt * 0.36; roof.rotation.y = Math.PI / 4; house.add(roof);
+      if (homes === 0) {           // the church — every layout has one
+        const spire = new THREE.Mesh(new THREE.ConeGeometry(0.008, 0.036, 6),
+          new THREE.MeshBasicMaterial({ color: 0xe4dfd2 }));
+        spire.position.y = hgt + hgt * 0.72 + 0.014; house.add(spire);
+      }
+      put(house, x, y);
+      homes++;
+    }
+
+    // bottle-brush trees
+    const trunkM = new THREE.MeshBasicMaterial({ color: 0x2a1c10 });
+    const greens = [0x174023, 0x1d4d2b, 0x25573a];
+    let trees = 0; tries = 0;
+    while (trees < 14 && tries++ < 300) {
+      const x = (2 + rnd() * (N - 4)) | 0, y = (2 + rnd() * (N - 4)) | 0;
+      if (!ok(x, y, 0.05)) continue;
+      const th = 0.040 + rnd() * 0.034;
+      const tree = new THREE.Group();
+      const cone = new THREE.Mesh(new THREE.ConeGeometry(th * 0.34, th, 7),
+        new THREE.MeshBasicMaterial({ color: greens[(rnd() * 3) | 0] }));
+      cone.position.y = th / 2 + 0.006;
+      tree.add(cone);
+      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.0035, 0.0045, 0.012, 5), trunkM);
+      trunk.position.y = 0.004; tree.add(trunk);
+      put(tree, x, y);
+      trees++;
+    }
   }
 
   _paintGround() {
@@ -213,11 +421,17 @@ export class View {
         const shade = 0.72 + (hu - hd) * 0.9 - (hr - hl) * 0.5;
 
         const m = s.moss[i], w = s.water[i], T = s.temp[i], q = s.moist[i];
-        // soil, damp soil, moss
-        let r = 74 - q * 26, g = 58 - q * 18, b = 44 - q * 12;
-        r = r * (1 - m) + (52 + m * 24) * m;
-        g = g * (1 - m) + (96 + m * 62) * m;
-        b = b * (1 - m) + (44 + m * 22) * m;
+        // painted dirt, damp dirt, ground-foam green
+        let r = 92 - q * 30, g = 74 - q * 24, b = 52 - q * 16;
+        r = r * (1 - m) + (38 + m * 14) * m;
+        g = g * (1 - m) + (112 + m * 64) * m;
+        b = b * (1 - m) + (34 + m * 18) * m;
+        // the evidence: flocking pressed flat where a finger has been
+        const fpv = this.fpGrid[i];
+        if (fpv > 0.004) {
+          const pr = Math.min(0.55, fpv);
+          r = r * (1 - pr) + 84 * pr; g = g * (1 - pr) + 74 * pr; b = b * (1 - pr) + 60 * pr;
+        }
         // the finger's mark: scorch, then heat glow
         if (T > 40) { const h = Math.min(1, (T - 40) / 45); r += h * 150; g += h * 46; b -= h * 20; }
         if (T < 8) { const c2 = Math.min(1, (8 - T) / 18); r += c2 * 20; g += c2 * 34; b += c2 * 62; }
@@ -264,9 +478,9 @@ export class View {
       const o = i * 4;
       const a = w <= 0.0015 ? 0 : Math.min(0.86, 0.24 + w * 5.5);
       const dark = Math.min(1, w * 6);
-      d[o] = (light * (120 - dark * 84)) | 0;
-      d[o + 1] = (light * (170 - dark * 96)) | 0;
-      d[o + 2] = (light * (200 - dark * 70)) | 0;
+      d[o] = (light * (148 - dark * 76)) | 0;
+      d[o + 1] = (light * (188 - dark * 84)) | 0;
+      d[o + 2] = (light * (214 - dark * 58)) | 0;
       d[o + 3] = Math.min(this.mask[i], (a * 255) | 0);
     }
     pos.needsUpdate = true;
@@ -382,7 +596,7 @@ export class View {
   _graves() {
     const geo = new THREE.ConeGeometry(0.007, 0.026, 5);
     this.graveMesh = new THREE.InstancedMesh(geo,
-      new THREE.MeshBasicMaterial({ color: 0x2b2f38 }), 900);
+      new THREE.MeshBasicMaterial({ color: 0x99a0a9 }), 900);
     this.graveMesh.count = 0;
     this.graveMesh.frustumCulled = false;
     this.jar.add(this.graveMesh);
@@ -405,20 +619,13 @@ export class View {
     this._graveN = g.length;
   }
 
-  // -- the glass -------------------------------------------------------------
-  _glass() {
-    // the fingerprint layer: every touch stays. This is the alignment display. (§15.3)
-    const fp = document.createElement('canvas'); fp.width = 1024; fp.height = 256;
-    this.fpCtx = fp.getContext('2d');
-    this.fpCtx.fillStyle = '#000'; this.fpCtx.fillRect(0, 0, 1024, 256);
-    this.fpTex = new THREE.CanvasTexture(fp);
-    this.fpTex.wrapS = THREE.RepeatWrapping;
-
-    const gGeo = new THREE.CylinderGeometry(R, R, JH, 96, 1, true);
-    // Fresnel: glass is invisible face-on and bright at the silhouette. Without
-    // this the jar reads as a hole rather than a vessel.
-    const glassMat = new THREE.ShaderMaterial({
-      uniforms: { uTint: { value: new THREE.Color(0xbcd8ec) }, uAmt: { value: 0.55 } },
+  // -- the cover -------------------------------------------------------------
+  _cover() {
+    // dad's plastic sheeting. Draped = the town is sealed and its rain comes
+    // back; pulled off (L) = the open basement air drinks the pond. This is
+    // the jar's lid wearing its new fiction — the sim boolean is unchanged.
+    const mat = new THREE.ShaderMaterial({
+      uniforms: { uTint: { value: new THREE.Color(0xcfe0ea) }, uAmt: { value: 0.55 } },
       transparent: true, depthWrite: false, side: THREE.DoubleSide,
       blending: THREE.AdditiveBlending,
       vertexShader: `
@@ -434,74 +641,53 @@ export class View {
         varying vec3 vN; varying vec3 vV;
         void main(){
           float f = 1.0 - abs(dot(normalize(vN), normalize(vV)));
-          float a = pow(f, 3.0) * uAmt + 0.012;
+          float a = pow(f, 3.0) * uAmt + 0.016;
           gl_FragColor = vec4(uTint * a, a);
         }`,
     });
-    this.glass = new THREE.Mesh(gGeo, glassMat);
-    this.glass.position.y = BASE + JH / 2;
-    this.jar.add(this.glass);
+    this.cover = new THREE.Group();
+    const dome = new THREE.SphereGeometry(1, 30, 12, 0, Math.PI * 2, 0, Math.PI / 2);
+    // crinkle: plastic never drapes smooth
+    const dp = dome.attributes.position;
+    for (let i = 0; i < dp.count; i++) {
+      const wob = 1 + Math.sin(i * 12.9898) * 0.028 + Math.cos(i * 78.233) * 0.02;
+      dp.setXYZ(i, dp.getX(i) * wob, dp.getY(i), dp.getZ(i) * wob);
+    }
+    dome.computeVertexNormals();
+    const sheet = new THREE.Mesh(dome, mat);
+    sheet.scale.set(R * 1.16, 0.52, R * 1.16);
+    this.cover.add(sheet);
+    const hang = new THREE.Mesh(
+      new THREE.CylinderGeometry(R * 1.16, R * 1.24, 0.15, 30, 1, true), mat);
+    hang.position.y = -0.07;
+    this.cover.add(hang);
+    this.cover.position.y = EDGE_Y + 0.012;
+    this.jar.add(this.cover);
+    this.coverT = this.sim.lid ? 1 : 0;
 
-    this.smudge = new THREE.Mesh(gGeo.clone(), new THREE.MeshBasicMaterial({
-      map: this.fpTex, transparent: true, opacity: 0.5, side: THREE.DoubleSide,
-      depthWrite: false, blending: THREE.AdditiveBlending,
-    }));
-    this.smudge.position.y = this.glass.position.y;
-    this.smudge.scale.setScalar(1.004);
-    this.jar.add(this.smudge);
-
-    // the rim and the lid
-    const rim = new THREE.Mesh(
-      new THREE.TorusGeometry(R * 1.005, 0.016, 8, 60),
-      new THREE.MeshBasicMaterial({ color: 0x6d747f })
-    );
-    rim.rotation.x = Math.PI / 2;
-    rim.position.y = BASE + JH;
-    this.jar.add(rim);
-
-    // ⚠️ The lid was an opaque disc and it covered the entire game. It is glass.
-    this.lid = new THREE.Group();
-    const pane = new THREE.Mesh(
-      new THREE.CircleGeometry(R * 0.99, 56),
+    // their weather, visible: the haze that hangs over the town before rain
+    this.fogMesh = new THREE.Mesh(
+      new THREE.SphereGeometry(1, 20, 8, 0, Math.PI * 2, 0, Math.PI / 2),
       new THREE.MeshBasicMaterial({
-        color: 0x9dc0d8, transparent: true, opacity: 0.085,
-        side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending,
-      })
-    );
-    pane.rotation.x = -Math.PI / 2;
-    const band = new THREE.Mesh(
-      new THREE.TorusGeometry(R * 1.012, 0.014, 8, 60),
-      new THREE.MeshBasicMaterial({ color: 0x484e59 })
-    );
-    band.rotation.x = Math.PI / 2;
-    this.lid.add(pane); this.lid.add(band);
-    this.lid.position.y = BASE + JH + 0.012;
-    this.jar.add(this.lid);
-
-    // condensation on the inside, driven by humidity
-    this.fogMesh = new THREE.Mesh(gGeo.clone(), new THREE.MeshBasicMaterial({
-      color: 0xdff0ff, transparent: true, opacity: 0, side: THREE.BackSide,
-      depthWrite: false, blending: THREE.AdditiveBlending,
-    }));
-    this.fogMesh.position.y = this.glass.position.y;
-    this.fogMesh.scale.setScalar(0.996);
+        color: 0xdff0ff, transparent: true, opacity: 0,
+        depthWrite: false, blending: THREE.AdditiveBlending,
+      }));
+    this.fogMesh.scale.set(GR * 0.99, 0.34, GR * 0.99);
+    this.fogMesh.position.y = EDGE_Y;
     this.jar.add(this.fogMesh);
   }
 
-  // Stamp a fingerprint where the ray crossed the glass.
-  fingerprint(worldPoint) {
-    const p = this.jar.worldToLocal(worldPoint.clone());
-    const u = ((Math.atan2(p.x, p.z) / (Math.PI * 2)) + 0.5) % 1;
-    const v = 1 - Math.max(0, Math.min(1, (p.y + 0.5) / JH));
-    const g = this.fpCtx, X = u * 1024, Y = v * 256;
-    const rad = g.createRadialGradient(X, Y, 0, X, Y, 26);
-    rad.addColorStop(0, 'rgba(190,215,235,0.055)');
-    rad.addColorStop(0.6, 'rgba(170,200,225,0.022)');
-    rad.addColorStop(1, 'rgba(0,0,0,0)');
-    g.globalCompositeOperation = 'lighter';
-    g.fillStyle = rad;
-    g.beginPath(); g.arc(X, Y, 26, 0, 6.2832); g.fill();
-    this.fpTex.needsUpdate = true;
+  // Press the evidence into the scenery. Every touch stays. (§15.3)
+  fingerprintAt(cx, cy) {
+    const N = this.sim.N, g = this.fpGrid;
+    const x0 = Math.max(0, Math.round(cx) - 3), x1 = Math.min(N - 1, Math.round(cx) + 3);
+    const y0 = Math.max(0, Math.round(cy) - 3), y1 = Math.min(N - 1, Math.round(cy) + 3);
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+      const dx = x - cx, dy = y - cy;
+      const add = 0.20 * Math.exp(-(dx * dx + dy * dy) / 3.4);
+      const i = y * N + x;
+      g[i] = Math.min(1, g[i] + add);
+    }
   }
 
   // -- dust in the light -----------------------------------------------------
@@ -552,7 +738,7 @@ export class View {
     );
     this.camera.lookAt(0, 0.14, 0);
 
-    // the jar tips when you tilt it
+    // lifting one edge of the board off the sawhorses
     this.jar.rotation.z = -s.tilt.x * 2.6;
     this.jar.rotation.x = s.tilt.y * 2.6;
 
@@ -562,9 +748,15 @@ export class View {
     this._paintKin();
     this._paintGraves();
 
-    this.fogMesh.material.opacity = Math.min(0.34, Math.max(0, s.humid - 5) * 0.020 + s.fog * 0.26);
-    this.lid.position.y = BASE + JH + 0.012 + (s.lid ? 0.30 : 0);
-    this.lid.rotation.z = s.lid ? 0.20 : 0;
+    // the sheet slides off the board and slumps beside the track
+    const want = s.lid ? 1 : 0;
+    this.coverT += (want - this.coverT) * Math.min(1, dt * 3.4);
+    const ct = this.coverT;
+    this.cover.position.set(ct * 1.72, EDGE_Y + 0.012 - ct * 0.17, ct * 0.34);
+    this.cover.rotation.z = -ct * 0.5;
+    this.cover.scale.set(1 - ct * 0.28, 1 - ct * 0.66, 1 - ct * 0.30);
+    this.fogMesh.material.opacity =
+      Math.min(0.30, Math.max(0, s.humid - 5) * 0.018 + s.fog * 0.24) * (1 - ct * 0.5);
 
     // dust drifts through the shaft
     const dp = this.dust.geometry.attributes.position;
@@ -591,20 +783,7 @@ export class View {
     const cx = (p.x / (GR * 2) + 0.5) * (N - 1);
     const cy = (p.z / (GR * 2) + 0.5) * (N - 1);
     if (cx < 0 || cy < 0 || cx > N - 1 || cy > N - 1) return null;
-    // where the same ray crosses the glass — that's where your finger actually is
-    const dir = this.raycaster.ray.direction, org = this.raycaster.ray.origin;
-    let glassPoint = hit.point.clone();
-    const a = dir.x * dir.x + dir.z * dir.z;
-    if (a > 1e-6) {
-      const b = 2 * (org.x * dir.x + org.z * dir.z);
-      const c = org.x * org.x + org.z * org.z - R * R;
-      const disc = b * b - 4 * a * c;
-      if (disc > 0) {
-        const t1 = (-b - Math.sqrt(disc)) / (2 * a);
-        if (t1 > 0) glassPoint = org.clone().addScaledVector(dir, t1);
-      }
-    }
-    return { cell: [cx, cy], world: hit.point, glass: glassPoint };
+    return { cell: [cx, cy], world: hit.point };
   }
 
   // Nearest kin to a screen position, within a radius, or -1.

@@ -1,9 +1,9 @@
-// THE GLASS — sfx.js
-// All synthesis, no samples. The room is the bed; the jar is quiet. (bible §15.4)
+// DON'T TOUCH — sfx.js
+// All synthesis, no samples. The basement is the bed; the town is quiet. (bible §15.4)
 
 export class Sfx {
   constructor() {
-    this.ready = false; this.muted = localStorage.getItem('theglass-mute') === '1';
+    this.ready = false; this.muted = localStorage.getItem('donttouch-mute') === '1';
   }
 
   start() {
@@ -16,7 +16,7 @@ export class Sfx {
     this.master.gain.value = this.muted ? 0 : 0.5;
     this.master.connect(c.destination);
 
-    // --- the room: a refrigerator two rooms away, and the window ------------
+    // --- the basement: the furnace one room over, mains hum in the wires ----
     const roomG = c.createGain(); roomG.gain.value = 0.055; roomG.connect(this.master);
     const hum = c.createOscillator(); hum.type = 'sine'; hum.frequency.value = 59.5;
     const hum2 = c.createOscillator(); hum2.type = 'sine'; hum2.frequency.value = 119.3;
@@ -62,7 +62,7 @@ export class Sfx {
 
   setMuted(m) {
     this.muted = m;
-    localStorage.setItem('theglass-mute', m ? '1' : '0');
+    localStorage.setItem('donttouch-mute', m ? '1' : '0');
     if (this.master) this.master.gain.setTargetAtTime(m ? 0 : 0.5, this.ctx.currentTime, 0.05);
   }
 
