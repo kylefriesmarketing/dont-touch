@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>THE GLASS — a Dirty Boy Devs game</title>
+<style>
+  :root{
+    --ink:#dbe4f0; --dim:#7b8798; --faint:#4a5563;
+    --panel:rgba(10,13,19,.72); --edge:rgba(140,165,195,.14);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:#06080c;color:var(--ink);
+    font:14px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    overflow:hidden;-webkit-font-smoothing:antialiased}
+  canvas{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}
+  .hide{display:none!important}
+  /* a vignette and a warm grade — free, and it does a lot */
+  #vig{position:fixed;inset:0;pointer-events:none;z-index:5;
+    background:radial-gradient(ellipse 78% 72% at 50% 46%,
+      rgba(0,0,0,0) 42%, rgba(2,4,8,.42) 78%, rgba(2,3,6,.82) 100%)}
+  button{font:inherit;color:var(--ink);background:rgba(255,255,255,.04);
+    border:1px solid var(--edge);border-radius:7px;padding:5px 10px;cursor:pointer;
+    letter-spacing:.01em}
+  button:hover{background:rgba(255,255,255,.09)}
+  button.on{background:rgba(150,200,255,.16);border-color:rgba(150,200,255,.4)}
+
+  /* ---------- top bar ---------- */
+  #top{position:fixed;top:0;left:0;right:0;display:flex;gap:10px;align-items:center;
+    padding:10px 14px;pointer-events:none;
+    background:linear-gradient(#06080ccc,#06080c00)}
+  #top > *{pointer-events:auto}
+  #hud,#weather{font-variant-numeric:tabular-nums;display:flex;gap:7px;align-items:baseline}
+  #hud b{font-weight:650}
+  #hud span,#weather span{color:var(--faint)}
+  #weather{color:var(--dim);font-size:13px}
+  .grow{flex:1}
+  #speed{display:flex;gap:4px}
+
+  /* ---------- chronicle ---------- */
+  #chronWrap{position:fixed;left:14px;bottom:14px;width:min(38ch,44vw);
+    max-height:34vh;display:flex;flex-direction:column;gap:6px;pointer-events:none}
+  #chron{overflow-y:auto;mask-image:linear-gradient(#0000,#000 22%);
+    padding-right:6px;pointer-events:auto;scrollbar-width:thin}
+  #chron .line{display:flex;gap:8px;padding:2px 0;color:var(--dim);font-size:13px;
+    animation:in .5s ease}
+  #chron .line.big{color:var(--ink)}
+  #chron .d{color:var(--faint);min-width:3.2ch;text-align:right;font-variant-numeric:tabular-nums}
+  @keyframes in{from{opacity:0;transform:translateY(5px)}to{opacity:1}}
+
+  /* ---------- right rail ---------- */
+  #rail{position:fixed;right:14px;top:52px;display:flex;flex-direction:column;gap:8px;
+    align-items:flex-end}
+  #curtainWrap{display:flex;align-items:center;gap:8px;background:var(--panel);
+    border:1px solid var(--edge);border-radius:9px;padding:6px 10px;font-size:12px;color:var(--dim)}
+  input[type=range]{width:96px;accent-color:#8fb6dd}
+
+  /* ---------- inspector ---------- */
+  #inspect{position:fixed;right:14px;bottom:14px;width:min(320px,86vw);
+    background:var(--panel);border:1px solid var(--edge);border-radius:11px;
+    padding:12px 13px;backdrop-filter:blur(9px)}
+  #inspect h3{margin:0 0 8px;font-size:12px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--faint);font-weight:600;display:flex;justify-content:space-between}
+  .who{display:flex;align-items:center;gap:8px;margin-bottom:2px}
+  .who b{font-size:17px}
+  .who i{color:var(--dim);font-style:normal;font-size:12px}
+  .dot{width:11px;height:11px;border-radius:50%;box-shadow:0 0 12px currentColor;flex:none}
+  .doing{color:var(--dim);font-size:12.5px;margin:2px 0 9px;font-style:italic}
+  .needs{display:grid;grid-template-columns:1fr 1fr;gap:4px 10px;margin-bottom:9px}
+  .need{display:flex;align-items:center;gap:6px}
+  .need label{font-size:10.5px;color:var(--faint);width:6.4ch;text-transform:lowercase}
+  .bar{flex:1;height:4px;background:rgba(255,255,255,.07);border-radius:3px;overflow:hidden}
+  .bar i{display:block;height:100%;border-radius:3px;transition:width .3s}
+  .strain{color:#ff8b7a;font-size:12px;margin-bottom:8px}
+  .genome{display:grid;grid-template-columns:repeat(6,1fr);gap:4px;margin:9px 0 6px}
+  .locus{display:flex;flex-direction:column;align-items:center;gap:1px;
+    background:rgba(255,255,255,.03);border-radius:6px;padding:4px 2px}
+  .locus .lab{font-size:8px;color:var(--faint);letter-spacing:.04em}
+  .al{font-size:9.5px;line-height:1.25}
+  .al.top{color:var(--ink)}
+  .al.bot{color:#48525f}
+  .al.bot.same{opacity:.32}
+  .warn{color:#e8b866;font-size:11.5px;margin-top:4px}
+  .line2{color:var(--faint);font-size:11.5px;margin-top:7px}
+
+  /* ---------- the page ---------- */
+  #pageWrap{position:fixed;inset:0;background:#04060ade;display:flex;align-items:center;
+    justify-content:center;backdrop-filter:blur(3px);z-index:20;padding:20px}
+  #page{width:min(560px,94vw);max-height:86vh;overflow:auto;
+    background:linear-gradient(#101520,#0a0e15);border:1px solid var(--edge);
+    border-radius:14px;padding:28px 30px}
+  #page h2{font:600 27px/1.2 Georgia,serif;margin:0 0 4px}
+  #page .sub{color:var(--faint);font-size:12.5px;margin-bottom:18px}
+  #page ol{list-style:none;padding:0;margin:0}
+  #page li{display:flex;gap:14px;padding:9px 0;border-top:1px solid rgba(255,255,255,.05);
+    font:300 16px/1.5 Georgia,serif;color:#cfd9e6}
+  #page li span{color:var(--faint);font-size:12px;min-width:3ch;padding-top:4px;
+    font-variant-numeric:tabular-nums}
+  #page .foot{margin-top:20px;color:var(--faint);font-size:11px;letter-spacing:.14em}
+  #pageBtns{display:flex;gap:8px;margin-top:18px}
+
+  /* ---------- help ---------- */
+  #help{position:fixed;inset:0;background:#04060ae8;z-index:30;display:flex;
+    align-items:center;justify-content:center;padding:20px}
+  #help .in{width:min(520px,94vw);font-size:14px}
+  #help h2{font:600 22px Georgia,serif;margin:0 0 14px}
+  #help dl{display:grid;grid-template-columns:auto 1fr;gap:7px 16px;margin:0}
+  #help dt{color:#9fb6d2;white-space:nowrap}
+  #help dd{margin:0;color:var(--dim)}
+  #help .note{margin-top:18px;color:var(--faint);font-size:12.5px;line-height:1.6}
+
+  /* ---------- boot ---------- */
+  #boot{position:fixed;inset:0;background:#06080c;z-index:40;display:flex;
+    align-items:center;justify-content:center}
+  .bootin{text-align:center}
+  .bootin h1{font:300 34px/1 Georgia,serif;letter-spacing:.3em;margin:0 0 12px}
+  .bootin p{color:var(--faint);font-size:13px;margin:0}
+
+  @media (max-width:720px){
+    #chronWrap{width:min(30ch,58vw);max-height:26vh}
+    #inspect{left:14px;right:14px;width:auto}
+    #rail{top:auto;bottom:calc(14px + 40vh)}
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="vig"></div>
+
+<div id="top">
+  <div id="hud"></div>
+  <div id="weather"></div>
+  <div class="grow"></div>
+  <div id="speed">
+    <button data-s="0">‖</button>
+    <button data-s="1" class="on">1×</button>
+    <button data-s="4">4×</button>
+    <button data-s="20">20×</button>
+  </div>
+  <button id="pageBtn">the book</button>
+  <button id="helpBtn">?</button>
+</div>
+
+<div id="rail">
+  <div id="curtainWrap"><label for="curtain">curtain</label>
+    <input id="curtain" type="range" min="0" max="100" value="75"></div>
+  <button id="lamp">lamp off</button>
+  <button id="lidBtn">lid shut</button>
+  <button id="mute">sound on</button>
+</div>
+
+<div id="chronWrap"><div id="chron"></div></div>
+
+<div id="inspect" class="hide">
+  <h3>the one you're looking at <button id="closeInspect" style="padding:0 6px">×</button></h3>
+  <div id="inspectBody"></div>
+</div>
+
+<div id="pageWrap" class="hide">
+  <div id="page">
+    <div id="pageBody"></div>
+    <div id="pageBtns">
+      <button id="savePage">save it as a picture</button>
+      <button id="closePage">close</button>
+    </div>
+  </div>
+</div>
+
+<div id="help" class="hide">
+  <div class="in">
+    <h2>THE GLASS</h2>
+    <dl>
+      <dt>hold on the glass</dt><dd>warm it. your finger comforts, and your finger kills. it takes a few seconds to arrive and a few to leave.</dd>
+      <dt>tap one of them</dt><dd>look at whoever you touched.</dd>
+      <dt>shift-drag / right-drag</dt><dd>tilt the jar. water runs downhill. so do they.</dd>
+      <dt>drag off the jar</dt><dd>walk around it. wheel to lean in.</dd>
+      <dt>hold space</dt><dd>breathe on the glass. enough breath and it rains inside.</dd>
+      <dt>L</dt><dd>the lid. open it and the jar loses its water. nothing in here is free.</dd>
+      <dt>T</dt><dd>tap the glass. don't.</dd>
+      <dt>B</dt><dd>the book — what actually happened, in their handwriting.</dd>
+      <dt>1 · 4 · 20 · P</dt><dd>speed, and pause.</dd>
+    </dl>
+    <div class="note">
+      there is no score, no objective and no way to lose. they eat, they pair off, they have
+      children who look like both of them, and they bury their dead on the shelf. the colour of
+      each light is what that one needs most; the brightness is how it's doing.
+      <br><br>
+      nobody is going to tell you what you were. the graves will.
+      <br><br>
+      <b style="color:#8fb6dd">a DIRTY BOY DEVS game</b> · click anywhere to close
+    </div>
+  </div>
+</div>
+
+<div id="boot"><div class="bootin"><h1>THE GLASS</h1><p>something is alive in there</p></div></div>
+
+<script type="module" src="./main.js"></script>
+</body>
+</html>
