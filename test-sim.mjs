@@ -2,7 +2,7 @@
 // Headless battery. `node test-sim.mjs`
 // Invariant 4: every era gets a soak, zero errors, no NaN, nothing outside the jar.
 
-import { Sim, C, LOCI, L, expressed, NEEDS, STAGE, makeRNG, S, WORKS, WORK_AT } from './sim.js';
+import { Sim, C, LOCI, L, expressed, NEEDS, STAGE, makeRNG, S, WORKS, WORK_AT, WORK_DONE } from './sim.js';
 
 let pass = 0, fail = 0;
 // ⚠️ the battery is a GATE — the house rule is to run it after every sim
@@ -712,6 +712,65 @@ t('memory round-trips, and a remembering town continues identically', () => {
 t('the same hand on the same seed writes the same memory', () => {
   const mk = () => { const s = new Sim({ seed: 'handdet' }); run(s, 30); s.setHand(20 * S, 20 * S); run(s, 20); s.setHand(null); run(s, 10); return s; };
   eq(mk().fingerprint(), mk().fingerprint(), 'a scripted hand was not deterministic');
+});
+
+t('what they build actually works', () => {
+  // ⚠️ REGRESSION GUARD FOR THE WORST BUG THIS GAME HAS HAD. A deadband stopped
+  // finished works being re-offered, but every EFFECT still asked for prog >= 1
+  // and building stopped at the deadband — so across 300 days NO work ever
+  // finished, the store fed nobody (stock 0.0000), the windbreak sheltered
+  // nobody, and 'stands' fired zero times in the game's life. The player
+  // watched a town assemble itself and not one brick of it touched the sim.
+  const s = fixture('bat0', 300);
+  const standing = s.works.filter(o => o.prog >= WORK_DONE);
+  ok(standing.length > 0, 'nothing they built ever counted as standing');
+  ok(s.chronicle.some(e => e.kind === 'stands'), 'the town never noticed a thing being finished');
+  const stores = s.works.filter(o => o.kind === WORK_AT.store && o.prog >= WORK_DONE);
+  if (stores.length) ok(stores.some(o => o.stock > 0), 'no store ever held anything');
+});
+t('nobody starves standing in food', () => {
+  // measured before the fix: 13 of 13 starving kin had saturated moss within
+  // eight cells of where they were dying
+  const s = fixture('bat0', 300);
+  let bad = 0;
+  for (let id = 0; id < s.count; id++) {
+    if (!s.k.alive[id] || s.k.need[id * NEEDS.length + 2] > 0.15) continue;
+    let best = 0;
+    for (let dy = -8; dy <= 8; dy++) for (let dx = -8; dx <= 8; dx++) {
+      const m = s.moss[s.idx(s.k.x[id] + dx, s.k.y[id] + dy)];
+      if (m > best) best = m;
+    }
+    if (best > 0.5) bad++;
+  }
+  eq(bad, 0, 'kin are starving with food within eight cells');
+});
+t('a save from a differently-shaped world is refused, not laid into this one', () => {
+  // ⚠️ LIVE HAZARD: the grid went 64 -> 96 and TypedArray.set does NOT throw on
+  // a short source, so yesterday's save loaded silently into a bigger world
+  // with its pond on a hillside — and the 25s autosave wrote it back.
+  const s = new Sim({ seed: 'shape' });
+  run(s, 3);
+  const o = JSON.parse(JSON.stringify(s.toJSON()));
+  o.fields.temp = o.fields.temp.slice(0, 64 * 64);
+  let threw = false;
+  try { Sim.fromJSON(o); } catch (e) { threw = true; }
+  ok(threw, 'a 64-grid save was accepted into a 96-grid world');
+});
+t('the town never speaks to the player, even when breathed on', () => {
+  // ⚠️ this used to pass only because no fixture ever BREATHED — and the breath
+  // line said "you breathed on the town". Drive all five verbs.
+  const s = new Sim({ seed: 'verbs' });
+  run(s, 20);
+  s.setHand(20 * S, 20 * S); run(s, 6); s.setHand(null);
+  s.setTilt(0.15, 0.1); run(s, 4); s.setTilt(0, 0);
+  for (let i = 0; i < 60; i++) { s.breathe(0.1); s.step(); }
+  run(s, 4);
+  s.setLid(true); run(s, 6); s.setLid(false);
+  s.setLamp(true); s.setCurtain(0.2); run(s, 6);
+  ok(s.chronicle.some(e => e.kind === 'breath'), 'never actually breathed');
+  for (const e of s.chronicle) {
+    ok(!/\byou(r|rs)?\b/i.test(e.text), `the record spoke to the player: "${e.text}"`);
+  }
 });
 
 // --- soak ------------------------------------------------------------------

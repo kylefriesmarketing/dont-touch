@@ -222,6 +222,10 @@ export const WORKS = [
     made: 'raised a roof big enough for all of them', pre: 0b10000, preN: 1, near: 1 },
 ];
 export const WORK_AT = {}; WORKS.forEach((w, i) => WORK_AT[w.key] = i);
+// ⚠️ THE ONE THRESHOLD. "Standing" means this and nothing else — the decay, the
+// effects, the era, the chronicle beat and the view must all agree, or a thing
+// can be finished for one system and unfinished for another.
+export const WORK_DONE = 0.98;
 
 // ---------------------------------------------------------------------------
 // 5. THE SIM
@@ -644,7 +648,7 @@ export class Sim {
       }
     }
     // the player's breath is a cloud you make on purpose
-    if (this.fog > 0.999) { this.humid += 4.5 * S2; this.fog = 0; this.log('breath', 'you breathed on the town, and weather happened.', 1.1); }
+    if (this.fog > 0.999) { this.humid += 4.5 * S2; this.fog = 0; this.log('breath', 'the air went heavy all at once, and then it rained.', 1.1); }
   }
 
   _growth(F) {
@@ -731,7 +735,7 @@ export class Sim {
       // and a windbreak is a warm place that is not the finger
       let shelter = 0;
       for (const o of this.works) {
-        if (o.prog < 1) continue;
+        if (o.prog < WORK_DONE) continue;
         const dx = o.x - k.x[id], dy = o.y - k.y[id];
         const R2 = WORKS[o.kind].radius * S;
         if (dx * dx + dy * dy > R2 * R2) continue;
@@ -830,7 +834,7 @@ export class Sim {
 
       // ---- somebody who knows it, working on one that is not finished, is
       //      handled by goal 10. Here we only decide whether anybody TRIES.
-      const unfinished = this.works.some(o => o.kind === wi && o.prog < 0.985);
+      const unfinished = this.works.some(o => o.kind === wi && o.prog < WORK_DONE);
       const mine = this.works.filter(o => o.kind === wi).length;
       const relearning = pr.invented >= 0 && pr.lost >= 0;   // the knowledge is gone
       // a town builds what it has hands for. Fourteen houses for twenty people
@@ -924,7 +928,7 @@ export class Sim {
     // ---- works age, and a finished one feeds or shelters whoever is near
     for (let n = this.works.length - 1; n >= 0; n--) {
       const o = this.works[n], W = WORKS[o.kind];
-      if (o.prog < 1) continue;
+      if (o.prog < WORK_DONE) continue;
       if (o.done == null) o.done = day;               // it stands. leave it alone a while.
       if (o.kind === WORK_AT.store) {
         // the store fills from the ground under it and empties into the hungry
@@ -951,12 +955,26 @@ export class Sim {
     }
   }
 
-  // the nearest unfinished work of a kind this kin knows how to make
+  // the nearest work this kin knows how to make and that wants hands
+  // ⚠️ TWO THRESHOLDS, NOT ONE. WORK_DONE is when a thing counts as standing
+  // and stops being offered to the town; 1.0 is when the person actually on it
+  // puts their tools down. With a single threshold they released at 0.98 and
+  // decay immediately pulled it under again, so every work in the game
+  // oscillated around the line and half of them read as unfinished at any
+  // instant. Somebody already building finishes the job.
   _workFor(id) {
     const k = this.k;
+    // already on one? then carry on until it is actually done
+    if (k.goal[id] === 10) {
+      for (const o of this.works) {
+        if (o.prog >= 1 || !(k.knows[id] & (1 << o.kind))) continue;
+        const d = Math.abs(o.x - k.x[id]) + Math.abs(o.y - k.y[id]);
+        if (d < 2.2 * S) return { work: o, d };
+      }
+    }
     let best = null, bd = 1e9;
     for (const o of this.works) {
-      if (o.prog >= 0.985) continue;                  // done is done — see _weave
+      if (o.prog >= WORK_DONE) continue;              // standing — leave it be
       if (!(k.knows[id] & (1 << o.kind))) continue;
       const d = Math.abs(o.x - k.x[id]) + Math.abs(o.y - k.y[id]);
       if (d < bd) { bd = d; best = o; }
@@ -1339,7 +1357,7 @@ export class Sim {
           const tn = this._name(id, 'who does it because it has always been done');
           this.log('tradition', `${W.name} outlived the one who thought of it. ${tn} never met them.`, 8.0);
         }
-        if (o.prog >= 1 && !o.told) {
+        if (o.prog >= WORK_DONE && !o.told) {
           o.told = 1;
           this.log('stands', `${W.name} stands where they put it.`, 3.0);
         }
@@ -1533,7 +1551,7 @@ export class Sim {
   get era() {
     let known = 0, standing = 0;
     for (let i = 0; i < WORKS.length; i++) if (this.prac[i].invented >= 0) known++;
-    for (const o of this.works) if (o.prog >= 0.985) standing++;
+    for (const o of this.works) if (o.prog >= WORK_DONE) standing++;
     if (this.prac[WORK_AT.hall] && this.prac[WORK_AT.hall].invented >= 0) return 4;
     if (this.prac[WORK_AT.house] && this.prac[WORK_AT.house].invented >= 0) return 3;
     if (this.prac[WORK_AT.hut] && this.prac[WORK_AT.hut].invented >= 0) return 2;
@@ -1690,6 +1708,16 @@ export class Sim {
 
   static fromJSON(o) {
     const s = new Sim({ seed: o.seed, founders: 0 });
+    // refuse a save from a differently-shaped world rather than lay it into
+    // this one — boot() catches this, keeps the blob, and starts fresh
+    const want = s.N * s.N;
+    for (const key of ['temp', 'water', 'moss', 'moist']) {
+      const a = o.fields && o.fields[key];
+      if (a && a.length !== want) {
+        throw new Error(`save is from a ${Math.round(Math.sqrt(a.length))}-grid world, this build is ${s.N}`);
+      }
+    }
+    if (o.k && o.k.alive && o.k.alive.length > C.CAP) throw new Error("save exceeds this build capacity");
     s.tick = o.tick; s.day = o.day; s.dayFrac = o.dayFrac;
     s.count = o.count; s.free = o.free.slice(); s.names = o.names.slice();
     s.graves = o.graves; s.corpses = o.corpses; s.stats = o.stats;

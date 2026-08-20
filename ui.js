@@ -26,8 +26,8 @@ export class UI {
       this.app.setSpeed(+b.dataset.s);
     });
     $('curtain').addEventListener('input', (e) => this.sim.setCurtain(+e.target.value / 100));
-    $('lamp').addEventListener('click', () => { this.sim.setLamp(!this.sim.lampOn); this.app.sfx.touch(); });
-    $('lidBtn').addEventListener('click', () => { this.sim.setLid(!this.sim.lid); this.app.sfx.lid(); });
+    $('lamp').addEventListener('click', () => { this.sim.setLamp(!this.sim.lampOn); this.app.sfx.touch(); this.sync(); });
+    $('lidBtn').addEventListener('click', () => { this.sim.setLid(!this.sim.lid); this.app.sfx.lid(); this.sync(); });
     $('mute').addEventListener('click', () => { this.app.sfx.setMuted(!this.app.sfx.muted); this.sync(); });
     $('pageBtn').addEventListener('click', () => this.showPage());
     $('closePage').addEventListener('click', () => $('pageWrap').classList.add('hide'));
