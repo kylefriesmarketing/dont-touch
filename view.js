@@ -5,7 +5,7 @@
 // framing belongs to THE ROOM hub. Shape plus lantern glow. (bible §15, pivoted)
 
 import * as THREE from './lib/three.module.js';
-import { STAGE, NEEDS, LANTERN_HUE, LOCI, L, expressed } from './sim.js';
+import { STAGE, NEEDS, LANTERN_HUE, LOCI, L, expressed, S, C } from './sim.js';
 
 const R = 1.0;
 const GR = R * 0.94;    // half-width of the scenery — the heightfield is square
@@ -104,9 +104,9 @@ export class View {
     const fl = 0.30 + d * 0.70;
     this.fasciaMat.color.setRGB(0.10 * fl, 0.14 * fl, 0.11 * fl);
     // the room's light rises and falls with the day
-    this.hemi.intensity = 0.16 + d * 0.52;
-    this.key.intensity = 0.20 + d * 0.95;
-    this.fill.intensity = 0.10 + d * 0.24;
+    this.hemi.intensity = 0.10 + d * 0.34;
+    this.key.intensity = 0.14 + d * 0.62;
+    this.fill.intensity = 0.06 + d * 0.15;
     this.key.color.setRGB(1, 0.92 - d * 0.02, 0.78 + d * 0.04);
   }
 
@@ -191,7 +191,7 @@ export class View {
 
     // ---- the mesh. SUB× denser than the sim grid, sampled smoothly, so the
     // hills are hills instead of 63 folded plates.
-    const SUB = 3, M = (N - 1) * SUB + 1;
+    const SUB = N >= 96 ? 2 : 3, M = (N - 1) * SUB + 1;
     const geo = new THREE.PlaneGeometry(GR * 2, GR * 2, M - 1, M - 1);
     geo.rotateX(-Math.PI / 2);
     const pos = geo.attributes.position;
@@ -289,7 +289,7 @@ export class View {
     const rockG = new THREE.IcosahedronGeometry(0.0055, 0);
     const budG = new THREE.SphereGeometry(0.0029, 5, 4);
 
-    const CAPB = 11000, CAPR = 190, CAPF = 210;
+    const CAPB = 16000, CAPR = 260, CAPF = 280;
     const grass = new THREE.InstancedMesh(blade,
       new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.92 }), CAPB);
     const rocks = new THREE.InstancedMesh(rockG,
@@ -299,7 +299,7 @@ export class View {
 
     const o = new THREE.Object3D(), col = new THREE.Color();
     let nb = 0, nr = 0, nf = 0, tries = 0;
-    const free = (i) => s.water[i] <= 0.004 && this.ballast[i] < 0.30;
+    const free = (i) => s.water[i] <= 0.008 && this.ballast[i] < 0.30;
 
     while (nb < CAPB && tries++ < CAPB * 5) {
       const cx = rnd() * (N - 1), cy = rnd() * (N - 1);
@@ -310,7 +310,7 @@ export class View {
       const n = 4 + ((rnd() * 6) | 0);
       const hue = 0.255 + rnd() * 0.085;              // one clump, one shade
       for (let k = 0; k < n && nb < CAPB; k++) {
-        const jx = cx + (rnd() - 0.5) * 0.85, jy = cy + (rnd() - 0.5) * 0.85;
+        const jx = cx + (rnd() - 0.5) * 0.85 * S, jy = cy + (rnd() - 0.5) * 0.85 * S;
         const p = wpos(jx, jy);
         o.position.set(p[0], p[1], p[2]);
         o.rotation.set((rnd() - 0.5) * 0.62, rnd() * 6.283, (rnd() - 0.5) * 0.62);
@@ -489,11 +489,11 @@ export class View {
     const wallCols = [0xd6d0c2, 0xa23f33, 0x8797a6, 0xc7b789, 0xb8a27a];
     const roofM = new THREE.MeshStandardMaterial({ color: 0x4a3427, roughness: 0.85 });
     let homes = 0, tries = 0;
-    while (homes < 6 && tries++ < 160) {
-      const ang = rnd() * Math.PI * 2, rr2 = 3.5 + rnd() * 5.5;
+    while (homes < 9 && tries++ < 300) {
+      const ang = rnd() * Math.PI * 2, rr2 = (3.5 + rnd() * 5.5) * S;
       const x = Math.round(s.hearth.x + Math.cos(ang) * rr2);
       const y = Math.round(s.hearth.y + Math.sin(ang) * rr2);
-      if (x < 1 || y < 1 || x > N - 2 || y > N - 2 || !ok(x, y, 0.08, 3.2)) continue;
+      if (x < 1 || y < 1 || x > N - 2 || y > N - 2 || !ok(x, y, 0.08, 3.2 * S)) continue;
       const w = 0.048 + rnd() * 0.02, hgt = 0.032 + rnd() * 0.014;
       const house = new THREE.Group();
       const wallsM = new THREE.Mesh(new THREE.BoxGeometry(w, hgt, w * 0.92),
@@ -514,9 +514,9 @@ export class View {
     const trunkM = new THREE.MeshStandardMaterial({ color: 0x2a1c10, roughness: 1 });
     const greens = [0x174023, 0x1d4d2b, 0x25573a];
     let trees = 0; tries = 0;
-    while (trees < 46 && tries++ < 900) {
+    while (trees < 80 && tries++ < 1600) {
       const x = (2 + rnd() * (N - 4)) | 0, y = (2 + rnd() * (N - 4)) | 0;
-      if (!ok(x, y, 0.05, 1.8)) continue;
+      if (!ok(x, y, 0.05, 1.8 * S)) continue;
       // ⚠️ ONE CONE IS A PARTY HAT. A bottle-brush tree is layered skirts of
       // needles on a visible trunk, and it has to be tall enough to matter
       // beside a 4mm figure — the old 0.040 cones read as scrub.
@@ -556,12 +556,14 @@ export class View {
         // there faster than the quantity does.
         const mm = Math.sqrt(m);
         let r = 88 - q * 40, g = 68 - q * 32, b = 46 - q * 22;   // painted dirt
-        r = r * (1 - mm) + (58 + m * 26) * mm;
-        g = g * (1 - mm) + (124 + m * 74) * mm;
-        b = b * (1 - mm) + (44 + m * 26) * mm;
+        r = r * (1 - mm) + (54 + m * 20) * mm;
+        g = g * (1 - mm) + (98 + m * 44) * mm;
+        b = b * (1 - mm) + (40 + m * 16) * mm;
         // grey ballast under dad's track, painted rather than modelled
         const bl = this.ballast[i];
         if (bl > 0.01) { const t2 = bl * 0.85; r = r * (1 - t2) + 118 * t2; g = g * (1 - t2) + 112 * t2; b = b * (1 - t2) + 104 * t2; }
+        // wet grass is dark grass — moisture used to tint only the bare soil
+        if (q > 0.25) { const wetf = 1 - Math.min(0.34, (q - 0.25) * 0.55); r *= wetf; g *= wetf; b *= wetf; }
         // the evidence: flocking pressed flat where a finger has been
         const fpv = this.fpGrid[i];
         if (fpv > 0.004) {
@@ -937,7 +939,7 @@ export class View {
     this.cover.rotation.z = -ct * 0.40;
     this.cover.scale.set(1 - ct * 0.42, 1 - ct * 0.60, 1 - ct * 0.10);
     this.fogMesh.material.opacity =
-      Math.min(0.30, Math.max(0, s.humid - 5) * 0.018 + s.fog * 0.24) * (1 - ct * 0.5);
+      Math.min(0.30, Math.max(0, s.humid / (S * S) - 5) * 0.018 + s.fog * 0.24) * (1 - ct * 0.5);
 
     // dust drifts through the shaft
     const dp = this.dust.geometry.attributes.position;

@@ -45,10 +45,13 @@ export const tcos = (t) => tsin(t + 0.25);
 // 1. CONSTANTS — all tuning lives here (bible §16.1: data changes touch one file)
 // ---------------------------------------------------------------------------
 export const C = {
-  N: 64,                 // heightfield resolution
+  N: 96,                 // heightfield resolution
   TICK_HZ: 15,
   TICKS_PER_DAY: 900,    // 60 real seconds per in-game day at 1x
-  CAP: 400,              // max kin
+  // ⚠️ headroom over the observed peak, not a tuning number. The grid battery
+  // measured peaks to 318 at N=96; at CAP the spawn simply fails and breeding
+  // stops dead, which reads as a bug rather than a limit. Costs one array slot.
+  CAP: 640,              // max kin
 
   // The basement, degrees. ⚠️ A TRUE CONSTANT — never assign to it. The room's
   // real temperature follows the calendar and lives on the Sim instance as
@@ -88,6 +91,23 @@ export const C = {
 // How many of the earliest entries the chronicle protects when it trims. The
 // founding is the one page a book may never lose.
 const HEAD_KEEP = 80;
+
+// ⚠️⚠️ THE GRID IS A RESOLUTION, NOT A SIZE. The board is a fixed physical
+// thing and N only decides how finely it is sampled — so every number expressed
+// in CELLS has to move with N or the world silently changes shape: the finger
+// would cover a different fraction of the town, kin would walk at a different
+// real speed, foraging would reach a different real distance. S is that factor
+// against the 64 this game was tuned at.
+// Numbers that are ABSOLUTE AMOUNTS SPREAD OVER THE BOARD — suspended water,
+// how fast a cloud empties — scale with AREA instead, so they take S².
+// ⚠️ Per-cell RATES (EVAP, MOSS_GROW, DIFFUSE, LOSS) must NOT be scaled: they
+// already apply to every cell, so their totals follow the cell count for free.
+export const S = C.N / 64;
+const S2 = S * S;
+C.HAND_RADIUS *= S;
+C.SPEED *= S;
+C.CLOUD *= S2;
+C.RAIN_PER_STEP *= S2;
 
 export const STAGE = { EGG: 0, NIB: 1, HALF: 2, WHOLE: 3, RIME: 4 };
 export const STAGE_NAME = ['egg', 'nib', 'half', 'whole', 'rime'];
@@ -226,7 +246,7 @@ export class Sim {
     this.hand = null;          // {x,y} in cell space, or null
     this.tilt = { x: 0, y: 0 };
     this.fog = 0;              // 0..1, the player's breath on the outside
-    this.humid = 5.0;          // suspended water inside the sealed jar
+    this.humid = 5.0 * S2;     // suspended water in the sealed air
     this.rainLeft = 0;         // water still to fall from the current cloud
     this.lid = false;
     this.curtain = 0.75;       // 0 = closed, 1 = open
@@ -260,7 +280,7 @@ export class Sim {
     const N = this.N, s = this.seed;
     for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
       const i = y * N + x;
-      let h = 0, amp = 1, f = 1 / 22, tot = 0;
+      let h = 0, amp = 1, f = 1 / (22 * S), tot = 0;
       for (let o = 0; o < 4; o++) { h += vnoise(x * f, y * f, s + o * 977) * amp; tot += amp; amp *= 0.5; f *= 2.1; }
       h /= tot;
       // ⚠️ THIS WAS A RADIAL BOWL — "the jar's floor curves up at the glass".
@@ -298,7 +318,7 @@ export class Sim {
     this.pond = pn ? { x: (px / pn) | 0, y: (py / pn) | 0 } : { x: li % N, y: (li / N) | 0 };
     for (let i = 0; i < N * N; i++) {
       const wet = this.water[i] > 0.001 ? 0 : 1;
-      this.moss[i] = wet * Math.max(0, vnoise((i % N) * 0.09, ((i / N) | 0) * 0.09, s + 13) * 1.3 - 0.32);
+      this.moss[i] = wet * Math.max(0, vnoise((i % N) * 0.09 / S, ((i / N) | 0) * 0.09 / S, s + 13) * 1.3 - 0.32);
     }
     // graveyard: a flat shelf away from the pond, chosen once, named by them later
     let best = -1, bs = -1e9;
@@ -320,7 +340,7 @@ export class Sim {
       if (this.height[i] < this.pondLevel + 0.10) continue;   // above the flood line
       const dx2 = x - this.pond.x, dy2 = y - this.pond.y;
       const dp = Math.sqrt(dx2 * dx2 + dy2 * dy2);
-      const dm = Math.abs(dp - 8);                       // want to be ~8 cells from water
+      const dm = Math.abs(dp - 8 * S);                   // want to be ~8 cells from water
       const sc = -dm * 2 - this.height[i] * 2 + this.moss[i] * 4;
       if (sc > hs) { hs = sc; hb = i; }
     }
@@ -365,8 +385,8 @@ export class Sim {
       let x = this.hearth.x, y = this.hearth.y;
       for (let tries = 0; tries < 12; tries++) {
         const a = rng();
-        const px = this.hearth.x + tcos(a) * rr(rng, 0.5, 3.2);
-        const py = this.hearth.y + tsin(a) * rr(rng, 0.5, 3.2);
+        const px = this.hearth.x + tcos(a) * rr(rng, 0.5 * S, 3.2 * S);
+        const py = this.hearth.y + tsin(a) * rr(rng, 0.5 * S, 3.2 * S);
         if (this.height[this.idx(px, py)] > this.pondLevel + 0.06) { x = px; y = py; break; }
       }
       const id = this._spawn(x, y, this._randGenome(rng), -1, -1, 1);
@@ -564,7 +584,7 @@ export class Sim {
       }
     }
     // the player's breath is a cloud you make on purpose
-    if (this.fog > 0.999) { this.humid += 4.5; this.fog = 0; this.log('breath', 'you breathed on the town, and weather happened.', 1.1); }
+    if (this.fog > 0.999) { this.humid += 4.5 * S2; this.fog = 0; this.log('breath', 'you breathed on the town, and weather happened.', 1.1); }
   }
 
   _growth(F) {
@@ -668,7 +688,7 @@ export class Sim {
         if (m >= 0) {
           k.tx[id] = k.x[m]; k.ty[id] = k.y[m];
           const dx = k.x[m] - k.x[id], dy = k.y[m] - k.y[id];
-          if (dx * dx + dy * dy < 6.25) {
+          if (dx * dx + dy * dy < 6.25 * S2) {
             for (let n = 1; n < NN; n++) k.need[base + n] = Math.min(1, k.need[base + n] + 0.004);
           }
         }
@@ -725,7 +745,7 @@ export class Sim {
     // hungry. ⚠️ A fixed 9-cell window starves a clustered colony to death in a
     // jar that is 60% covered in moss — they overgraze home and never look up.
     const hunger = 1 - k.need[base + 2];
-    const R = 7 + hunger * hunger * 26;
+    const R = (7 + hunger * hunger * 26) * S;
     const near2 = 0.6 - hunger * 0.45;
     let bm = 0, bmx = x, bmy = y;
     for (let s = 0; s < 18; s++) {
@@ -733,7 +753,7 @@ export class Sim {
       const i = this.idx(px, py);
       if (this.water[i] > 0.05) continue;
       const d = Math.abs(px - x) + Math.abs(py - y);
-      const v = this.moss[i] / (1 + d * near2 * 0.2);
+      const v = this.moss[i] / (1 + d * near2 * 0.2 / S);
       if (v > bm) { bm = v; bmx = px; bmy = py; }
     }
     push(1, bmx, bmy, deficit(2) * (0.3 + bm * 2.6));
@@ -742,7 +762,7 @@ export class Sim {
     // ⚠️ Drink from the BANK, not from the middle of the pond. Targeting water
     // itself walks them into the low end, and then it rains and they drown.
     const thirst = 1 - k.need[base + 1];
-    const RW = 10 + thirst * thirst * 26;
+    const RW = (10 + thirst * thirst * 26) * S;
     let bw = 0, bwx = x, bwy = y;
     for (let s = 0; s < 18; s++) {
       const px = x + rr(rng, -RW, RW), py = y + rr(rng, -RW, RW);
@@ -750,18 +770,18 @@ export class Sim {
       if (this.water[i] > 0.03) continue;                    // that's the pond, not the bank
       let beside = 0;
       for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-        const w = this.water[this.idx(px + dx * 1.4, py + dy * 1.4)];
+        const w = this.water[this.idx(px + dx * 1.4 * S, py + dy * 1.4 * S)];
         if (w > beside) beside = w;
       }
       if (beside <= 0.004) continue;
       const d = Math.abs(px - x) + Math.abs(py - y);
-      const v = Math.min(0.2, beside) / (1 + d * 0.1);
+      const v = Math.min(0.2, beside) / (1 + d * 0.1 / S);
       if (v > bw) { bw = v; bwx = px; bwy = py; }
     }
     if (bw <= 0) {
       // no bank found nearby — head for the pond's edge, not its middle
       const dx = x - this.pond.x, dy = y - this.pond.y, d = Math.sqrt(dx * dx + dy * dy) || 1;
-      bwx = this.pond.x + (dx / d) * 6; bwy = this.pond.y + (dy / d) * 6; bw = 0.09;
+      bwx = this.pond.x + (dx / d) * 6 * S; bwy = this.pond.y + (dy / d) * 6 * S; bw = 0.09;
     }
     push(2, bwx, bwy, deficit(1) * (0.9 + bw * 8));
 
@@ -769,12 +789,12 @@ export class Sim {
     const band = HIDE_BAND[expressed(g, L.hide)];
     let bt = 0, btx = x, bty = y;
     for (let s = 0; s < 12; s++) {
-      const px = x + rr(rng, -11, 11), py = y + rr(rng, -11, 11);
+      const px = x + rr(rng, -11 * S, 11 * S), py = y + rr(rng, -11 * S, 11 * S);
       const i = this.idx(px, py), T = this.temp[i];
       if (T > band[3] - 3 || T < band[2] + 2) continue;
       const inb = (T >= band[0] && T <= band[1]) ? 1 : 0.25;
       const d = Math.abs(px - x) + Math.abs(py - y);
-      const v = inb / (1 + d * 0.12);
+      const v = inb / (1 + d * 0.12 / S);
       if (v > bt) { bt = v; btx = px; bty = py; }
     }
     push(3, btx, bty, deficit(0) * (0.2 + bt * 2.2));
@@ -788,7 +808,7 @@ export class Sim {
       const o = ri(rng, this.count);
       if (!k.alive[o] || o === id || k.stage[o] === STAGE.EGG) continue;
       const dx = k.x[o] - x, dy = k.y[o] - y, d = Math.sqrt(dx * dx + dy * dy);
-      const v = 1 / (1 + d * 0.16);
+      const v = 1 / (1 + d * 0.16 / S);
       if (v > bc) { bc = v; bcx = k.x[o]; bcy = k.y[o]; }
     }
     push(5, bcx, bcy, deficit(4) * (0.3 + bc * 1.4));
@@ -798,7 +818,7 @@ export class Sim {
     if (this.temp[here] > band[3] - 4 || this.water[here] > 0.07) {
       let ex = x, ey = y, best = -1e9;
       for (let s = 0; s < 18; s++) {
-        const px = x + rr(rng, -14, 14), py = y + rr(rng, -14, 14);
+        const px = x + rr(rng, -14 * S, 14 * S), py = y + rr(rng, -14 * S, 14 * S);
         const i = this.idx(px, py);
         const sc = -Math.max(0, this.temp[i] - band[1]) - this.water[i] * 60 + this.eff(i) * 3;
         if (sc > best) { best = sc; ex = px; ey = py; }
@@ -814,7 +834,7 @@ export class Sim {
         const o = ri(rng, this.count);
         if (!k.alive[o] || o === id || k.sex[o] !== 1 || k.stage[o] !== STAGE.WHOLE || k.cool[o] > 0) continue;
         const dx = k.x[o] - x, dy = k.y[o] - y, d = Math.sqrt(dx * dx + dy * dy);
-        const v = 1 / (1 + d * 0.1);
+        const v = 1 / (1 + d * 0.1 / S);
         if (v > bv) { bv = v; mx = k.x[o]; my = k.y[o]; mi = o; }
       }
       if (mi >= 0) { push(7, mx, my, (mean - C.BREED_MIN) * 5.2); k.goalT[id] = mi; }
@@ -841,7 +861,7 @@ export class Sim {
         const d = Math.abs(c.x - x) + Math.abs(c.y - y);
         if (d < bd) { bd = d; best = c; }
       }
-      if (best) push(8, best.x, best.y, 1.35 * k.need[base + 2] / (1 + bd * 0.08));
+      if (best) push(8, best.x, best.y, 1.35 * k.need[base + 2] / (1 + bd * 0.08 / S));
     }
 
     // tend: the one who stays cannot come to you, so somebody has to go.
@@ -863,14 +883,14 @@ export class Sim {
         for (let n = 1; n < NN; n++) { const v = k.need[t * NN + n]; if (v < worst) worst = v; }
         if (worst > 0.8) continue;                                              // they're seen to
         const d = Math.abs(k.x[t] - x) + Math.abs(k.y[t] - y);
-        cand.push({ goal: 9, tx: k.x[t], ty: k.y[t], who: t, score: (1 - worst) * 2.5 / (1 + d * 0.06) });
+        cand.push({ goal: 9, tx: k.x[t], ty: k.y[t], who: t, score: (1 - worst) * 2.5 / (1 + d * 0.06 / S) });
       }
     }
 
     if (!cand.length) {
       k.goal[id] = 0;
-      k.tx[id] = k.glued[id] ? x : x + rr(rng, -4, 4);
-      k.ty[id] = k.glued[id] ? y : y + rr(rng, -4, 4);
+      k.tx[id] = k.glued[id] ? x : x + rr(rng, -4 * S, 4 * S);
+      k.ty[id] = k.glued[id] ? y : y + rr(rng, -4 * S, 4 * S);
       k.hold[id] = 90; return;
     }
     // rank, then pick randomly from the top three (The Sims' trick, §6.1)
@@ -929,7 +949,7 @@ export class Sim {
     if (k.glued[id]) return;                  // the one who stays. never moves.
     const dx = k.tx[id] - k.x[id], dy = k.ty[id] - k.y[id];
     const d = Math.sqrt(dx * dx + dy * dy);
-    if (d < 0.35) return;
+    if (d < 0.35 * S) return;
     let sp = C.SPEED * (k.stage[id] === STAGE.NIB ? 1.25 : k.stage[id] === STAGE.HALF ? 1.15 : k.stage[id] === STAGE.RIME ? 0.72 : 1);
     if (k.goal[id] === 6) sp *= 1.8;
     const i = this.idx(k.x[id], k.y[id]);
@@ -955,7 +975,7 @@ export class Sim {
   _act(id, g) {
     const k = this.k, NN = NEEDS.length, base = id * NN;
     const i = this.idx(k.x[id], k.y[id]);
-    const near = Math.abs(k.tx[id] - k.x[id]) + Math.abs(k.ty[id] - k.y[id]) < 0.8;
+    const near = Math.abs(k.tx[id] - k.x[id]) + Math.abs(k.ty[id] - k.y[id]) < 0.8 * S;
     switch (k.goal[id]) {
       case 1: if (near && this.moss[i] > 0.05) {
         const take = Math.min(this.moss[i], C.MOSS_EAT * 0.06);
@@ -964,8 +984,8 @@ export class Sim {
       case 2: { // they drink at the bank, not by standing in it
         let wet = this.water[i];
         if (wet <= 0.004) {
-          const N = this.N, cx = k.x[id] | 0, cy = k.y[id] | 0;
-          for (let dy = -1; dy <= 1 && wet <= 0.004; dy++) for (let dx = -1; dx <= 1; dx++) {
+          const cx = k.x[id] | 0, cy = k.y[id] | 0, RR = Math.max(1, Math.round(S));
+          for (let dy = -RR; dy <= RR && wet <= 0.004; dy++) for (let dx = -RR; dx <= RR; dx++) {
             const j = this.idx(cx + dx, cy + dy);
             if (this.water[j] > wet) wet = this.water[j];
           }
@@ -1020,7 +1040,7 @@ export class Sim {
         if (rng() < 0.008) { b = ri(rng, LOCI[li].alleles.length); novel = li; }
         child[li * 2] = a; child[li * 2 + 1] = b;
       }
-      const id = this._spawn(k.x[mo] + rr(rng, -1.2, 1.2), k.y[mo] + rr(rng, -1.2, 1.2), child, mo, fa,
+      const id = this._spawn(k.x[mo] + rr(rng, -1.2 * S, 1.2 * S), k.y[mo] + rr(rng, -1.2 * S, 1.2 * S), child, mo, fa,
         Math.max(k.gen[mo], k.gen[fa]) + 1);
       if (id < 0) break;
       made++;
@@ -1066,7 +1086,7 @@ export class Sim {
     if (!c) return;
     let gx = this.yard.x, gy = this.yard.y;
     for (let tries = 0; tries < 8; tries++) {
-      const px = this.yard.x + rr(this.rng, -3.5, 3.5), py = this.yard.y + rr(this.rng, -3.5, 3.5);
+      const px = this.yard.x + rr(this.rng, -3.5 * S, 3.5 * S), py = this.yard.y + rr(this.rng, -3.5 * S, 3.5 * S);
       if (this.inJar(px, py)) { gx = px; gy = py; break; }
     }
     this.graves.push({ x: gx, y: gy, nameId: c.nameId, day: this.day, gen: c.gen });
@@ -1102,8 +1122,8 @@ export class Sim {
     const dp = Math.abs(x - this.pond.x) + Math.abs(y - this.pond.y);
     const dy_ = Math.abs(x - this.yard.x) + Math.abs(y - this.yard.y);
     if (this.water[i] > 0.02) return 'water';
-    if (dp < 9) return 'bank';
-    if (dy_ < 7) return 'yard';
+    if (dp < 9 * S) return 'bank';
+    if (dy_ < 7 * S) return 'yard';
     return this.height[i] > 0.55 ? 'high ground' : 'flat';
   }
 
@@ -1204,9 +1224,12 @@ export class Sim {
         : this.chronicle.slice(0, HEAD_KEEP).concat(this.chronicle.slice(-(600 - HEAD_KEEP))),
       curtain: this.curtain, lampOn: this.lampOn, lid: this.lid, ambientBase: this.ambientBase,
       humid: this.humid, rainLeft: this.rainLeft, fog: this.fog,
+      // ⚠️ NO height HERE ON PURPOSE — it is regenerated bit-identically from
+      // the seed by fromJSON's own constructor call, and at N=96 a redundant
+      // copy is ~170KB written every 25 seconds for nothing.
       fields: {
-        height: Array.from(this.height), temp: Array.from(this.temp),
-        water: Array.from(this.water), moss: Array.from(this.moss), moist: Array.from(this.moist),
+        temp: Array.from(this.temp), water: Array.from(this.water),
+        moss: Array.from(this.moss), moist: Array.from(this.moist),
       },
       k: Object.fromEntries(Object.entries(this.k).map(([key, arr]) => [key, Array.from(arr)])),
       pond: this.pond, yard: this.yard, hearth: this.hearth, lang: this.lang,
@@ -1249,7 +1272,10 @@ export class Sim {
       for (const e of (o.chronicle || [])) s.eventCounts.set(e.kind, (s.eventCounts.get(e.kind) || 0) + 1);
     }
     if (o.rngState) { s.rng.setState(o.rngState[0]); s.rngWeather.setState(o.rngState[1]); s.rngGene.setState(o.rngState[2]); }
-    for (const key of ['height', 'temp', 'water', 'moss', 'moist']) s[key].set(o.fields[key]);
+    // older saves carry height; newer ones do not, and either is fine
+    for (const key of ['height', 'temp', 'water', 'moss', 'moist']) {
+      if (o.fields[key]) s[key].set(o.fields[key]);
+    }
     for (const key of Object.keys(s.k)) if (o.k[key]) s.k[key].set(o.k[key]);
     let alive = 0, sumB = 0;
     for (let i = 0; i < s.count; i++) if (s.k.alive[i]) { alive++; sumB += s.k.bright[i]; }

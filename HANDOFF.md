@@ -1,5 +1,5 @@
 # DON'T TOUCH — HANDOFF
-**v0.3 · 2026-08-19 · read this before writing a line.**
+**v0.4 · 2026-08-19 · read this before writing a line.**
 Companion to `DONT_TOUCH_BIBLE.md` (the design authority — read its ⚠️ PIVOT preface first)
 and `README.md` (how to run it).
 
@@ -237,6 +237,70 @@ navigations — hook `console.error` live rather than trusting what it shows.
 Two things were captured, judged bad and fixed this way: the layout read as a
 **green cake in a tin** (the embankment flares into the plywood now) and the
 cover was an **additive ghost-wisp** (it is a real sagging sheet over the board).
+
+
+---
+
+## THE GRID IS A RESOLUTION, NOT A SIZE (N = 96)
+
+The board is a fixed physical thing. `C.N` only decides how finely it is sampled.
+`export const S = C.N / 64` is the factor against the grid this game was tuned
+at, and **every number expressed in cells has to move with it** or the world
+silently changes shape — the finger would cover a different fraction of the
+town, kin would walk at a different real speed, foraging would reach a different
+real distance.
+
+Three classes, and getting the class wrong is the whole difficulty:
+
+| class | scale by | examples |
+|---|---|---|
+| **distances in cells** | `S` | `HAND_RADIUS`, `SPEED`, forage/water/warmth/flee radii, arrival thresholds, grave and clutch scatter, the hearth's "8 cells from water" |
+| **1/distance coefficients** | `1/S` | every `/(1 + d * k)` falloff in `_decide` — `d` grows with the grid so `k` must shrink |
+| **absolute amounts spread over the board** | `S²` | `humid`, `CLOUD`, `RAIN_PER_STEP`, the breath's `+4.5`, squared distance tests |
+| **per-cell rates — DO NOT SCALE** | — | `EVAP`, `MOSS_GROW`, `DIFFUSE`, `LOSS`. They already apply to every cell, so their totals follow the cell count for free. Scaling them double-counts. |
+
+### ⚠️ The two that were missed first time, and how they showed up
+
+1. **NOISE FREQUENCY IS PER-CELL.** `vnoise(x * f, …)` samples at the cell index,
+   so with 1.5× more cells it walks 1.5× further through the noise and the hills
+   come out **1.5× smaller in real terms**. Raising the grid made the board
+   flatter — the exact opposite of the point. `f = 1 / (22 * S)`. Verified by
+   A/B against a 64-grid copy of the same file: relief over a tenth of the board
+   0.0693 → 0.0748 (108%), height span 0.667 → 0.672, pond 10.8% → 10.8%. Same
+   world, sampled finer.
+2. **AN UNSCALED ABSOLUTE IN THE VIEW.** The weather haze triggered on
+   `s.humid - 5`. `humid` is a whole-board quantity, so at N=96 it is 2.25×
+   larger and the haze pinned at full opacity **permanently** — a milky veil
+   over the entire town that read as a washed-out mint bald patch. I spent three
+   passes hunting the ground palette for it before measuring the albedo and
+   finding it was identical inside and out (57,93,42 vs 71,112,50). **If a view
+   constant is compared against a sim quantity, it is in that quantity's units.**
+
+### What actually changed for the player
+
+A bigger board holds more standing moss, so it feeds more kin. That is the
+point — a huge map with sixty people would read as empty — but it has knock-on
+effects that are real, not cosmetic:
+
+- Population roughly follows area. Measure before assuming a balance number
+  still holds.
+- **A bigger board is a bigger larder.** The "left in the dark" test had to go
+  from 140 to 200 days, because the colony now eats through 2.25× the standing
+  stock before it starves. Measured: below 8 alive on days 40 / 80 / 159.
+- The same population grazes a smaller fraction of the board, so moss sits
+  nearer saturation and the ground reads greener and more uniform.
+- Save grew with the field arrays. `height` is now dropped from the save
+  entirely — it is regenerated bit-identically from the seed by `fromJSON`'s own
+  constructor call, so shipping a copy was ~170KB written every 25 seconds for
+  nothing. `fromJSON` tolerates saves that carry it and saves that do not.
+
+### The rule for next time
+
+**Do not change `C.N` without re-running the grid battery** (`battery.mjs` in
+the session scratchpad, kept as the pattern): the same seeds and the same
+harness against a 64-grid copy of the current file, so the two columns describe
+the same world at two resolutions rather than two different games. Anything that
+moves by more than seed noise is a cell-denominated constant you missed.
 
 ## Invariants (bible §17) — these are contractual
 

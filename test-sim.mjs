@@ -2,7 +2,7 @@
 // Headless battery. `node test-sim.mjs`
 // Invariant 4: every era gets a soak, zero errors, no NaN, nothing outside the jar.
 
-import { Sim, C, LOCI, L, expressed, NEEDS, STAGE, makeRNG } from './sim.js';
+import { Sim, C, LOCI, L, expressed, NEEDS, STAGE, makeRNG, S } from './sim.js';
 
 let pass = 0, fail = 0;
 const t = (name, fn) => {
@@ -63,7 +63,7 @@ t('the hearth is dry and within reach of water', () => {
     const s = new Sim({ seed });
     ok(s.water[s.idx(s.hearth.x, s.hearth.y)] < 0.02, `${seed}: hearth is underwater`);
     const d = Math.hypot(s.hearth.x - s.pond.x, s.hearth.y - s.pond.y);
-    ok(d < 16, `${seed}: founders start ${d.toFixed(0)} cells from water`);
+    ok(d < 16 * S, `${seed}: founders start ${d.toFixed(0)} cells from water`);
   }
 });
 t('thermal field relaxes toward ambient with no hand', () => {
@@ -75,16 +75,17 @@ t('thermal field relaxes toward ambient with no hand', () => {
 });
 t('the hand heats the ground, and only near the finger', () => {
   const s = new Sim({ seed: 'a', founders: 0 });
-  s.setHand(20, 20); run(s, 2);
-  const near = s.temp[s.idx(20, 20)], far = s.temp[s.idx(55, 55)];
+  const hx = 20 * S, hy = 20 * S, fx = 55 * S, fy = 55 * S;
+  s.setHand(hx, hy); run(s, 2);
+  const near = s.temp[s.idx(hx, hy)], far = s.temp[s.idx(fx, fy)];
   ok(near > 40, `finger too cold: ${near.toFixed(1)}`);
   ok(far < near - 15, `heat leaked everywhere: near ${near.toFixed(1)} far ${far.toFixed(1)}`);
 });
 t('heat arrives slowly (no instant kill)', () => {
   const s = new Sim({ seed: 'a', founders: 0 });
-  s.setHand(20, 20);
+  s.setHand(20 * S, 20 * S);
   for (let i = 0; i < 15; i++) s.step();   // one second
-  ok(s.temp[s.idx(20, 20)] < 40, 'the finger is a laser');
+  ok(s.temp[s.idx(20 * S, 20 * S)] < 40, 'the finger is a laser');
 });
 t('water is conserved under tilt (within evaporation)', () => {
   const s = new Sim({ seed: 'b', founders: 0 });
@@ -121,8 +122,8 @@ t('a sealed jar keeps its water; an open lid loses it', () => {
 });
 t('sustained heat sterilises moss', () => {
   const s = new Sim({ seed: 'a', founders: 0 });
-  const i = s.idx(20, 20); s.moss[i] = 1;
-  s.setHand(20, 20); run(s, 4);
+  const i = s.idx(20 * S, 20 * S); s.moss[i] = 1;
+  s.setHand(20 * S, 20 * S); run(s, 4);
   ok(s.moss[i] < 0.5, `moss survived the finger: ${s.moss[i].toFixed(2)}`);
 });
 
@@ -139,15 +140,15 @@ t('marrow homozygosity halves lifespan', () => {
   const het = new Uint8Array(G); het[L.marrow * 2] = 0; het[L.marrow * 2 + 1] = 3;
   const hom = new Uint8Array(G); hom[L.marrow * 2] = 2; hom[L.marrow * 2 + 1] = 2;
   let sh = 0, sm = 0, n = 40;
-  for (let i = 0; i < n; i++) { const a = s._spawn(10, 10, het, -1, -1, 1); sh += s.k.lifespan[a]; s.k.alive[a] = 0; s.free.push(a); }
-  for (let i = 0; i < n; i++) { const a = s._spawn(10, 10, hom, -1, -1, 1); sm += s.k.lifespan[a]; s.k.alive[a] = 0; s.free.push(a); }
+  for (let i = 0; i < n; i++) { const a = s._spawn(10 * S, 10 * S, het, -1, -1, 1); sh += s.k.lifespan[a]; s.k.alive[a] = 0; s.free.push(a); }
+  for (let i = 0; i < n; i++) { const a = s._spawn(10 * S, 10 * S, hom, -1, -1, 1); sm += s.k.lifespan[a]; s.k.alive[a] = 0; s.free.push(a); }
   ok(sm / n < sh / n * 0.62, `homozygous not penalised: ${(sh / n).toFixed(0)} vs ${(sm / n).toFixed(0)}`);
 });
 t('children draw one allele from each parent', () => {
   const s = new Sim({ seed: 'e', founders: 0 });
   const G = LOCI.length * 2;
   const gm = new Uint8Array(G).fill(0), gf = new Uint8Array(G).fill(1);
-  const mo = s._spawn(20, 20, gm, -1, -1, 1), fa = s._spawn(20, 20, gf, -1, -1, 1);
+  const mo = s._spawn(20 * S, 20 * S, gm, -1, -1, 1), fa = s._spawn(20 * S, 20 * S, gf, -1, -1, 1);
   s.k.stage[mo] = STAGE.WHOLE; s.k.stage[fa] = STAGE.WHOLE;
   s.k.sex[mo] = 0; s.k.sex[fa] = 1;
   const before = s.count;
@@ -587,10 +588,14 @@ t('4 seeds x 112 days, zero errors', () => {
     }
   }
 });
-t('a jar left in the dark eventually goes quiet', () => {
+t('a town left in the dark eventually goes quiet', () => {
+  // ⚠️ 200 days, not 140. The board holds standing moss, so a bigger board
+  // holds a bigger larder — at N=96 there is 2.25x more of it and the colony
+  // eats through the stock before it starves. Measured across three seeds:
+  // below 8 alive on days 40 / 80 / 159, extinct 62 / 110 / 186.
   const s = new Sim({ seed: 'dark' });
   s.setCurtain(0);
-  run(s, 140);
+  run(s, 200);
   ok(s.alive < 8, `starvation in the dark did not bite: ${s.alive} alive`);
 });
 
