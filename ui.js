@@ -202,7 +202,7 @@ export class UI {
     // with the goal list in sim.js _decide (0 wander … 10 make)
     const GOALS = ['wandering', 'looking for food', 'going to water', 'looking for a warm place',
       'resting', 'looking for company', 'getting away', 'courting', 'carrying the dead',
-      'going to the one who stays', 'making something'];
+      'going to the one who stays', 'making something', 'going to what fell out of the sky'];
 
     const glued = !!k.glued[id];
     const worst = worstNeed(k.need, base);

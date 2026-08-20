@@ -453,6 +453,61 @@ t('lifting the same one on the same seed writes the same town', () => {
   eq(a.fingerprint(), b.fingerprint(), 'the same act gave two different towns');
 });
 
+// --- the crumb ------------------------------------------------------------
+console.log('the crumb');
+
+t('a crumb is somewhere they will walk to, and it runs out', () => {
+  const s = clone(fixture('live', 200));
+  let cx = 0, cy = 0, n = 0;
+  for (let i = 0; i < s.count; i++) if (s.k.alive[i]) { cx += s.k.x[i]; cy += s.k.y[i]; n++; }
+  ok(n > 0, 'nobody alive to feed');
+  cx /= n; cy /= n;
+  const gx = Math.max(12, Math.min(s.N - 12, cx + 9)), gy = Math.max(12, Math.min(s.N - 12, cy));
+  ok(s.give(gx, gy), 'could not leave a crumb');
+  eq(s.gifts.length, 1, 'the crumb is not on the board');
+  let chose = 0;
+  for (let i = 0; i < C.TICKS_PER_DAY * 2; i++) {
+    s.step();
+    if (i % 120 === 0) for (let id = 0; id < s.count; id++) if (s.k.alive[id] && s.k.goal[id] === 11) chose++;
+  }
+  ok(chose > 0, 'nobody ever went to the crumb');
+  ok(!s.gifts.length || s.gifts[0].mass < 1, 'nobody ate any of it');
+});
+
+t('what is left of a stale crumb becomes pasture', () => {
+  // ⚠️ nothing is ever simply deleted from a world whose whole subject is that
+  // marks stay. A crumb nobody finished is the reason that patch is green.
+  const s = clone(fixture('live', 200));
+  const gx = 48, gy = 48;
+  const before = s.moss[s.idx(gx, gy)];
+  s.give(gx, gy);
+  s.gifts[0].mass = 0.5;
+  s.gifts[0].day = s.day - 20;
+  run(s, 1);
+  eq(s.gifts.length, 0, 'a stale crumb outstayed its welcome');
+  ok(s.moss[s.idx(gx, gy)] > before, 'the ground did not get the rest of it');
+});
+
+t('crumbs round-trip and stay deterministic', () => {
+  const s = clone(fixture('live', 200));
+  s.give(40, 40); s.give(52, 44);
+  run(s, 2);
+  const fp = s.fingerprint();
+  const b = Sim.fromJSON(JSON.parse(JSON.stringify(s.toJSON())));
+  eq(b.fingerprint(), fp, 'a save with crumbs did not restore identically');
+  eq(b.gifts.length, s.gifts.length, 'the crumbs did not come back');
+  if (s.gifts.length) ok(Math.abs(b.gifts[0].mass - s.gifts[0].mass) < 1e-12, 'half-eaten did not stay half-eaten');
+  run(b, 3); run(s, 3);
+  eq(b.fingerprint(), s.fingerprint(), 'they drifted apart afterwards');
+});
+
+t('a crumb outside the board is refused', () => {
+  const s = clone(fixture('live', 200));
+  const before = s.gifts.length;
+  ok(!s.give(1, 1), 'a crumb was accepted off the edge of the world');
+  eq(s.gifts.length, before, 'it landed anyway');
+});
+
 console.log('save');
 t('save -> JSON -> restore -> compare', () => {
   const a = new Sim({ seed: 'save' });

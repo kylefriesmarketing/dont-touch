@@ -35,6 +35,7 @@ const HAND = {
   stillCells: 2.5,                 // or a real move across the world, whichever first
   moveHold: 0.22,                  // s — how long one movement keeps the hand "moving"
   reachMs: 900,                    // hold this long on a kin, with the sheet off, and you have them
+  dblMs: 330, dblPx: 34,           // two taps this close together are one gesture
 };
 
 const SAVE_KEY = 'donttouch-save';        // the house contract summary (§21)
@@ -352,9 +353,32 @@ class App {
         s.setHand(null); this.touch = null;
         if (v.setHandDisc) v.setHandDisc(null);
         this.gest.end(performance.now());
-        if (moved < 6) {                       // a tap, not a hold: try to select a kin
-          const id = v.pickKin(nx, ny);
-          this.ui.select(id);
+        if (moved < 6) {                       // a tap, not a hold
+          const now = performance.now();
+          const lt = this.lastTap;
+          const isDouble = lt && (now - lt.t) < HAND.dblMs &&
+            Math.hypot(e.clientX - lt.x, e.clientY - lt.y) < HAND.dblPx;
+          // ⚠⚠ THE CRUMB COMES FROM ABOVE, NOT FROM THE EDGE OF THE TABLE. The
+          // design note had it picked up off dad's saucer on the plywood — but
+          // view.js is explicit that there IS no plywood in frame ('you are
+          // never outside the layout'), and Kyle's standing rule is that the
+          // real world never appears. The player's hand IS the sky here, so
+          // the crumb falls out of it.
+          //
+          // ⚠️ A double tap is the one gesture left that collides with nothing:
+          // not rest (a hold), not draw (a drag), not the reach (a hold on a
+          // kin), not orbit (off the board) and not tilt (shift or right).
+          if (isDouble && !s.lid && hit) {
+            // ⚠️ no nudge here on purpose. The chronicle already records this in
+            // the TOWN's handwriting, and saying the same sentence again in the
+            // GAME's voice is exactly the blurring P2 exists to prevent.
+            if (s.give(hit.cell[0], hit.cell[1])) this.sfx.birth();
+            this.lastTap = null;
+          } else {
+            this.lastTap = { t: now, x: e.clientX, y: e.clientY };
+            const id = v.pickKin(nx, ny);
+            this.ui.select(id);
+          }
         }
       }
       if (mode === 'tilt') s.setTilt(0, 0);     // the jar rights itself

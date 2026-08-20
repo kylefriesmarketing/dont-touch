@@ -72,6 +72,7 @@ export class View {
     this._cover();
     this._dust();
     this._handDisc();
+    this._giftView();
 
     // the miniature look. Falls back to a plain render where WebGL2 is not
     // available, so nothing depends on it existing.
@@ -1321,6 +1322,39 @@ export class View {
   // SEE it coming: the ring tightens onto one figure and goes red over 900ms,
   // and letting go before it closes costs nothing.
   setReach(id, f) { this.reachId = id; this.reachF = f; }
+
+  // — what dad dropped. One group of small crumbs; a gift shrinks as it is
+  // eaten, so the board shows how much of it is left without a number anywhere.
+  _giftView() {
+    this.giftRoot = new THREE.Group();
+    this.jar.add(this.giftRoot);
+    this.giftGeo = new THREE.IcosahedronGeometry(0.016, 0);
+    this.giftMat = new THREE.MeshStandardMaterial({ color: 0xd8bd86, roughness: 0.88 });
+    this._giftMeshes = [];
+  }
+
+  _paintGifts() {
+    const s = this.sim, N = s.N, g = s.gifts || [];
+    while (this._giftMeshes.length < g.length) {
+      const m = new THREE.Mesh(this.giftGeo, this.giftMat);
+      m.castShadow = true; m.receiveShadow = true;
+      this.giftRoot.add(m); this._giftMeshes.push(m);
+    }
+    for (let i = 0; i < this._giftMeshes.length; i++) {
+      const m = this._giftMeshes[i], gf = g[i];
+      if (!gf) { m.visible = false; continue; }
+      m.visible = true;
+      const wx = (gf.x / (N - 1) - 0.5) * GR * 2;
+      const wz = (gf.y / (N - 1) - 0.5) * GR * 2;
+      m.position.set(wx, this._surfaceY(gf.x, gf.y) + 0.008, wz);
+      // ⚠️ cube-rooted, not linear: a crumb at half mass should still look like
+      // a crumb, and mass is a volume. Linear scaling made it vanish long
+      // before it ran out, so the board lied about how much was left.
+      const k = Math.max(0.25, Math.cbrt(Math.max(0.001, gf.mass)));
+      m.scale.setScalar(k);
+      m.rotation.set(gf.x * 0.7, gf.y * 1.3, gf.x * 0.4);
+    }
+  }
   setHeldAt(cell) { this.heldCell = cell; }
 
   // cx, cy in cells; r in cells; e is 0 (hot and narrow) … 1 (resting and wide)
@@ -1454,6 +1488,7 @@ export class View {
     }
 
     this._paintWorks();
+    if (this._giftMeshes) this._paintGifts();
 
     // the sheet slides off the board and slumps beside the track
     // ⚠⚠ THE COVER WAS DRAWN BACKWARDS TOO. ct === 1 slides the sheet OFF the

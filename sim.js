@@ -323,6 +323,13 @@ export class Sim {
     // default state a slow drought that nobody chose.
     this.lid = true;
     this.held = null;          // {id, since} — a kin in the air, out of the world
+    // ⚠️ THE ONLY DISCRETE, FINITE, LOCATED THING IN THIS WORLD. Every one of the
+    // five verbs is a FIELD — heat, slope, humidity, light — all of them diffuse,
+    // temporary and applied to a radius. A crumb is none of those: at 4mm scale
+    // it is a boulder of food sitting on a moss layer that is smooth and regrows
+    // everywhere, so it is the town's first contested resource, the first thing
+    // worth walking across the board for, and the first thing that runs out.
+    this.gifts = [];           // [{x, y, mass, day}]
     this.curtain = 0.75;       // 0 = closed, 1 = open
     this.lampOn = false;
 
@@ -577,6 +584,7 @@ export class Sim {
       this._thermal(F);
       this._fluids(F);
       this._growth(F);
+      if (this.gifts.length) this._gifts();
     }
     this._kin();
     // culture runs at 1 Hz, not 15 (bible §20)
@@ -1052,6 +1060,20 @@ export class Sim {
     }
     push(1, bmx, bmy, deficit(2) * (0.3 + bm * 2.6));
 
+    // — the crumb. A bounded nearest-of-N so the hot loop stays cheap; there are
+    // never more than a dozen of these and usually none.
+    if (this.gifts.length) {
+      let bg = null, bd = 1e9;
+      for (const gf of this.gifts) {
+        const d = Math.abs(gf.x - x) + Math.abs(gf.y - y);
+        if (d < bd) { bd = d; bg = gf; }
+      }
+      // it outscores grazing when they are hungry and it is close, and loses to
+      // moss underfoot when it is halfway across the board — which is what makes
+      // it a place worth walking to rather than a button that feeds everybody.
+      if (bg) push(11, bg.x, bg.y, deficit(2) * 3.4 / (1 + bd * 0.055 / S));
+    }
+
     // water: the pond, or the nearest wet cell
     // ⚠️ Drink from the BANK, not from the middle of the pond. Targeting water
     // itself walks them into the low end, and then it rains and they drown.
@@ -1235,6 +1257,7 @@ export class Sim {
     const k = this.k, NN = NEEDS.length, b = id * NN;
     switch (k.goal[id]) {
       case 1: return k.need[b + 2] > 0.93;
+      case 11: return k.need[b + 2] > 0.93 || !this.gifts.length;
       case 2: return k.need[b + 1] > 0.93;
       case 3: return k.need[b + 0] > 0.93;
       case 4: return k.need[b + 3] > 0.93;
@@ -1305,6 +1328,26 @@ export class Sim {
         const take = Math.min(this.moss[i], C.MOSS_EAT * 0.06);
         this.moss[i] -= take; k.need[base + 2] = Math.min(1, k.need[base + 2] + take * 1.5);
       } break;
+      case 11: {                              // eating something dad dropped
+        let gf = null, bd = 1e9;
+        for (const c of this.gifts) {
+          const d = Math.abs(c.x - k.x[id]) + Math.abs(c.y - k.y[id]);
+          if (d < bd) { bd = d; gf = c; }
+        }
+        if (gf && bd < 1.3 * S) {
+          // ⚠️ RATE MEASURED, NOT PICKED. At 0.012 a crumb was stripped in 84 ticks
+          // — under six sim-minutes — so it was gone before anybody could walk to
+          // it and the whole point (a place worth crossing the board for) never
+          // happened. At 0.0006 one crumb is roughly twenty-eight half-meals and
+          // lasts most of a day with three of them on it.
+          const take = Math.min(gf.mass, 0.0006);
+          gf.mass -= take;
+          k.need[base + 2] = Math.min(1, k.need[base + 2] + take * 14);
+          // a place where somebody was fed is a place worth remembering
+          this._placeFelt(gf.x, gf.y, 0.02, k.nameId[id]);
+        }
+        break;
+      }
       case 2: { // they drink at the bank, not by standing in it
         let wet = this.water[i];
         if (wet <= 0.004) {
@@ -1616,6 +1659,56 @@ export class Sim {
   // e.pressure: that works on the developer's stylus and nowhere else.
   //
   // The hand stays TRANSIENT — never saved, never fingerprinted, as before.
+  // —— THE CRUMB ——————————————————————————————————————
+  //
+  // ⚠⚠ THE "FEEDING THEM RUINS THEM" THEORY WAS TESTED AND IS FALSE. The design
+  // note said a fed town would invent nothing and reach no tradition, because
+  // `_weave` gates every invention on need pressure. Measured over 120 days on
+  // three seeds, with the sheet ON for both so drought was not the variable:
+  //
+  //   seed a   fed: invented 5, traditions 6, standing 13   alone: 5, 6, 9
+  //   seed b   fed: invented 5, traditions 6, standing  8   alone: 5, 6, 8
+  //   seed c   fed: invented 6, traditions 6, standing  9   alone: 6, 6, 4
+  //
+  // Inventions and traditions are IDENTICAL. Fed towns build MORE, live far
+  // longer (124 vs 20 alive on seed a) and write a book twice the length. So
+  // feeding is simply kind, and the crumb is a straightforwardly good power.
+  // Do not "fix" this into a punishment — if the kindness is ever supposed to
+  // cost something, that is a design decision for Kyle, not a comment's opinion.
+  //
+  // The cost that IS real is the sheet: your arm has to be in their sky, and 20
+  // days uncovered takes the pond to zero and ten of thirteen with it. A player
+  // who feeds in short visits pays almost nothing; one who leaves it open to
+  // keep feeding pays everything.
+  give(x, y) {
+    if (!this.inJar(x, y)) return false;
+    if (this.gifts.length >= 12) return false;          // dad only leaves so many
+    this.gifts.push({ x, y, mass: 1, day: this.day });
+    this.log('gift', 'something came down out of the sky and stayed where it landed.', 3.2);
+    return true;
+  }
+
+  _gifts() {
+    for (let n = this.gifts.length - 1; n >= 0; n--) {
+      const gf = this.gifts[n];
+      if (gf.mass > 0.004 && this.day - gf.day < 16) continue;
+      // ⚠️ THE GIFT ENDS AS PASTURE. Whatever is left goes into the moss where it
+      // sat, so a crumb nobody found is not deleted — it becomes the reason that
+      // patch is green for a season. Nothing is ever simply removed from a world
+      // whose whole subject is that marks stay.
+      const left = Math.max(0, gf.mass);
+      const cx = gf.x | 0, cy = gf.y | 0, RR = Math.max(1, Math.round(2 * S));
+      let cells = 0;
+      for (let dy = -RR; dy <= RR; dy++) for (let dx = -RR; dx <= RR; dx++) cells++;
+      const each = (left * 1.6) / cells;
+      for (let dy = -RR; dy <= RR; dy++) for (let dx = -RR; dx <= RR; dx++) {
+        const j = this.idx(cx + dx, cy + dy);
+        this.moss[j] = Math.min(1, this.moss[j] + each);
+      }
+      this.gifts.splice(n, 1);
+    }
+  }
+
   // —— THE ONE YOU LIFTED (§9.3) —————————————————————————————
   //
   // Every other verb in this game acts on a RADIUS. This one acts on a PERSON,
@@ -1795,6 +1888,8 @@ export class Sim {
     for (const key of Object.keys(this.placeNames).sort()) mix(key.length + this.placeNames[key].length);
     mix(this.humid); mix(this.rainLeft); mix(this.curtain); mix(this.lid ? 1 : 0); mix(this.lampOn ? 1 : 0);
     mix(this.held ? this.held.id + 1 : 0);
+    mix(this.gifts.length);
+    for (const gf of this.gifts) { mix(gf.x); mix(gf.y); mix(gf.mass); mix(gf.day); }
     for (let id = 0; id < this.count; id++) {
       if (!k.alive[id]) continue;
       mix(k.x[id]); mix(k.y[id]); mix(k.age[id]); mix(k.stage[id]); mix(k.strain[id]);
@@ -1822,6 +1917,7 @@ export class Sim {
       // reloads standing wherever it was picked up, quietly undoing the one
       // irreversible act in the game.
       held: this.held,
+      gifts: this.gifts,
       humid: this.humid, rainLeft: this.rainLeft, fog: this.fog,
       // ⚠️ NO height HERE ON PURPOSE — it is regenerated bit-identically from
       // the seed by fromJSON's own constructor call, and at N=96 a redundant
@@ -1872,6 +1968,7 @@ export class Sim {
     s.chronicle = o.chronicle; s.curtain = o.curtain; s.lampOn = o.lampOn;
     s.lid = o.lid; s.humid = o.humid; s.rainLeft = o.rainLeft; s.fog = o.fog || 0;
     s.held = o.held || null;
+    s.gifts = o.gifts || [];
     s.ambientBase = o.ambientBase != null ? o.ambientBase : C.AMBIENT_BASE;
     s.pond = o.pond; s.yard = o.yard; s.hearth = o.hearth || o.yard; s.lang = o.lang;
     if (o.narr) {
@@ -1892,6 +1989,13 @@ export class Sim {
       if (o.fields[key]) s[key].set(o.fields[key]);
     }
     for (const key of Object.keys(s.k)) if (o.k[key]) s.k[key].set(o.k[key]);
+    // ⚠️ a held kin who is not alive would sit in this.held forever, and lift()
+    // refuses while anything is held — so one bad blob would silently disable the
+    // power for the rest of that town's life, with nothing to see and nothing to
+    // blame. Cheap to check once here; impossible to diagnose later. (⚠️ this must
+    // go AFTER k is restored, and there are two `let alive = 0` lines in this
+    // file — the first is inside _kin, where there is no `s`.)
+    if (s.held && !(s.held.id >= 0 && s.held.id < s.count && s.k.alive[s.held.id])) s.held = null;
     let alive = 0, sumB = 0;
     for (let i = 0; i < s.count; i++) if (s.k.alive[i]) { alive++; sumB += s.k.bright[i]; }
     s.alive = alive;

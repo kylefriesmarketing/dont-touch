@@ -530,11 +530,70 @@ bijective, which is the most hue can do — the glyph channel is the rest of the
   off. The sanctioned alignment display is a TEXTURE, not a total: render `worn`, the scorch
   and the water stain live, store nothing, count nothing.
 
+### THE CRUMB (give) — the second literal power, and the kind one
+
+Sheet off, **tap twice** on the board. A crumb comes down and stays where it landed.
+
+⚠️ **The design note had this picked up off dad's saucer on the plywood, and that is
+impossible here.** `view.js` is explicit — *"there is no bare plywood to look at, because
+you are never outside the layout"* — and Kyle's standing rule is that the real world never
+appears in frame. There is nowhere outside the board to put an object. The player's hand
+**is** the sky, so the crumb falls out of it. A double tap is the one gesture left that
+collides with nothing: not rest (a hold), not draw (a drag), not the reach (a hold on a
+kin), not orbit (off the board), not tilt (shift or right).
+
+Why it matters: every one of the five verbs is a **field** — heat, slope, humidity, light —
+all diffuse, temporary, and applied to a radius. A crumb is none of those. At 4mm scale it
+is a boulder of food on a moss layer that is smooth and regrows everywhere, so it is the
+town's first contested resource, the first thing worth crossing the board for, and the first
+thing that runs out.
+
+⚠️ **Rate measured, not picked.** At 0.012 per bite a crumb was stripped in **84 ticks** —
+under six sim-minutes — so it was gone before anybody could walk to it and the whole point
+never happened. At 0.0006 it is roughly twenty-eight half-meals. Measured attraction over
+3 days: chosen 113–151 times at every distance from 6 to 30 cells.
+
+⚠️ **Whatever is left of a stale crumb becomes moss**, not deletion. Nothing is ever simply
+removed from a world whose entire subject is that marks stay.
+
+⚠️ **The crumb's body is scaled by the CUBE ROOT of its mass**, because mass is a volume.
+Linear scaling made it vanish long before it ran out, so the board lied about how much was
+left.
+
+### ⚠️⚠️ "FEEDING THEM RUINS THEM" WAS TESTED AND IS FALSE
+
+The design note asserted that a fed town invents nothing and never reaches a tradition,
+because `_weave` gates every invention on need pressure — *"the kindest player gets the
+emptiest book."* Measured over 120 days on three seeds, with the sheet **on** for both sides
+so drought was not the variable:
+
+| | invented | traditions | standing | alive | book |
+|---|---|---|---|---|---|
+| seed a, fed | 5 | 6 | 13 | 124 | 389 |
+| seed a, alone | 5 | 6 | 9 | 20 | 199 |
+| seed b, fed | 5 | 6 | 8 | 34 | 228 |
+| seed b, alone | 5 | 6 | 8 | 18 | 191 |
+| seed c, fed | 6 | 6 | 9 | 72 | 420 |
+| seed c, alone | 6 | 6 | 4 | 8 | 201 |
+
+Inventions and traditions are **identical every time**. Fed towns build more, live far
+longer, and write a book twice the length. **Feeding is simply kind**, and the crumb is a
+straightforwardly good power — which is what balances the take. Do not "fix" this into a
+punishment; if the kindness is supposed to cost something, that is Kyle's design decision,
+not a comment's opinion.
+
+The cost that **is** real is the sheet. Your arm has to be in their sky, and 20 days
+uncovered takes the pond to zero and ten of thirteen with it. Feeding in short visits costs
+almost nothing; leaving it open to keep feeding costs everything.
+
 ### Still open
 
-**THE CRUMB** (give) and **DAD'S CORNER** (move the world) are specified and unbuilt — they
-are the other two powers, and both hang off the same press-and-drag on an object lying at
-world scale, gated on the sheet being off so they are paid for in drought and cold. The
+**DAD'S CORNER** (move the world) is specified and unbuilt — it is the third power, and the
+only one that would let a player change the SHAPE of their world (`this.height` is written
+once in `_genWorld` and never again, and `_fluids`, `_move` and `eff()` are all downstream
+of it). It needs `this.baseHeight` plus a `_restamp()` applied after `_genWorld` derives
+pond, yard and hearth from the seed — put props in before that and a lump relocates the
+graveyard on load. The
 7th WORKS row, *"the mark"* (inventor gate = `k.saw > 0.5` near a recorded lift, then the
 unmodified weave: invented → taught → decayed → lost → **tradition**), is the payoff that
 makes the take generate a religion, and it is not built either.
