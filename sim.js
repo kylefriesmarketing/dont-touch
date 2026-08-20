@@ -204,12 +204,22 @@ function vnoise(x, y, s) {
 // ⚠️ A discovery is not culture until somebody who never met the discoverer
 // does it anyway. That is the whole of §7 and it is what `k.born` is for.
 export const WORKS = [
-  { key: 'store', name: 'the store', need: 2, pressure: 0.40, effort: 190, radius: 7.0, cap: 3,
-    made: 'piled food where it would keep' },
-  { key: 'windbreak', name: 'the windbreak', need: 0, pressure: 0.38, effort: 230, radius: 6.0, cap: 3,
-    made: 'heaped a wall against the cold' },
-  { key: 'channel', name: 'the channel', need: 1, pressure: 0.38, effort: 260, radius: 6.0, cap: 2,
-    made: 'scraped a channel from the water' },
+  // --- what you work out when you have nothing ---------------------------
+  { key: 'store', name: 'the store', need: 2, pressure: 0.40, effort: 320, radius: 7.0, cap: 3, per: 14,
+    made: 'piled food where it would keep', pre: 0, near: 0 },
+  { key: 'windbreak', name: 'the windbreak', need: 0, pressure: 0.38, effort: 380, radius: 6.0, cap: 3, per: 16,
+    made: 'heaped a wall against the cold', pre: 0, near: 0 },
+  { key: 'channel', name: 'the channel', need: 1, pressure: 0.38, effort: 420, radius: 6.0, cap: 2, per: 22,
+    made: 'scraped a channel from the water', pre: 0, near: 0 },
+  // --- and then you work out that you could LIVE somewhere ----------------
+  // `pre` is a mask of practices that must already be known. This is the whole
+  // progression and the player never sees a tree of it.
+  { key: 'hut', name: 'the first hut', need: 3, pressure: 0.34, effort: 900, radius: 5.0, cap: 8, per: 7,
+    made: 'made a place to be out of the weather', pre: 0b111, preN: 2, near: 1 },
+  { key: 'house', name: 'a house', need: 3, pressure: 0.30, effort: 1600, radius: 5.0, cap: 20, per: 9,
+    made: 'built something meant to outlast them', pre: 0b1000, preN: 1, near: 1 },
+  { key: 'hall', name: 'the hall', need: 4, pressure: 0.30, effort: 2600, radius: 9.0, cap: 1, per: 40,
+    made: 'raised a roof big enough for all of them', pre: 0b10000, preN: 1, near: 1 },
 ];
 export const WORK_AT = {}; WORKS.forEach((w, i) => WORK_AT[w.key] = i);
 
@@ -234,6 +244,7 @@ export class Sim {
     this.water = new Float64Array(n2);
     this.moss = new Float64Array(n2);
     this.moist = new Float64Array(n2);
+    this.worn = new Float32Array(n2);   // where they have walked enough to kill it
 
     // kin, structure-of-arrays (§16.2)
     const K = C.CAP;
@@ -649,6 +660,11 @@ export class Sim {
         M[i] = M[i] + g > 1 ? 1 : M[i] + g;
       }
       if (T[i] > 47) { const v = M[i] - 0.004 * F; M[i] = v < 0 ? 0 : v; }
+      // a trodden path does not re-flock, and heals only when nobody uses it
+      if (this.worn[i] > 0.02) {
+        M[i] *= (1 - Math.min(0.9, this.worn[i]) * 0.004 * F);
+        this.worn[i] -= 0.000030 * F;                 // grass comes back if nobody walks
+      }
     }
   }
 
@@ -817,7 +833,21 @@ export class Sim {
       const unfinished = this.works.some(o => o.kind === wi && o.prog < 0.985);
       const mine = this.works.filter(o => o.kind === wi).length;
       const relearning = pr.invented >= 0 && pr.lost >= 0;   // the knowledge is gone
-      if (unfinished || (mine >= W.cap && !relearning)) continue;
+      // a town builds what it has hands for. Fourteen houses for twenty people
+      // is not a settlement, it is a labour trap that empties the larder.
+      const room = Math.max(1, Math.min(W.cap, Math.ceil(this.alive / (W.per || 10))));
+      if (unfinished || (mine >= room && !relearning)) continue;
+
+      // you cannot think of a thing until you know the things it is made of
+      if (W.pre) {
+        let got = 0;
+        for (let q = 0; q < WORKS.length; q++) {
+          if (!(W.pre & (1 << q))) continue;
+          const held = W.near ? this.prac[q].tradition >= 0 : this.prac[q].invented >= 0;
+          if (held) got++;
+        }
+        if (got < (W.preN || 1)) continue;
+      }
 
       // ⚠️ PRESSURE, MATERIAL, WITNESSES — the bible's three, and the player
       // controls all three without ever being offered a button. A comfortable
@@ -843,14 +873,26 @@ export class Sim {
         if (seen < 2) continue;
         const g = k.genome.subarray(id * LOCI.length * 2, (id + 1) * LOCI.length * 2);
         const curious = expressed(g, L.temper) === 'curious' ? 1.9 : 1;
-        const sc = want * curious * Math.min(3, seen) * (k.knows[id] & bit ? 0.35 : 1);
+        let sc = want * curious * Math.min(3, seen) * (k.knows[id] & bit ? 0.35 : 1);
+        if (W.near) {
+          // dwellings want to be near the others — that is what makes a village
+          const hx2 = k.x[id] - this.hearth.x, hy2 = k.y[id] - this.hearth.y;
+          const dh = Math.sqrt(hx2 * hx2 + hy2 * hy2);
+          sc *= Math.max(0.1, 1.7 - dh / (16 * S));
+          // and not on top of one that already stands
+          for (const o2 of this.works) {
+            if (!WORKS[o2.kind].near) continue;
+            const ddx = o2.x - k.x[id], ddy = o2.y - k.y[id];
+            if (ddx * ddx + ddy * ddy < 9 * S * S) { sc = 0; break; }
+          }
+        }
         if (sc > bestScore) { bestScore = sc; best = id; }
       }
       if (best < 0) continue;
 
       // failure teaches: every attempt makes the next one likelier (§7)
       pr.tries++;
-      if (rng() > 0.010 * bestScore * (1 + pr.tries * 0.03)) continue;
+      if (rng() > 0.0011 * bestScore * (1 + pr.tries * 0.012)) continue;
       pr.tries = 0;
 
       const wx = k.x[best], wy = k.y[best];
@@ -1195,6 +1237,9 @@ export class Sim {
     k.x[id] += (dx / d) * sp - gx * slide * sp;
     k.y[id] += (dy / d) * sp - gy * slide * sp;
     this._keepIn(id);
+    // a foot went here. enough feet and nothing grows on it again.
+    const wi2 = this.idx(k.x[id], k.y[id]);
+    if (this.worn[wi2] < 1) this.worn[wi2] += 0.00075;
   }
 
   _keepIn(id) {
@@ -1482,6 +1527,20 @@ export class Sim {
     }
   }
 
+  // What the town has become, read off what it has actually managed. Derived
+  // on demand so it can never drift out of step with the world, and never
+  // shown to the player as a number.
+  get era() {
+    let known = 0, standing = 0;
+    for (let i = 0; i < WORKS.length; i++) if (this.prac[i].invented >= 0) known++;
+    for (const o of this.works) if (o.prog >= 0.985) standing++;
+    if (this.prac[WORK_AT.hall] && this.prac[WORK_AT.hall].invented >= 0) return 4;
+    if (this.prac[WORK_AT.house] && this.prac[WORK_AT.house].invented >= 0) return 3;
+    if (this.prac[WORK_AT.hut] && this.prac[WORK_AT.hut].invented >= 0) return 2;
+    if (standing > 0) return 1;
+    return 0;
+  }
+
   placeName(i) {
     const N = this.N, x = i % N, y = (i / N) | 0;
     // somewhere enough of them felt enough about has its own word now
@@ -1586,7 +1645,7 @@ export class Sim {
       for (let j = 0; j < G; j++) mix(k.genome[id * G + j]);
       for (let n = 0; n < NN; n++) mix(k.need[id * NN + n]);
     }
-    for (let i = 0; i < this.N * this.N; i += 37) { mix(this.temp[i]); mix(this.water[i]); mix(this.moss[i]); mix(this.moist[i]); }
+    for (let i = 0; i < this.N * this.N; i += 37) { mix(this.temp[i]); mix(this.water[i]); mix(this.moss[i]); mix(this.moist[i]); mix(this.worn[i]); }
     return (h >>> 0).toString(16);
   }
 
@@ -1608,6 +1667,7 @@ export class Sim {
       fields: {
         temp: Array.from(this.temp), water: Array.from(this.water),
         moss: Array.from(this.moss), moist: Array.from(this.moist),
+        worn: Array.from(this.worn),
       },
       k: Object.fromEntries(Object.entries(this.k).map(([key, arr]) => [key, Array.from(arr)])),
       pond: this.pond, yard: this.yard, hearth: this.hearth, lang: this.lang,
@@ -1655,7 +1715,7 @@ export class Sim {
     }
     if (o.rngState) { s.rng.setState(o.rngState[0]); s.rngWeather.setState(o.rngState[1]); s.rngGene.setState(o.rngState[2]); }
     // older saves carry height; newer ones do not, and either is fine
-    for (const key of ['height', 'temp', 'water', 'moss', 'moist']) {
+    for (const key of ['height', 'temp', 'water', 'moss', 'moist', 'worn']) {
       if (o.fields[key]) s[key].set(o.fields[key]);
     }
     for (const key of Object.keys(s.k)) if (o.k[key]) s.k[key].set(o.k[key]);

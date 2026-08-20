@@ -6,6 +6,7 @@
 
 import * as THREE from './lib/three.module.js';
 import { STAGE, NEEDS, LANTERN_HUE, LOCI, L, expressed, S, C } from './sim.js';
+import { Post } from './post.js';
 
 const R = 1.0;
 const GR = R * 0.94;    // half-width of the scenery — the heightfield is square
@@ -17,6 +18,18 @@ const EDGE_Y = 0.035;   // the lip where the fascia meets the terrain
 // basement, the sawhorses and the bulb belong to THE ROOM hub, not to the game.
 const BOARD = GR * 1.035;
 const EL_MIN = 0.92, EL_MAX = 1.52;   // 53deg .. 87deg — bird's eye only
+// ⚠️ SEVERAL BAGS OF FLOCK, NOT ONE GREEN. On a real table the scenic grass is
+// laid down in patches from different tubs — bright spring, deep summer, a dry
+// olive, a burnt sandy scrub — and those patch boundaries are most of what
+// makes it read as something somebody MADE. Each row is [r,g,b, +r,+g,+b] where
+// the second triple is how much richer it gets at full moss.
+const FLOCKS = [
+  [ 54,  98,  40,  20,  44,  16],   // deep summer
+  [ 72, 124,  44,  26,  52,  18],   // spring, the bright one
+  [ 88, 112,  52,  22,  38,  20],   // dry olive
+  [104,  98,  58,  18,  30,  18],   // scrub, nearly sand
+  [ 44,  86,  46,  16,  46,  22],   // shaded, blue-green
+];
 const RT = GR * 0.93;   // the track loop, outside the walkable circle (0.855·GR·2/1.88)
 
 export class View {
@@ -28,6 +41,12 @@ export class View {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
     this.renderer.setClearColor(0x0a0c10, 1);
     this.renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+    // ⚠️ NOTHING CAST A SHADOW, which is the single loudest "this is a toy
+    // render" tell — every tree, house and figure was pasted onto the ground
+    // rather than standing on it. The board is small and the light is one lamp,
+    // so a single tight shadow camera covers the whole world at high density.
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(38, 1, 0.05, 60);
@@ -51,6 +70,12 @@ export class View {
     this._graves();
     this._cover();
     this._dust();
+
+    // the miniature look. Falls back to a plain render where WebGL2 is not
+    // available, so nothing depends on it existing.
+    this.post = new Post(this.renderer);
+    this._foc = new THREE.Vector3();
+    this.focusY = 0.47;
 
     this.raycaster = new THREE.Raycaster();
     this.resize();
@@ -82,14 +107,27 @@ export class View {
   // without shading. The lamp above the board is the key; the fill is cold so
   // the shadow sides go blue rather than black.
   _lights() {
-    this.hemi = new THREE.HemisphereLight(0x9fb4d6, 0x2a2318, 0.62);
+    this.hemi = new THREE.HemisphereLight(0xd8e6f2, 0x4a4432, 0.62);
     this.scene.add(this.hemi);
     this.key = new THREE.DirectionalLight(0xffeccb, 1.05);
     this.key.position.set(1.15, 2.30, 0.75);
+    this.key.castShadow = true;
+    // the whole world is ~2 units across, so 2048 over 2.6 is ~790px per unit —
+    // dense enough that a 3cm figure gets a real footprint instead of one texel
+    this.key.shadow.mapSize.set(2048, 2048);
+    const sc = this.key.shadow.camera;
+    sc.left = -1.35; sc.right = 1.35; sc.top = 1.35; sc.bottom = -1.35;
+    sc.near = 0.4; sc.far = 6.5;
+    sc.updateProjectionMatrix();
+    // ⚠️ normalBias, not bias. A constant bias either peels small objects off
+    // the ground or leaves acne on the hillsides; normalBias scales with the
+    // surface angle and does both jobs at this scale.
+    this.key.shadow.normalBias = 0.008;
+    this.key.shadow.bias = -0.0004;
     this.scene.add(this.key);
     this.scene.add(this.key.target);
     // a low cold counter-light so the far slopes read instead of going solid
-    this.fill = new THREE.DirectionalLight(0x9ec4ff, 0.30);
+    this.fill = new THREE.DirectionalLight(0xc8dcf5, 0.30);
     this.fill.position.set(-1.4, 0.75, -1.1);
     this.scene.add(this.fill);
   }
@@ -105,10 +143,13 @@ export class View {
     const fl = 0.30 + d * 0.70;
     this.fasciaMat.color.setRGB(0.10 * fl, 0.14 * fl, 0.11 * fl);
     // the room's light rises and falls with the day
-    this.hemi.intensity = 0.10 + d * 0.34;
-    this.key.intensity = 0.14 + d * 0.62;
-    this.fill.intensity = 0.06 + d * 0.15;
+    this.hemi.intensity = 0.22 + d * 0.62;
+    this.key.intensity = 0.30 + d * 1.05;
+    this.fill.intensity = 0.12 + d * 0.34;
     this.key.color.setRGB(1, 0.92 - d * 0.02, 0.78 + d * 0.04);
+    // the lamp swings a little across the day so shadows are not painted on
+    const ang = 0.55 + s.dayFrac * 1.9;
+    this.key.position.set(Math.cos(ang) * 1.7, 1.6 + Math.sin(s.dayFrac * 3.14) * 1.1, Math.sin(ang) * 1.2);
   }
 
   // The surface the scenery actually presents: the heightfield eased down to
@@ -219,6 +260,7 @@ export class View {
           '#include <map_fragment>\n  {\n    vec3 det = texture2D(uDetail, vMapUv * uDetailScale).rgb;\n    diffuseColor.rgb *= (0.46 + det.r * 1.08);\n  }');
     };
     this.ground = new THREE.Mesh(geo, mat);
+    this.ground.receiveShadow = true;
     this.jar.add(this.ground);
 
     // ⚠️ PICKING GETS ITS OWN LOW-RES MESH. Raycasting the display terrain is
@@ -235,6 +277,24 @@ export class View {
 
     // the evidence layer: every touch presses the flocking flat, forever (§15.3)
     this.fpGrid = new Float32Array(N * N);
+
+    // ⚠️ which bag of flock went where. Low frequency on purpose — patches,
+    // not speckle; the speckle is the detail texture's job.
+    this.flock = new Uint8Array(N * N);
+    {
+      let fs2 = (this.sim.seed ^ 0x3c6ef35f) >>> 0;
+      const fr = () => { fs2 = (Math.imul(fs2, 1664525) + 1013904223) >>> 0; return fs2 / 4294967296; };
+      const cx0 = [], cy0 = [], cid = [];
+      for (let i = 0; i < 22; i++) { cx0.push(fr() * N); cy0.push(fr() * N); cid.push((fr() * FLOCKS.length) | 0); }
+      for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+        let bd = 1e9, b2 = 0;
+        for (let c = 0; c < cx0.length; c++) {
+          const dx = x - cx0[c], dy = y - cy0[c], d2 = dx * dx + dy * dy;
+          if (d2 < bd) { bd = d2; b2 = cid[c]; }
+        }
+        this.flock[y * N + x] = b2;
+      }
+    }
 
     // grey ballast painted into the scenery under the loop, precomputed once
     this.ballast = new Float32Array(N * N);
@@ -313,21 +373,53 @@ export class View {
     this.workViews = new Map();      // work object -> Group
     this.workRoot = new THREE.Group();
     this.jar.add(this.workRoot);
+    const mat = (c, r) => new THREE.MeshStandardMaterial({ color: c, roughness: r });
     this.workMats = {
-      heap: new THREE.MeshStandardMaterial({ color: 0x6d5a33, roughness: 0.95 }),
-      stack: new THREE.MeshStandardMaterial({ color: 0x4a6a2e, roughness: 0.9 }),
-      stone: new THREE.MeshStandardMaterial({ color: 0x585048, roughness: 0.95 }),
-      cut: new THREE.MeshStandardMaterial({ color: 0x3c2f1f, roughness: 1 }),
+      heap: mat(0x6d5a33, 0.95), stack: mat(0x4a6a2e, 0.9),
+      stone: mat(0x6b6459, 0.95), cut: mat(0x3c2f1f, 1),
+      turf: mat(0x5a5138, 0.95),
+      thatch: mat(0xa88748, 0.95), timber: mat(0x4a3524, 0.9),
+      // the roofs carry the whole silhouette — terracotta and slate, from the
+      // reference towns
+      tile: mat(0xa8492c, 0.85), slate: mat(0x4a5058, 0.7),
+      plasterA: mat(0xd9cfb8, 0.85), plasterB: mat(0xc4b393, 0.85),
+      plasterC: mat(0xe0d6c2, 0.85), brick: mat(0x9a6146, 0.9),
     };
   }
 
   _buildWorkView(o) {
     const M = this.workMats, g = new THREE.Group();
-    // a view-local stream so a work looks the same every time it is drawn
+    // a view-local stream so a building looks the same every time it is drawn
     let sd = ((o.x * 7349) ^ (o.y * 5741) ^ (o.kind * 977)) >>> 0;
     const rnd = () => { sd = (Math.imul(sd, 1664525) + 1013904223) >>> 0; return sd / 4294967296; };
+    const pick = (a) => a[(rnd() * a.length) | 0];
 
-    if (o.kind === 0) {                                  // the store
+    // ⚠️ A PITCHED ROOF IS THE WHOLE SILHOUETTE. Every reference Kyle sent —
+    // the fantasy town, the village green, even the wargaming table's farms —
+    // reads as a settlement because of ROOFS: steep, tiled, in terracotta and
+    // slate, at varied angles. A flat-topped box reads as a crate. So a roof
+    // here is a real prism with a ridge, and its colour does most of the work.
+    const roof = (w, d, h, mat) => {
+      const geo = new THREE.BufferGeometry();
+      const hw = w / 2, hd = d / 2;
+      // two slopes meeting at a ridge along x, plus the two gable triangles
+      const v = new Float32Array([
+        -hw, 0, -hd, hw, 0, -hd, hw, h, 0, -hw, 0, -hd, hw, h, 0, -hw, h, 0,
+        -hw, 0, hd, -hw, h, 0, hw, h, 0, -hw, 0, hd, hw, h, 0, hw, 0, hd,
+        -hw, 0, -hd, -hw, h, 0, -hw, 0, hd,
+        hw, 0, -hd, hw, 0, hd, hw, h, 0,
+      ]);
+      geo.setAttribute('position', new THREE.BufferAttribute(v, 3));
+      geo.computeVertexNormals();
+      return new THREE.Mesh(geo, mat);
+    };
+    const chimney = (x, z, h, w) => {
+      const c = new THREE.Mesh(new THREE.BoxGeometry(w, h, w), M.stone);
+      c.position.set(x, h / 2, z);
+      return c;
+    };
+
+    if (o.kind === 0) {                                  // the store — a heap
       const base = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.050, 0.012, 9), M.heap);
       base.position.y = 0.006; g.add(base);
       for (let i = 0; i < 7; i++) {
@@ -337,18 +429,18 @@ export class View {
         d.position.set(Math.cos(a) * rr, 0.012 + r * 0.7, Math.sin(a) * rr);
         d.scale.y = 0.72; g.add(d);
       }
-    } else if (o.kind === 1) {                           // the windbreak
+    } else if (o.kind === 1) {                           // the windbreak — a wall
       const n = 9;
       for (let i = 0; i < n; i++) {
         const t = (i / (n - 1) - 0.5) * 0.135;
         const h = 0.030 + rnd() * 0.016;
         const b = new THREE.Mesh(new THREE.BoxGeometry(0.020, h, 0.016), M.stone);
-        b.position.set(t, h / 2, Math.abs(t) * 0.34);    // a shallow crescent
+        b.position.set(t, h / 2, Math.abs(t) * 0.34);
         b.rotation.y = (rnd() - 0.5) * 0.5;
         b.rotation.z = (rnd() - 0.5) * 0.16;
         g.add(b);
       }
-    } else {                                             // the channel
+    } else if (o.kind === 2) {                           // the channel — a cut
       const n = 8;
       for (let i = 0; i < n; i++) {
         const t = (i / (n - 1) - 0.5) * 0.16;
@@ -360,8 +452,63 @@ export class View {
       const w = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.004, 0.012),
         new THREE.MeshStandardMaterial({ color: 0x2f5a72, roughness: 0.2, metalness: 0.1 }));
       w.position.y = 0.003; g.add(w);
+
+    } else if (o.kind === 3) {                           // THE FIRST HUT
+      // bent sticks and turf. This is the first night any of them slept dry.
+      const wall = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.031, 0.020, 7), M.turf);
+      wall.position.y = 0.010; g.add(wall);
+      const cone = new THREE.Mesh(new THREE.ConeGeometry(0.034, 0.030, 7), M.thatch);
+      cone.position.y = 0.033; g.add(cone);
+      for (let i = 0; i < 3; i++) {                      // poles leaning on it
+        const p = new THREE.Mesh(new THREE.CylinderGeometry(0.0018, 0.0022, 0.050, 4), M.timber);
+        const a = rnd() * 6.283;
+        p.position.set(Math.cos(a) * 0.026, 0.024, Math.sin(a) * 0.026);
+        p.rotation.z = 0.35 * Math.cos(a); p.rotation.x = -0.35 * Math.sin(a);
+        g.add(p);
+      }
+
+    } else if (o.kind === 4) {                           // A HOUSE
+      const w = 0.052 + rnd() * 0.022, d = 0.044 + rnd() * 0.018;
+      const wh = 0.030 + rnd() * 0.016;
+      const wallMat = pick([M.plasterA, M.plasterB, M.plasterC, M.brick]);
+      const body = new THREE.Mesh(new THREE.BoxGeometry(w, wh, d), wallMat);
+      body.position.y = wh / 2; g.add(body);
+      // half-timbering: the reference town is full of it and it costs two boxes
+      if (rnd() < 0.5) {
+        for (const sx of [-1, 1]) {
+          const beam = new THREE.Mesh(new THREE.BoxGeometry(0.004, wh, d * 1.01), M.timber);
+          beam.position.set(sx * w * 0.4, wh / 2, 0); g.add(beam);
+        }
+        const sill = new THREE.Mesh(new THREE.BoxGeometry(w * 1.01, 0.004, d * 1.01), M.timber);
+        sill.position.y = wh * 0.62; g.add(sill);
+      }
+      const rm = pick([M.tile, M.tile, M.slate, M.thatch]);
+      const rf = roof(w * 1.14, d * 1.14, 0.024 + rnd() * 0.014, rm);
+      rf.position.y = wh; rf.rotation.y = rnd() < 0.5 ? 0 : Math.PI / 2;
+      g.add(rf);
+      g.add(chimney((rnd() - 0.5) * w * 0.5, (rnd() - 0.5) * d * 0.5, wh + 0.030, 0.008));
+
+    } else {                                             // THE HALL
+      const w = 0.115, d = 0.075, wh = 0.048;
+      const body = new THREE.Mesh(new THREE.BoxGeometry(w, wh, d), M.plasterA);
+      body.position.y = wh / 2; g.add(body);
+      for (const sx of [-0.36, 0, 0.36]) {
+        const beam = new THREE.Mesh(new THREE.BoxGeometry(0.005, wh, d * 1.01), M.timber);
+        beam.position.set(sx * w, wh / 2, 0); g.add(beam);
+      }
+      const rf = roof(w * 1.12, d * 1.16, 0.046, M.tile);
+      rf.position.y = wh; g.add(rf);
+      // a stub of a tower, because every one of those towns has one
+      const tw = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.070, 0.026), M.stone);
+      tw.position.set(w * 0.42, 0.035, -d * 0.30); g.add(tw);
+      const cap = new THREE.Mesh(new THREE.ConeGeometry(0.022, 0.030, 4), M.slate);
+      cap.position.set(w * 0.42, 0.085, -d * 0.30); cap.rotation.y = Math.PI / 4; g.add(cap);
+      g.add(chimney(-w * 0.3, d * 0.2, wh + 0.038, 0.010));
     }
+
+    g.traverse(o2 => { o2.castShadow = true; o2.receiveShadow = true; });
     g.rotation.y = rnd() * 6.283;
+    g.scale.setScalar(S);          // everything above is written at the 64-grid scale
     return g;
   }
 
@@ -490,6 +637,8 @@ export class View {
 
     for (const [mesh, n] of [[grass, nb], [rocks, nr], [buds, nf]]) {
       mesh.count = n;
+      mesh.castShadow = true;                      // 16k blades, one shadow pass
+      mesh.receiveShadow = true;
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
       mesh.frustumCulled = false;
@@ -546,7 +695,8 @@ export class View {
       ties.setMatrixAt(i, o.matrix);
     }
     ties.instanceMatrix.needsUpdate = true;
-    rails.forEach(m => { m.instanceMatrix.needsUpdate = true; this.jar.add(m); });
+    ties.castShadow = ties.receiveShadow = true;
+    rails.forEach(m => { m.instanceMatrix.needsUpdate = true; m.castShadow = true; this.jar.add(m); });
     this.jar.add(ties);
 
     // the 6:15, stopped where dad left it, never fixed
@@ -568,6 +718,7 @@ export class View {
       }
       const a = a0 + ci * 0.075;
       const p = ringPt(a, 0);
+      car.traverse(o2 => { o2.castShadow = true; o2.receiveShadow = true; });
       car.position.set(p[0], p[1] + 0.008, p[2]);
       car.rotation.y = -a - Math.PI / 2;
       this.jar.add(car);
@@ -607,8 +758,11 @@ export class View {
       this.jar.add(mesh);
     };
 
-    // snap-together houses ring the hearth — the town the kin woke up in.
-    // The kin walk straight through them; at this scale nobody minds yet.
+    // ⚠️ NO HOUSES ARE PLACED HERE ANY MORE. They start with nothing — no
+    // shelter, no tools — and every structure on this board is one they worked
+    // out and built themselves (see WORKS in sim.js). A village that already
+    // existed at worldgen is exactly what this game must not have.
+    /* removed: decorative houses
     const wallCols = [0xd6d0c2, 0xa23f33, 0x8797a6, 0xc7b789, 0xb8a27a];
     const roofM = new THREE.MeshStandardMaterial({ color: 0x4a3427, roughness: 0.85 });
     let homes = 0, tries = 0;
@@ -629,36 +783,62 @@ export class View {
           new THREE.MeshStandardMaterial({ color: 0xe4dfd2, roughness: 0.6 }));
         spire.position.y = hgt + hgt * 0.72 + 0.014; house.add(spire);
       }
+      house.traverse(o2 => { o2.castShadow = true; o2.receiveShadow = true; });
       put(house, x, y);
       homes++;
     }
+    */
 
     // bottle-brush trees
     const trunkM = new THREE.MeshStandardMaterial({ color: 0x2a1c10, roughness: 1 });
-    const greens = [0x174023, 0x1d4d2b, 0x25573a];
-    let trees = 0; tries = 0;
-    while (trees < 80 && tries++ < 1600) {
-      const x = (2 + rnd() * (N - 4)) | 0, y = (2 + rnd() * (N - 4)) | 0;
+    // the reference's range: deep conifer through to acid lime
+    const greens = [0x1b4526, 0x245a30, 0x2f6b34, 0x4a8b31, 0x6aa63a, 0x3d7a45];
+    // ⚠️ TREES COME IN COPSES. Evenly scattered trees read as a texture; the
+    // reference has clumps with open ground between them, and the clumping is
+    // what makes the open ground mean anything.
+    let trees = 0, tries2 = 0;
+    while (trees < 130 && tries2++ < 900) {
+      const ax = (3 + rnd() * (N - 6)) | 0, ay = (3 + rnd() * (N - 6)) | 0;
+      if (!ok(ax, ay, 0.05, 1.8 * S)) continue;
+      const clump = 3 + ((rnd() * 7) | 0);
+      for (let ci = 0; ci < clump && trees < 130; ci++) {
+      const x = Math.round(ax + (rnd() - 0.5) * 7 * S), y = Math.round(ay + (rnd() - 0.5) * 7 * S);
+      if (x < 2 || y < 2 || x > N - 3 || y > N - 3) continue;
       if (!ok(x, y, 0.05, 1.8 * S)) continue;
       // ⚠️ ONE CONE IS A PARTY HAT. A bottle-brush tree is layered skirts of
       // needles on a visible trunk, and it has to be tall enough to matter
       // beside a 4mm figure — the old 0.040 cones read as scrub.
-      const th = 0.058 + rnd() * 0.062;
+      const th = 0.052 + rnd() * 0.070;
       const tree = new THREE.Group();
-      const needle = new THREE.MeshStandardMaterial({ color: greens[(rnd() * 3) | 0], roughness: 0.93 });
-      const tiers = 3 + ((rnd() * 2) | 0);
-      for (let t = 0; t < tiers; t++) {
-        const f2 = t / tiers;
-        const cone = new THREE.Mesh(
-          new THREE.ConeGeometry(th * (0.38 - f2 * 0.20), th * (0.52 - f2 * 0.16), 7), needle);
-        cone.position.y = 0.010 + th * (0.16 + f2 * 0.62);
-        cone.rotation.y = rnd() * 6.283;
-        tree.add(cone);
+      const kind = rnd();
+      const needle = new THREE.MeshStandardMaterial({ color: greens[(rnd() * greens.length) | 0], roughness: 0.93 });
+      if (kind < 0.45) {                              // conifer: stacked skirts
+        const tiers = 3 + ((rnd() * 2) | 0);
+        for (let t = 0; t < tiers; t++) {
+          const f2 = t / tiers;
+          const cone = new THREE.Mesh(
+            new THREE.ConeGeometry(th * (0.38 - f2 * 0.20), th * (0.52 - f2 * 0.16), 7), needle);
+          cone.position.y = 0.010 + th * (0.16 + f2 * 0.62);
+          cone.rotation.y = rnd() * 6.283;
+          tree.add(cone);
+        }
+      } else if (kind < 0.80) {                       // the lime ball-tree
+        const b3 = new THREE.Mesh(new THREE.IcosahedronGeometry(th * 0.34, 1), needle);
+        b3.position.y = 0.012 + th * 0.42;
+        b3.scale.set(1, 0.86 + rnd() * 0.3, 1);
+        tree.add(b3);
+      } else {                                        // a broad low lollipop
+        const b3 = new THREE.Mesh(new THREE.IcosahedronGeometry(th * 0.40, 1), needle);
+        b3.position.y = 0.010 + th * 0.30;
+        b3.scale.set(1.15, 0.52, 1.15);
+        tree.add(b3);
       }
       const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.0032, 0.0052, 0.020, 5), trunkM);
       trunk.position.y = 0.009; tree.add(trunk);
+      tree.traverse(o2 => { o2.castShadow = true; o2.receiveShadow = true; });
       put(tree, x, y);
       trees++;
+      }
     }
   }
 
@@ -677,14 +857,35 @@ export class View {
         // 0.19, and 0.19 of a green mixed linearly into brown is mud. Thin
         // ground foam over soil still READS as grass, so the colour has to get
         // there faster than the quantity does.
-        const mm = Math.sqrt(m);
+        // ⚠️ SLOPE IS FREE MATERIAL VARIETY. A layout is plaster and flock, and
+        // flock does not stick to a cliff — steep ground is where the plaster
+        // shows. This is the cheapest way to stop a heightfield reading as one
+        // painted sheet, and it costs four array reads.
+        const hl = s.height[s.idx(x - 1, y)], hr2 = s.height[s.idx(x + 1, y)];
+        const hu = s.height[s.idx(x, y - 1)], hd2 = s.height[s.idx(x, y + 1)];
+        const slope = Math.min(1, (Math.abs(hr2 - hl) + Math.abs(hd2 - hu)) * 9);
+        const mm = Math.sqrt(m) * (1 - slope * 0.8);
+        // which bag of flock got used here — low-frequency, so it patches
+        const fl = this.flock[i];
         let r = 88 - q * 40, g = 68 - q * 32, b = 46 - q * 22;   // painted dirt
-        r = r * (1 - mm) + (54 + m * 20) * mm;
-        g = g * (1 - mm) + (98 + m * 44) * mm;
-        b = b * (1 - mm) + (40 + m * 16) * mm;
+        const F0 = FLOCKS[fl];
+        r = r * (1 - mm) + (F0[0] + m * F0[3]) * mm;
+        g = g * (1 - mm) + (F0[1] + m * F0[4]) * mm;
+        b = b * (1 - mm) + (F0[2] + m * F0[5]) * mm;
         // grey ballast under dad's track, painted rather than modelled
         const bl = this.ballast[i];
         if (bl > 0.01) { const t2 = bl * 0.85; r = r * (1 - t2) + 118 * t2; g = g * (1 - t2) + 112 * t2; b = b * (1 - t2) + 104 * t2; }
+        // plaster shows through where it is steep
+        if (slope > 0.05) {
+          const rk = slope * 0.7;
+          r = r * (1 - rk) + 122 * rk; g = g * (1 - rk) + 114 * rk; b = b * (1 - rk) + 100 * rk;
+        }
+        // the tracks: worn to pale sand where enough feet have crossed
+        const wn = s.worn[i];
+        if (wn > 0.02) {
+          const t3 = Math.min(0.88, wn * 1.15);
+          r = r * (1 - t3) + 156 * t3; g = g * (1 - t3) + 140 * t3; b = b * (1 - t3) + 112 * t3;
+        }
         // wet grass is dark grass — moisture used to tint only the bare soil
         if (q > 0.25) { const wetf = 1 - Math.min(0.34, (q - 0.25) * 0.55); r *= wetf; g *= wetf; b *= wetf; }
         // the evidence: flocking pressed flat where a finger has been
@@ -741,11 +942,14 @@ export class View {
       const ripple = w > 0.004 ? Math.sin(x * 0.7 + wob) * Math.sin(y * 0.6 - wob * 1.3) * 0.0016 : 0;
       pos.setY(i, (s.height[i] + w) * YS + ripple);
       const o = i * 4;
-      const a = w <= 0.007 ? 0 : Math.min(0.90, (w - 0.007) * 11);
-      const dark = Math.min(1, w * 6);
-      d[o] = (96 - dark * 48) | 0;
-      d[o + 1] = (140 - dark * 60) | 0;
-      d[o + 2] = (168 - dark * 44) | 0;
+      // depth reads as colour AND as opacity, so a pond has a shallow edge and
+      // a middle you cannot see the bottom of
+      const a = w <= 0.006 ? 0 : Math.min(0.93, (w - 0.006) * 9);
+      const dark = Math.min(1, w * 5.5);
+      const deep = dark * dark;
+      d[o] = (104 - deep * 74) | 0;
+      d[o + 1] = (152 - deep * 92) | 0;
+      d[o + 2] = (176 - deep * 66) | 0;
       d[o + 3] = (a * 255) | 0;
     }
     pos.needsUpdate = true;
@@ -759,6 +963,8 @@ export class View {
     const body = new THREE.IcosahedronGeometry(0.0125, 1);
     body.scale(1.05, 1.3, 0.86);
     this.bodies = new THREE.InstancedMesh(body, new THREE.MeshStandardMaterial({ color: 0x1b1f2a, roughness: 0.55 }), CAP);
+    this.bodies.castShadow = true;
+    this.bodies.receiveShadow = true;
     this.bodies.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.bodies.count = 0;
     this.bodies.frustumCulled = false;
@@ -913,6 +1119,7 @@ export class View {
     this.graveMesh = new THREE.InstancedMesh(geo,
       new THREE.MeshStandardMaterial({ color: 0xb6bcc4, roughness: 0.75 }), 900);
     this.graveMesh.count = 0;
+    this.graveMesh.castShadow = true;
     this.graveMesh.frustumCulled = false;
     this.jar.add(this.graveMesh);
     this._graveN = 0;
@@ -958,9 +1165,32 @@ export class View {
       pos.setY(i, tent + droop + crinkle);
     }
     geo.computeVertexNormals();
-    this.cover = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
-      color: 0xd8e2ea, transparent: true, opacity: 0.15,
-      side: THREE.DoubleSide, depthWrite: false,
+    // ⚠️⚠️ A FLAT-OPACITY SHEET FOGS THE ENTIRE GAME. At any opacity high enough
+    // to see, a full-board plane greys everything under it — and this is a
+    // BIRD'S EYE game, so the player looks through the whole thing at once. I
+    // chased the ground palette twice before realising the wash was the cover.
+    // The physical truth is the fix: clear polythene is invisible face-on and
+    // only shows at glancing angles, on creases, and as a sheen. Fresnel does
+    // exactly that, and the sheet stays a real object you can see is there.
+    this.cover = new THREE.Mesh(geo, new THREE.ShaderMaterial({
+      uniforms: { uTint: { value: new THREE.Color(0xdCEAF4) }, uAmt: { value: 0.62 } },
+      transparent: true, depthWrite: false, side: THREE.DoubleSide,
+      vertexShader: `
+        varying vec3 vN; varying vec3 vV;
+        void main() {
+          vec4 wp = modelMatrix * vec4(position, 1.0);
+          vN = normalize(mat3(modelMatrix) * normal);
+          vV = normalize(cameraPosition - wp.xyz);
+          gl_Position = projectionMatrix * viewMatrix * wp;
+        }`,
+      fragmentShader: `
+        uniform vec3 uTint; uniform float uAmt;
+        varying vec3 vN; varying vec3 vV;
+        void main() {
+          float fres = 1.0 - abs(dot(normalize(vN), normalize(vV)));
+          float a = pow(fres, 2.6) * uAmt + 0.012;
+          gl_FragColor = vec4(uTint * a, a);
+        }`,
     }));
     this.cover.position.y = EDGE_Y + 0.03;
     this.jar.add(this.cover);
@@ -970,7 +1200,7 @@ export class View {
     this.fogMesh = new THREE.Mesh(
       new THREE.SphereGeometry(1, 20, 8, 0, Math.PI * 2, 0, Math.PI / 2),
       new THREE.MeshBasicMaterial({
-        color: 0xdff0ff, transparent: true, opacity: 0,
+        color: 0xc6d8e8, transparent: true, opacity: 0,
         depthWrite: false, blending: THREE.AdditiveBlending,
       }));
     this.fogMesh.scale.set(GR * 0.99, 0.34, GR * 0.99);
@@ -1006,8 +1236,15 @@ export class View {
       p[i * 3 + 2] = (Math.random() - 0.5) * 3;
     }
     g.setAttribute('position', new THREE.BufferAttribute(p, 3));
+    const dc = document.createElement('canvas'); dc.width = dc.height = 32;
+    const dg = dc.getContext('2d');
+    const dr = dg.createRadialGradient(16, 16, 0, 16, 16, 16);
+    dr.addColorStop(0, 'rgba(255,240,214,1)'); dr.addColorStop(0.45, 'rgba(255,236,204,0.35)');
+    dr.addColorStop(1, 'rgba(255,230,190,0)');
+    dg.fillStyle = dr; dg.fillRect(0, 0, 32, 32);
     this.dust = new THREE.Points(g, new THREE.PointsMaterial({
-      size: 0.012, color: 0xffeccc, transparent: true, opacity: 0.5,
+      size: 0.016, color: 0xffeccc, transparent: true, opacity: 0.34,
+      map: new THREE.CanvasTexture(dc),
       blending: THREE.AdditiveBlending, depthWrite: false,
     }));
     this.scene.add(this.dust);
@@ -1018,6 +1255,7 @@ export class View {
     const w = this.canvas.clientWidth || window.innerWidth;
     const h = this.canvas.clientHeight || window.innerHeight;
     this.renderer.setSize(w, h, false);
+    if (this.post) this.post.setSize(Math.max(2, w | 0), Math.max(2, h | 0));
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
   }
@@ -1064,7 +1302,13 @@ export class View {
     this.cover.rotation.z = -ct * 0.40;
     this.cover.scale.set(1 - ct * 0.42, 1 - ct * 0.60, 1 - ct * 0.10);
     this.fogMesh.material.opacity =
-      Math.min(0.30, Math.max(0, s.humid / (S * S) - 5) * 0.018 + s.fog * 0.24) * (1 - ct * 0.5);
+      // ⚠️ MEASURED: this was costing 55% OF THE BOARD'S SATURATION (0.182 vs
+      // 0.282 with it hidden) — a white dome over a bird's-eye game desaturates
+      // absolutely everything under it, which is the whole picture. It should
+      // read as weather ARRIVING in the last stretch before rain, not as a
+      // permanent veil. Late ramp, hard cap, and cooler so it tints rather
+      // than bleaches.
+      Math.min(0.075, Math.max(0, s.humid / (S * S) - 8.5) * 0.020 + s.fog * 0.16) * (1 - ct * 0.5);
 
     // dust drifts through the shaft
     const dp = this.dust.geometry.attributes.position;
@@ -1077,7 +1321,31 @@ export class View {
     dp.needsUpdate = true;
     this.dust.material.opacity = 0.06 + s.daylight * 0.4;
 
-    this.renderer.render(this.scene, this.camera);
+    // ⚠️ FOCUS FOLLOWS THE TOWN. A fixed band at screen centre put the crowd —
+    // the entire subject, and the entire UI — in the defocused zone, because
+    // the town wanders and the camera does not. Project the living centroid and
+    // put the sharp band on it. Smoothed hard: a focus that snaps every frame
+    // reads as a camera fault. (Age of Toys learned the same lesson about
+    // pointing a camera at a raw centroid — never feed one to anything直接.)
+    if (this.post.ok) {
+      const s2 = this.sim, k2 = s2.k;
+      let cx = 0, cy = 0, cz = 0, n2 = 0;
+      for (let id = 0; id < s2.count; id++) {
+        if (!k2.alive[id]) continue;
+        const p2 = this.cellToLocal(k2.x[id], k2.y[id], 0);
+        cx += p2[0]; cy += p2[1]; cz += p2[2]; n2++;
+      }
+      if (n2) {
+        this._foc.set(cx / n2, cy / n2, cz / n2);
+        this.jar.localToWorld(this._foc);
+        this._foc.project(this.camera);
+        const want = Math.max(0.18, Math.min(0.82, this._foc.y * 0.5 + 0.5));
+        this.focusY += (want - this.focusY) * Math.min(1, dt * 1.1);
+        this.post.p.bandCenter = this.focusY;
+      }
+    }
+    if (this.postOn !== false && this.post.ok) this.post.render(this.scene, this.camera);
+    else { this.renderer.setRenderTarget(null); this.renderer.render(this.scene, this.camera); }
   }
 
   // -- picking ---------------------------------------------------------------
