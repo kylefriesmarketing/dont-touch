@@ -12,6 +12,19 @@ const t = (name, fn) => {
 const eq = (a, b, m) => { if (a !== b) throw new Error(`${m || ''} expected ${b}, got ${a}`); };
 const ok = (c, m) => { if (!c) throw new Error(m || 'assertion failed'); };
 const run = (s, days) => { const n = days * C.TICKS_PER_DAY; for (let i = 0; i < n; i++) s.step(); return s; };
+// ⚠️ The fingerprint answers "does it CONTINUE identically", which is a different
+// and weaker question than "did the save keep everything". A fingerprint that
+// missed the genome, every nameId, glued/tender and the narrator's own counters
+// reported a perfect green while the save was quietly losing them. This compares
+// the whole serialised state, so a field that fails to round-trip cannot hide.
+const norm = (s) => JSON.stringify(s.toJSON());
+const saveEqual = (s, m) => {
+  const before = norm(s);
+  const after = norm(Sim.fromJSON(JSON.parse(before)));
+  if (before === after) return;
+  let i = 0; while (i < before.length && before[i] === after[i]) i++;
+  throw new Error(`${m || 'save'} diverged at char ${i}: ...${before.slice(Math.max(0, i - 70), i + 70)}`);
+};
 
 console.log("DON'T TOUCH — sim battery\n");
 
@@ -493,6 +506,45 @@ t('founders are never born already past their lifespan', () => {
         `founder aged ${s.k.age[id].toFixed(0)} with a lifespan of ${s.k.lifespan[id].toFixed(0)}`);
     }
   }
+});
+
+t('the whole save round-trips, not just the fingerprint', () => {
+  for (const seed of ['live', 'basement', 'c']) {
+    const s = new Sim({ seed });
+    run(s, 40);
+    saveEqual(s, seed);
+  }
+});
+t('the narrator keeps its own place across a save', () => {
+  const s = new Sim({ seed: 'live' });
+  run(s, 60);
+  const r = Sim.fromJSON(JSON.parse(JSON.stringify(s.toJSON())));
+  eq(r._hatches, s._hatches, 'hatch counter');
+  eq(r._lastRainLog, s._lastRainLog, 'rain silence');
+  eq(JSON.stringify([...r.eventCounts.entries()].sort()), JSON.stringify([...s.eventCounts.entries()].sort()), 'rarity ledger');
+  run(s, 20); run(r, 20);
+  eq(r.chronicle.length, s.chronicle.length, 'the two told different numbers of stories');
+});
+t('a save written before a field existed does not resurrect phantoms', () => {
+  const s = new Sim({ seed: 'oldsave' });
+  run(s, 20);
+  const o = JSON.parse(JSON.stringify(s.toJSON()));
+  delete o.k.glued; delete o.k.tender; delete o.narr;   // a v0.2 save
+  const r = Sim.fromJSON(o);
+  let glued = 0;
+  for (let i = 0; i < r.count; i++) if (r.k.alive[i] && r.k.glued[i]) glued++;
+  eq(glued, 0, 'an old save came back with a glued stranger');
+  ok(r.eventCounts.size > 0, 'the rarity ledger was not rebuilt');
+});
+t('founders:0 really means zero', () => {
+  const s = new Sim({ seed: 'nobody', founders: 0 });
+  eq(s.count, 0, 'phantom founders');
+});
+t('the founding survives a very long life', () => {
+  const s = new Sim({ seed: 'longlife' });
+  for (let d = 0; d < 700 && s.alive !== 0; d++) run(s, 1);
+  const r = Sim.fromJSON(JSON.parse(JSON.stringify(s.toJSON())));
+  ok(r.chronicle.some(e => e.kind === 'open'), 'the book deleted its own first page');
 });
 
 // --- soak ------------------------------------------------------------------

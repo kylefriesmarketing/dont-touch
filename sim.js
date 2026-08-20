@@ -80,6 +80,10 @@ export const C = {
   FIELD_EVERY: 5,        // field physics runs on a slow lane at 5x dt (§16.2)
 };
 
+// How many of the earliest entries the chronicle protects when it trims. The
+// founding is the one page a book may never lose.
+const HEAD_KEEP = 80;
+
 export const STAGE = { EGG: 0, NIB: 1, HALF: 2, WHOLE: 3, RIME: 4 };
 export const STAGE_NAME = ['egg', 'nib', 'half', 'whole', 'rime'];
 export const NEEDS = ['warmth', 'water', 'food', 'rest', 'company', 'safety'];
@@ -228,7 +232,14 @@ export class Sim {
     this.dayFrac = 0;
 
     this._genWorld();
-    this._seedColony(opts.founders || 14);
+    // ⚠️⚠️ `||` MEANT `founders: 0` SPAWNED FOURTEEN. Sim.fromJSON restores into
+    // `new Sim({seed, founders: 0})`, so every load ran a full phantom founding
+    // first. That was merely wasteful while every k array was overwritten — but
+    // fromJSON restores with `if (o.k[key])`, so the moment a NEW per-kin array
+    // ships, a save written before it keeps the phantom values. A v0.2 save
+    // loaded here came back with a glued stranger frozen mid-board and 24 of 36
+    // kin believing kin 0 was tending them. `??` is load-bearing.
+    this._seedColony(opts.founders ?? 14);
   }
 
   // -- world -----------------------------------------------------------------
@@ -418,7 +429,11 @@ export class Sim {
     // `score` freezes rarity-at-the-time, which the sifter must be able to undo
     // when it re-ranks an event against its own era. See page().
     this.chronicle.push({ day: this.day, kind, text, w: weight, score: weight * rarity });
-    if (this.chronicle.length > 4000) this.chronicle.splice(0, 1000);
+    // ⚠️ THE BOOK USED TO DELETE ITS OWN FIRST PAGE. A flat splice(0, 1000) —
+    // and toJSON's slice(-600) — eventually threw away the founding itself:
+    // measured at day 600, `chronicle.some(e => e.kind === 'open')` was false.
+    // A book about a long life must keep its opening. Trim the MIDDLE.
+    if (this.chronicle.length > 4000) this.chronicle.splice(HEAD_KEEP, 1000);
   }
 
   // -- the day ---------------------------------------------------------------
@@ -767,7 +782,7 @@ export class Sim {
 
     // mate
     const mean = (() => { let m = 0; for (let n = 0; n < NN; n++) m += k.need[base + n]; return m / NN; })();
-    if (k.stage[id] === STAGE.WHOLE && k.cool[id] <= 0 && mean > C.BREED_MIN && k.sex[id] === 0) {
+    if (!k.glued[id] && k.stage[id] === STAGE.WHOLE && k.cool[id] <= 0 && mean > C.BREED_MIN && k.sex[id] === 0) {
       let mx = x, my = y, mi = -1, bv = 0;
       for (let s = 0; s < 20; s++) {
         const o = ri(rng, this.count);
@@ -784,7 +799,14 @@ export class Sim {
     // everything to carry a single corpse, stops eating, and dies. Then there
     // are more corpses. A colony of 99 went to 4 in fifteen days this way.
     // And a hungry kin does not do funerals.
-    if (this.corpses.length && k.stage[id] >= STAGE.WHOLE && k.need[base + 2] > 0.55) {
+    // ⚠️⚠️ NOT IF YOU CANNOT WALK. `_act` measures `near` as distance to the
+    // TARGET, and a glued kin's target is pinned to its own feet — so `near` is
+    // unconditionally true for them and they performed errands at any range.
+    // Measured before the guard: the one who stays carried 13-31% of every
+    // funeral in the game, from up to 31 cells away, without moving. Their own
+    // chronicle read "Ruvwu carried Brim to the yard" eleven days above
+    // "the only journey Ruvwu ever took". Goals 7/8/9 all require ARRIVING.
+    if (!k.glued[id] && this.corpses.length && k.stage[id] >= STAGE.WHOLE && k.need[base + 2] > 0.55) {
       let best = null, bd = 1e9;
       for (const c of this.corpses) {
         // ⚠️ a claimer who wandered off still held the corpse forever, so nobody
@@ -927,11 +949,12 @@ export class Sim {
       case 3: break; // standing in the warm place is its own reward (handled by comfort)
       case 4: k.need[base + 3] = Math.min(1, k.need[base + 3] + 0.014); break;
       case 5: if (near) k.need[base + 4] = Math.min(1, k.need[base + 4] + 0.018); break;
-      case 7: if (near) this._breed(id, k.goalT[id] | 0); break;
-      case 8: if (near && this.corpses.length) this._carry(id); break;
+      // belt and braces on the range bug above: an errand needs legs
+      case 7: if (near && !k.glued[id]) this._breed(id, k.goalT[id] | 0); break;
+      case 8: if (near && !k.glued[id] && this.corpses.length) this._carry(id); break;
       case 9: {                               // sitting with the one who stays
         const t = k.goalT[id] | 0;
-        if (near && k.alive[t] && k.glued[t]) {
+        if (near && !k.glued[id] && k.alive[t] && k.glued[t]) {
           // they bring what they have, and it costs them a little. Warmth is
           // skipped on purpose: you cannot hand somebody a warm place to stand.
           for (let n = 1; n < NN; n++) {
@@ -1120,12 +1143,28 @@ export class Sim {
   }
 
   // -- save / restore --------------------------------------------------------
+  // ⚠️ THIS WAS A FALSE GREEN. The save round-trip tests lean entirely on the
+  // fingerprint, and it used to read only position/age/fields — so wiping the
+  // whole genome, every nameId, glued, tender, humid, curtain, lid, strain and
+  // stats.buried left it IDENTICAL. A test that cannot fail is not a test, and
+  // any new per-kin array would be invisible to it by construction. If you add
+  // persistent state, ADD IT HERE TOO.
   fingerprint() {
     let h = 2166136261 >>> 0;
     const mix = (v) => { h ^= (v * 1000 | 0) >>> 0; h = Math.imul(h, 16777619) >>> 0; };
-    mix(this.tick); mix(this.alive || 0); mix(this.stats.born); mix(this.stats.died); mix(this.graves.length);
-    for (let id = 0; id < this.count; id++) if (this.k.alive[id]) { mix(this.k.x[id]); mix(this.k.y[id]); mix(this.k.age[id]); }
-    for (let i = 0; i < this.N * this.N; i += 37) { mix(this.temp[i]); mix(this.water[i]); mix(this.moss[i]); }
+    const k = this.k, G = LOCI.length * 2, NN = NEEDS.length;
+    mix(this.tick); mix(this.alive || 0); mix(this.stats.born); mix(this.stats.died);
+    mix(this.stats.buried); mix(this.graves.length); mix(this.corpses.length);
+    mix(this.names.length); mix(this.chronicle.length);
+    mix(this.humid); mix(this.rainLeft); mix(this.curtain); mix(this.lid ? 1 : 0); mix(this.lampOn ? 1 : 0);
+    for (let id = 0; id < this.count; id++) {
+      if (!k.alive[id]) continue;
+      mix(k.x[id]); mix(k.y[id]); mix(k.age[id]); mix(k.stage[id]); mix(k.strain[id]);
+      mix(k.nameId[id]); mix(k.glued[id]); mix(k.tender[id]); mix(k.goal[id]);
+      for (let j = 0; j < G; j++) mix(k.genome[id * G + j]);
+      for (let n = 0; n < NN; n++) mix(k.need[id * NN + n]);
+    }
+    for (let i = 0; i < this.N * this.N; i += 37) { mix(this.temp[i]); mix(this.water[i]); mix(this.moss[i]); mix(this.moist[i]); }
     return (h >>> 0).toString(16);
   }
 
@@ -1134,7 +1173,9 @@ export class Sim {
       v: 1, seed: this.seed, tick: this.tick, day: this.day, dayFrac: this.dayFrac,
       count: this.count, free: this.free.slice(), names: this.names.slice(),
       graves: this.graves, corpses: this.corpses, stats: this.stats,
-      chronicle: this.chronicle.slice(-600),
+      // keep the opening AND the recent past — see HEAD_KEEP in log()
+      chronicle: this.chronicle.length <= 600 ? this.chronicle.slice()
+        : this.chronicle.slice(0, HEAD_KEEP).concat(this.chronicle.slice(-(600 - HEAD_KEEP))),
       curtain: this.curtain, lampOn: this.lampOn, lid: this.lid,
       humid: this.humid, rainLeft: this.rainLeft, fog: this.fog,
       fields: {
@@ -1143,6 +1184,19 @@ export class Sim {
       },
       k: Object.fromEntries(Object.entries(this.k).map(([key, arr]) => [key, Array.from(arr)])),
       pond: this.pond, yard: this.yard, hearth: this.hearth, lang: this.lang,
+      // ⚠️ THE NARRATOR'S OWN STATE. These look like scratch variables but they
+      // decide WHEN the town gets to speak — the hatch counter fires one line in
+      // seven, the rain and tend logs hold an 8-11 day silence, and eventCounts
+      // is the rarity ledger every future score is divided by. Left unsaved, a
+      // restored colony was byte-identical in body and told its story on a
+      // different rhythm. The widened fingerprint caught it immediately.
+      narr: {
+        hatches: this._hatches || 0,
+        lastRainLog: this._lastRainLog == null ? null : this._lastRainLog,
+        tendLog: this._tendLog == null ? null : this._tendLog,
+        ended: !!this._ended,
+        counts: Array.from(this.eventCounts.entries()),
+      },
       rngState: [this.rng.getState(), this.rngWeather.getState(), this.rngGene.getState()],
     };
   }
@@ -1155,6 +1209,18 @@ export class Sim {
     s.chronicle = o.chronicle; s.curtain = o.curtain; s.lampOn = o.lampOn;
     s.lid = o.lid; s.humid = o.humid; s.rainLeft = o.rainLeft; s.fog = o.fog || 0;
     s.pond = o.pond; s.yard = o.yard; s.hearth = o.hearth || o.yard; s.lang = o.lang;
+    if (o.narr) {
+      s._hatches = o.narr.hatches || 0;
+      s._lastRainLog = o.narr.lastRainLog == null ? undefined : o.narr.lastRainLog;
+      s._tendLog = o.narr.tendLog == null ? undefined : o.narr.tendLog;
+      s._ended = !!o.narr.ended;
+      s.eventCounts = new Map(o.narr.counts || []);
+    } else {
+      // a save from before the narrator's state round-tripped: rebuild the
+      // rarity ledger from the chronicle we did keep, so scores stay sane
+      s.eventCounts = new Map();
+      for (const e of (o.chronicle || [])) s.eventCounts.set(e.kind, (s.eventCounts.get(e.kind) || 0) + 1);
+    }
     if (o.rngState) { s.rng.setState(o.rngState[0]); s.rngWeather.setState(o.rngState[1]); s.rngGene.setState(o.rngState[2]); }
     for (const key of ['height', 'temp', 'water', 'moss', 'moist']) s[key].set(o.fields[key]);
     for (const key of Object.keys(s.k)) if (o.k[key]) s.k[key].set(o.k[key]);
