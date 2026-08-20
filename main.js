@@ -170,7 +170,9 @@ class App {
       moved += Math.abs(e.clientX - sx) + Math.abs(e.clientY - sy);
       const dx = (e.clientX - sx) / innerWidth, dy = (e.clientY - sy) / innerHeight;
       if (mode === 'orbit') {
-        v.orbit.tAz -= dx * 3.4; v.orbit.tEl = Math.max(-0.1, Math.min(1.32, v.orbit.tEl + dy * 2.6));
+        v.orbit.tAz -= dx * 3.4;
+        // clamped to bird's eye — you look down into the layout, never across it
+        v.orbit.tEl = Math.max(0.92, Math.min(1.52, v.orbit.tEl + dy * 2.6));
         sx = e.clientX; sy = e.clientY;
       } else if (mode === 'tilt') {
         const a = v.orbit.az;
@@ -207,7 +209,8 @@ class App {
 
     canvas.addEventListener('wheel', (e) => {
       e.preventDefault();
-      v.orbit.tDist = Math.max(1.3, Math.min(7, v.orbit.tDist + Math.sign(e.deltaY) * 0.28));
+      // the far limit is where the board still fills the frame
+      v.orbit.tDist = Math.max(0.75, Math.min(2.75, v.orbit.tDist + Math.sign(e.deltaY) * 0.16));
     }, { passive: false });
 
     addEventListener('keydown', (e) => {

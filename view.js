@@ -1,19 +1,23 @@
 // DON'T TOUCH — view.js
 // Rendering only. Reads the sim, never writes it. (Invariant 2)
-// Art direction: a lamplit layout in a dark basement. One bare bulb over dad's
-// plywood table; the town reads as shape plus lantern glow. (bible §15, pivoted)
+// Art direction: a lamplit miniature layout seen from above. The scenery fills
+// the board edge to edge and the real world is never in frame — the tabletop
+// framing belongs to THE ROOM hub. Shape plus lantern glow. (bible §15, pivoted)
 
 import * as THREE from './lib/three.module.js';
 import { STAGE, NEEDS, LANTERN_HUE, LOCI, L, expressed } from './sim.js';
 
-const R = 1.0;          // jar radius
-const JH = 1.05;        // jar height (there must be AIR above the landscape)
-const GR = R * 0.94;    // ground radius
+const R = 1.0;
+const GR = R * 0.94;    // half-width of the scenery — the heightfield is square
 const YS = 0.38;        // vertical scale of the heightfield
-const BASE = -0.155;     // the jar's floor. Everything is measured from here.
-const EDGE_Y = 0.035;   // the lip where the soil column meets the terrain
-const TW = 4.6;         // dad's plywood: a 4×8 sheet at world scale (2:1)
-const TD = 2.3;
+const BASE = -0.155;    // the underside of the board. Everything measures from here.
+const EDGE_Y = 0.035;   // the lip where the fascia meets the terrain
+// THE WORLD IS THE TABLE. The board is the scenery plus a fascia lip — there is
+// no bare plywood to look at, because you are never outside the layout. The
+// basement, the sawhorses and the bulb belong to THE ROOM hub, not to the game.
+const BOARD = GR * 1.035;
+const EL_MIN = 0.92, EL_MAX = 1.52;   // 53deg .. 87deg — bird's eye only
+const RT = GR * 0.93;   // the track loop, outside the walkable circle (0.855·GR·2/1.88)
 
 export class View {
   constructor(canvas, sim) {
@@ -27,14 +31,18 @@ export class View {
 
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(38, 1, 0.05, 60);
-    this.orbit = { az: 0.6, el: 0.46, dist: 3.6, tAz: 0.6, tEl: 0.46, tDist: 3.6 };
+    // BIRD'S EYE. You look down into the layout, never across it — the elevation
+    // floor is what keeps the horizon (and therefore the real world) off screen.
+    this.orbit = { az: 0.35, el: 1.16, dist: 2.35, tAz: 0.35, tEl: 1.16, tDist: 2.35 };
     // 'jar' by history: this group is THE BOARD — everything that lifts
     // together when you tilt one edge of the plywood off the sawhorses.
     this.jar = new THREE.Group();
     this.scene.add(this.jar);
 
     this._room();
+    this._lights();
     this._ground();
+    this._groundCover();
     this._track();
     this._scenery();
     this._water();
@@ -47,286 +55,376 @@ export class View {
     this.resize();
   }
 
-  // -- the basement around the table ----------------------------------------
+  // -- what is beyond the layout ---------------------------------------------
+  // ⚠️ THE REAL WORLD IS GONE ON PURPOSE. The basement, the plywood, the
+  // sawhorses, the window well and the bulb on its cord were all built and all
+  // removed: the game is played from inside the layout, bird's eye, and the
+  // tabletop framing belongs to THE ROOM hub where this is a doorway object.
+  // What remains is the dark the board sits in, so a shallow camera angle finds
+  // shadow rather than a void edge. `daylight` still drives the light — it is
+  // just no longer attached to a window you can see.
   _room() {
-    // the window well: a half-window at grade, the only daylight that gets
-    // down here. Painted into a tiny gradient canvas every frame.
-    const c = document.createElement('canvas'); c.width = 8; c.height = 256;
-    const g = c.getContext('2d');
-    this.skyCtx = g; this.skyCanvas = c;
-    this.skyTex = new THREE.CanvasTexture(c);
-
-    // the back wall
-    const wall = new THREE.Mesh(
-      new THREE.PlaneGeometry(40, 24),
-      new THREE.MeshBasicMaterial({ color: 0x080a0e })
+    const dark = new THREE.Mesh(
+      new THREE.PlaneGeometry(60, 60),
+      new THREE.MeshBasicMaterial({ color: 0x07080b })
     );
-    wall.position.set(0, 3, -3.02);
-    this.scene.add(wall);
-    this.wallMat = wall.material;
+    dark.rotation.x = -Math.PI / 2;
+    dark.position.y = BASE - 0.02;
+    this.scene.add(dark);
+    this.floorMat = dark.material;
+  }
 
-    // the half-window, high on the wall
-    this.sky = new THREE.Mesh(
-      new THREE.PlaneGeometry(2.3, 0.92),
-      new THREE.MeshBasicMaterial({ map: this.skyTex, depthWrite: false })
-    );
-    this.sky.position.set(-1.3, 2.5, -3.0);
-    this.scene.add(this.sky);
-    const bar = new THREE.Mesh(new THREE.PlaneGeometry(0.07, 1.0),
-      new THREE.MeshBasicMaterial({ color: 0x0b0d12 }));
-    bar.position.set(-1.3, 2.5, -2.98); this.scene.add(bar);
-    const frame = new THREE.Mesh(
-      new THREE.PlaneGeometry(2.52, 1.12),
-      new THREE.MeshBasicMaterial({ color: 0x11141a })
-    );
-    frame.position.set(-1.3, 2.5, -3.01); this.scene.add(frame);
-
-    // bare concrete
-    const floor = new THREE.Mesh(
-      new THREE.PlaneGeometry(40, 30),
-      new THREE.MeshBasicMaterial({ color: 0x0b0c10 })
-    );
-    floor.rotation.x = -Math.PI / 2;
-    floor.position.y = BASE - 0.64;
-    this.scene.add(floor);
-    this.floorMat = floor.material;
-
-    // the table's shadow pooled on it
-    const shTex = (() => {
-      const c2 = document.createElement('canvas'); c2.width = c2.height = 128;
-      const g2 = c2.getContext('2d');
-      const r2 = g2.createRadialGradient(64, 64, 6, 64, 64, 64);
-      r2.addColorStop(0, 'rgba(0,0,0,0.75)'); r2.addColorStop(1, 'rgba(0,0,0,0)');
-      g2.fillStyle = r2; g2.fillRect(0, 0, 128, 128);
-      return new THREE.CanvasTexture(c2);
-    })();
-    const shadow = new THREE.Mesh(new THREE.PlaneGeometry(5.6, 3.2),
-      new THREE.MeshBasicMaterial({ map: shTex, transparent: true, depthWrite: false }));
-    shadow.rotation.x = -Math.PI / 2;
-    shadow.position.set(0, BASE - 0.635, 0.1);
-    this.scene.add(shadow);
-
-    // sawhorses. The board only RESTS on them — a tilt lifts it clean off.
-    const wood = new THREE.MeshBasicMaterial({ color: 0x191510 });
-    for (const hx of [-1.55, 1.55]) {
-      const beam = new THREE.Mesh(new THREE.BoxGeometry(0.10, 0.08, TD * 0.96), wood);
-      beam.position.set(hx, BASE - 0.095, 0);
-      this.scene.add(beam);
-      for (const hz of [-TD * 0.40, TD * 0.40]) for (const lean of [-0.3, 0.3]) {
-        const leg = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.56, 0.05), wood);
-        leg.position.set(hx + lean * 0.28, BASE - 0.40, hz);
-        leg.rotation.z = lean;
-        this.scene.add(leg);
-      }
-    }
-
-    // the bulb on its cord — the town's sun when the window gives up
-    const cord = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 1.6),
-      new THREE.MeshBasicMaterial({ color: 0x04050a }));
-    cord.position.set(0.55, 2.85, 0.3); this.scene.add(cord);
-    this.bulb = new THREE.Mesh(new THREE.SphereGeometry(0.052, 12, 10),
-      new THREE.MeshBasicMaterial({ color: 0x2a2a2e }));
-    this.bulb.position.set(0.55, 2.05, 0.3); this.scene.add(this.bulb);
-
-    const glowTex = (() => {
-      const c3 = document.createElement('canvas'); c3.width = c3.height = 128;
-      const g3 = c3.getContext('2d');
-      const r3 = g3.createRadialGradient(64, 64, 2, 64, 64, 64);
-      r3.addColorStop(0, 'rgba(255,236,190,0.9)');
-      r3.addColorStop(0.25, 'rgba(255,220,160,0.28)');
-      r3.addColorStop(1, 'rgba(255,210,140,0)');
-      g3.fillStyle = r3; g3.fillRect(0, 0, 128, 128);
-      return new THREE.CanvasTexture(c3);
-    })();
-    this.bulbGlow = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: glowTex, transparent: true, opacity: 0,
-      blending: THREE.AdditiveBlending, depthWrite: false,
-    }));
-    this.bulbGlow.scale.set(1.3, 1.3, 1);
-    this.bulbGlow.position.copy(this.bulb.position);
-    this.scene.add(this.bulbGlow);
-
-    // the cone of light down onto the table
-    this.shaft = new THREE.Mesh(
-      new THREE.ConeGeometry(2.0, 2.2, 40, 1, true),
-      new THREE.MeshBasicMaterial({
-        color: 0xffe9c4, transparent: true, opacity: 0.05, blending: THREE.AdditiveBlending,
-        depthWrite: false, depthTest: false, side: THREE.DoubleSide,
-      }));
-    this.shaft.position.set(0.55, 0.95, 0.3);
-    this.scene.add(this.shaft);
+  // -- light -----------------------------------------------------------------
+  // ⚠️ EVERYTHING USED TO BE MeshBasicMaterial, which ignores lights entirely —
+  // that is the single reason the layout read as flat coloured cardboard no
+  // matter how good the heightfield underneath it was. Hills cannot exist
+  // without shading. The lamp above the board is the key; the fill is cold so
+  // the shadow sides go blue rather than black.
+  _lights() {
+    this.hemi = new THREE.HemisphereLight(0x9fb4d6, 0x2a2318, 0.62);
+    this.scene.add(this.hemi);
+    this.key = new THREE.DirectionalLight(0xffeccb, 1.05);
+    this.key.position.set(1.15, 2.30, 0.75);
+    this.scene.add(this.key);
+    this.scene.add(this.key.target);
+    // a low cold counter-light so the far slopes read instead of going solid
+    this.fill = new THREE.DirectionalLight(0x9ec4ff, 0.30);
+    this.fill.position.set(-1.4, 0.75, -1.1);
+    this.scene.add(this.fill);
   }
 
   _paintSky() {
-    const s = this.sim, g = this.skyCtx;
-    // the sun through the window well. Subtract the bulb's floor so the window
-    // goes properly dark at night even while the light is on.
-    const sun = (s.lampOn && s.daylight <= 0.221) ? 0 : s.daylight;
-    // seasonal colour: cold blue in winter, amber in summer (§11.4)
-    const season = s.season != null ? s.season : 0.5;
-    const warm = 0.25 + season * 0.75;
-    const top = [
-      16 + sun * (95 + warm * 150),
-      19 + sun * (108 + warm * 135),
-      30 + sun * (140 + warm * 55),
-    ];
-    const bot = [
-      22 + sun * (185 + warm * 70),
-      22 + sun * (172 + warm * 72),
-      32 + sun * (150 + warm * 30),
-    ];
-    const grad = g.createLinearGradient(0, 0, 0, 256);
-    grad.addColorStop(0, `rgb(${top.map(v => v | 0).join(',')})`);
-    grad.addColorStop(0.62, `rgb(${bot.map(v => v | 0).join(',')})`);
-    grad.addColorStop(1, `rgb(${bot.map(v => (v * 0.35) | 0).join(',')})`);
-    g.fillStyle = grad; g.fillRect(0, 0, 8, 256);
-    this.skyTex.needsUpdate = true;
-
-    // room ambience: s.daylight already blends window and bulb
+    const s = this.sim;
+    // `daylight` still drives the whole picture — there is simply no window to
+    // see it through any more. The dark the board sits in dims with it, so the
+    // layout never floats on flat black at a shallow angle.
     const d = s.daylight;
-    const amb = 0.07 + d * 0.26;
-    this.floorMat.color.setRGB(amb * 0.62, amb * 0.60, amb * 0.66);
-    this.wallMat.color.setRGB(amb * 0.34, amb * 0.34, amb * 0.42);
-    this.boardMat.color.setScalar(0.30 + d * 0.72);
+    const amb = 0.05 + d * 0.20;
+    this.floorMat.color.setRGB(amb * 0.36, amb * 0.36, amb * 0.44);
+    const fl = 0.30 + d * 0.70;
+    this.fasciaMat.color.setRGB(0.10 * fl, 0.14 * fl, 0.11 * fl);
+    // the room's light rises and falls with the day
+    this.hemi.intensity = 0.16 + d * 0.52;
+    this.key.intensity = 0.20 + d * 0.95;
+    this.fill.intensity = 0.10 + d * 0.24;
+    this.key.color.setRGB(1, 0.92 - d * 0.02, 0.78 + d * 0.04);
+  }
 
-    // the bulb itself
-    const on = s.lampOn ? 1 : 0;
-    this.bulb.material.color.setHex(on ? 0xffe9b8 : 0x2a2a2e);
-    this.bulbGlow.material.opacity = on * (0.62 + Math.sin(this.t * 11.3) * 0.03);
-    this.shaft.material.opacity = on * 0.075 + sun * 0.012;
+  // The surface the scenery actually presents: the heightfield eased down to
+  // the fascia over the last few cells. The mesh, the track and the props all
+  // have to agree on this or the layout comes apart at the edge.
+  _surfaceY(cx, cy) {
+    const N = this.sim.N;
+    const dx = cx / (N - 1) - 0.5, dy = cy / (N - 1) - 0.5;
+    // ⚠️ CHEBYSHEV, not radial. A round falloff is what made this a green cake
+    // in a tin; the board is square and the scenery is built out to its edges.
+    // 0.47 is chosen so the walkable circle (0.455) is never eased.
+    const m = Math.max(Math.abs(dx), Math.abs(dy));
+    const t = Math.max(0, Math.min(1, (m - 0.47) / 0.03));
+    const h = this.sim.height[this.sim.idx(cx, cy)] * YS;
+    return h * (1 - t) + EDGE_Y * t;
+  }
+
+  // ⚠️ SMOOTH, not bilinear. Straight bilinear between cell centres is only C0,
+  // so every one of the 63 cell boundaries shows as a crease and the hills look
+  // faceted — which is most of what "clunky" meant. Smoothstep weights give a
+  // continuous-looking slope for the cost of two multiplies.
+  _heightAt(fx, fy) {
+    const N = this.sim.N, H = this.sim.height;
+    const x = Math.max(0, Math.min(N - 1.001, fx)), y = Math.max(0, Math.min(N - 1.001, fy));
+    const x0 = x | 0, y0 = y | 0;
+    const x1 = Math.min(N - 1, x0 + 1), y1 = Math.min(N - 1, y0 + 1);
+    let u = x - x0, v = y - y0;
+    u = u * u * (3 - 2 * u); v = v * v * (3 - 2 * v);
+    const a = H[y0 * N + x0], b = H[y0 * N + x1], c = H[y1 * N + x0], e = H[y1 * N + x1];
+    const h = (a * (1 - u) + b * u) * (1 - v) + (c * (1 - u) + e * u) * v;
+    const dx = x / (N - 1) - 0.5, dy = y / (N - 1) - 0.5;
+    const m = Math.max(Math.abs(dx), Math.abs(dy));
+    const t = Math.max(0, Math.min(1, (m - 0.47) / 0.03));
+    return (h * YS) * (1 - t) + EDGE_Y * t;
   }
 
   // -- the ground ------------------------------------------------------------
   _ground() {
     const N = this.sim.N;
-    const geo = new THREE.PlaneGeometry(GR * 2, GR * 2, N - 1, N - 1);
-    geo.rotateX(-Math.PI / 2);
-    const pos = geo.attributes.position;
-    const EDGE_R = 0.455, FADE = 0.07;
-    for (let i = 0; i < pos.count; i++) {
-      const x = i % N, y = (i / N) | 0;
-      const dx = x / (N - 1) - 0.5, dy = y / (N - 1) - 0.5;
-      const r = Math.sqrt(dx * dx + dy * dy);
-      // ease the rim down to a flat lip so the soil column meets it cleanly
-      const t = Math.max(0, Math.min(1, (r - (EDGE_R - FADE)) / FADE));
-      const h = this.sim.height[y * N + x] * YS;
-      pos.setY(i, h * (1 - t) + EDGE_Y * t);
-    }
-    pos.needsUpdate = true;
-    geo.computeVertexNormals();
 
-    // circular mask, computed once
-    this.mask = new Uint8Array(N * N);
-    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
-      const dx = x / (N - 1) - 0.5, dy = y / (N - 1) - 0.5;
-      const r = Math.sqrt(dx * dx + dy * dy);
-      const a = 1 - Math.max(0, Math.min(1, (r - 0.442) / 0.016));
-      this.mask[y * N + x] = (a * 255) | 0;
-    }
+    // ---- the state texture: 64x64 of moss / water / heat / evidence. This is
+    // what _paintGround writes every frame, and it stays cheap because it is
+    // small. LinearFilter is doing a lot of work here — it is the difference
+    // between a chequerboard and a wash.
     this.groundData = new Uint8Array(N * N * 4);
     this.groundTex = new THREE.DataTexture(this.groundData, N, N, THREE.RGBAFormat);
     this.groundTex.needsUpdate = true;
     this.groundTex.minFilter = THREE.LinearFilter;
     this.groundTex.magFilter = THREE.LinearFilter;
+    this.groundTex.colorSpace = THREE.SRGBColorSpace;
 
-    this.ground = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
-      map: this.groundTex, transparent: true, alphaTest: 0.5,
-    }));
+    // ---- the detail texture: flock, blade speckle and coarse blotching, tiled
+    // far denser than the sim grid. The state says WHAT the ground is; this says
+    // what it is made of. Without it a 64x64 map stretched across a whole board
+    // is 3cm per texel and reads as plastic.
+    const D = 512, dc = document.createElement('canvas');
+    dc.width = dc.height = D;
+    const g2 = dc.getContext('2d');
+    g2.fillStyle = '#808080'; g2.fillRect(0, 0, D, D);
+    // coarse blotches — where dad's flocking went on thick
+    for (let i = 0; i < 240; i++) {
+      const x = Math.random() * D, y = Math.random() * D, r = 14 + Math.random() * 52;
+      const v = 108 + Math.random() * 58;
+      const rad = g2.createRadialGradient(x, y, 0, x, y, r);
+      rad.addColorStop(0, `rgba(${v},${v},${v},0.5)`);
+      rad.addColorStop(1, `rgba(${v},${v},${v},0)`);
+      g2.fillStyle = rad; g2.fillRect(x - r, y - r, r * 2, r * 2);
+    }
+    // blade speckle — the actual ground foam
+    const img = g2.getImageData(0, 0, D, D), px = img.data;
+    for (let i = 0; i < px.length; i += 4) {
+      const n = (Math.random() - 0.5) * 74;
+      px[i] = Math.max(0, Math.min(255, px[i] + n));
+      px[i + 1] = Math.max(0, Math.min(255, px[i + 1] + n));
+      px[i + 2] = Math.max(0, Math.min(255, px[i + 2] + n));
+    }
+    g2.putImageData(img, 0, 0);
+    const detail = new THREE.CanvasTexture(dc);
+    detail.wrapS = detail.wrapT = THREE.RepeatWrapping;
+    this.detailTex = detail;
+
+    // ---- the mesh. SUB× denser than the sim grid, sampled smoothly, so the
+    // hills are hills instead of 63 folded plates.
+    const SUB = 3, M = (N - 1) * SUB + 1;
+    const geo = new THREE.PlaneGeometry(GR * 2, GR * 2, M - 1, M - 1);
+    geo.rotateX(-Math.PI / 2);
+    const pos = geo.attributes.position;
+    for (let i = 0; i < pos.count; i++) {
+      const gx = i % M, gy = (i / M) | 0;
+      pos.setY(i, this._heightAt(gx / SUB, gy / SUB));
+    }
+    pos.needsUpdate = true;
+    geo.computeVertexNormals();
+
+    const mat = new THREE.MeshStandardMaterial({
+      map: this.groundTex, roughness: 0.97, metalness: 0.0,
+      bumpMap: detail, bumpScale: 0.012,
+    });
+    // multiply the tiled detail into the low-res state colour. `map` owns uv,
+    // so the detail is sampled off vMapUv at its own scale.
+    mat.onBeforeCompile = (sh) => {
+      sh.uniforms.uDetail = { value: detail };
+      sh.uniforms.uDetailScale = { value: 30.0 };
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <common>',
+          '#include <common>\nuniform sampler2D uDetail;\nuniform float uDetailScale;')
+        .replace('#include <map_fragment>',
+          '#include <map_fragment>\n  {\n    vec3 det = texture2D(uDetail, vMapUv * uDetailScale).rgb;\n    diffuseColor.rgb *= (0.46 + det.r * 1.08);\n  }');
+    };
+    this.ground = new THREE.Mesh(geo, mat);
     this.jar.add(this.ground);
 
-    // The sculpted scenery shell — plaster over screen wire, painted dirt.
-    // ⚠️ This was a straight cylinder and the whole layout read as A GREEN CAKE
-    // IN A TIN (captured, then fixed): a vertical wall around a disc is exactly
-    // what a jar looks like, which is the fiction we left behind. It flares out
-    // to meet the plywood now, the way a real embankment is built up off a board.
-    const skirt = new THREE.Mesh(
-      new THREE.CylinderGeometry(GR * 0.916, GR * 1.055, EDGE_Y - BASE, 72, 1, true),
-      new THREE.MeshBasicMaterial({ color: 0x6b5537, side: THREE.DoubleSide })
-    );
-    skirt.position.y = (BASE + EDGE_Y) / 2;
-    this.jar.add(skirt);
-    // a rim ring hides the seam where the cropped heightfield meets the shell
-    const ring = new THREE.Mesh(
-      new THREE.RingGeometry(GR * 0.872, GR * 0.918, 72),
-      new THREE.MeshBasicMaterial({ color: 0x453728, side: THREE.DoubleSide })
-    );
-    ring.rotation.x = -Math.PI / 2; ring.position.y = EDGE_Y - 0.001;
-    this.jar.add(ring);
-
-    // where the embankment meets the board: a feathered apron of spilled
-    // ground foam, so the scenery ends in scatter instead of a hard rim
-    const apron = new THREE.Mesh(
-      new THREE.RingGeometry(GR * 1.03, GR * 1.20, 72),
-      new THREE.MeshBasicMaterial({ color: 0x4a3c26, transparent: true, opacity: 0.55, depthWrite: false })
-    );
-    apron.rotation.x = -Math.PI / 2; apron.position.y = BASE + 0.002;
-    this.jar.add(apron);
-
-    const base = new THREE.Mesh(
-      new THREE.CircleGeometry(GR * 0.915, 64),
-      new THREE.MeshBasicMaterial({ color: 0x120e0b })
-    );
-    base.rotation.x = -Math.PI / 2; base.position.y = BASE;
-    this.jar.add(base);
+    // ⚠️ PICKING GETS ITS OWN LOW-RES MESH. Raycasting the display terrain is
+    // ~110k triangles per pointermove while the finger is down. This one is the
+    // sim's own 64x64 and never renders.
+    const pgeo = new THREE.PlaneGeometry(GR * 2, GR * 2, N - 1, N - 1);
+    pgeo.rotateX(-Math.PI / 2);
+    const ppos = pgeo.attributes.position;
+    for (let i = 0; i < ppos.count; i++) ppos.setY(i, this._surfaceY(i % N, (i / N) | 0));
+    ppos.needsUpdate = true;
+    this.pickMesh = new THREE.Mesh(pgeo, new THREE.MeshBasicMaterial());
+    this.pickMesh.visible = false;
+    this.jar.add(this.pickMesh);
 
     // the evidence layer: every touch presses the flocking flat, forever (§15.3)
     this.fpGrid = new Float32Array(N * N);
 
-    // dad's plywood — the 4×8 on the sawhorses. It tilts WITH the world:
-    // lifting the board is lifting all of this.
-    const ply = document.createElement('canvas'); ply.width = 512; ply.height = 256;
-    const pg = ply.getContext('2d');
-    pg.fillStyle = '#8a6b42'; pg.fillRect(0, 0, 512, 256);
-    for (let i = 0; i < 90; i++) {
-      const y0 = Math.random() * 256, len = 80 + Math.random() * 380, x0 = Math.random() * 512;
-      pg.strokeStyle = `rgba(${40 + Math.random() * 30 | 0},${26 + Math.random() * 20 | 0},12,${0.05 + Math.random() * 0.1})`;
-      pg.lineWidth = 0.6 + Math.random() * 1.8;
-      pg.beginPath(); pg.moveTo(x0, y0);
-      pg.bezierCurveTo(x0 + len * 0.3, y0 + 3, x0 + len * 0.7, y0 - 3, x0 + len, y0 + 1);
-      pg.stroke();
+    // grey ballast painted into the scenery under the loop, precomputed once
+    this.ballast = new Float32Array(N * N);
+    const rt = RT / (GR * 2);
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+      const dx = x / (N - 1) - 0.5, dy = y / (N - 1) - 0.5;
+      const d = Math.abs(Math.sqrt(dx * dx + dy * dy) - rt);
+      this.ballast[y * N + x] = Math.max(0, 1 - d / 0.022);
     }
-    pg.fillStyle = 'rgba(52,34,16,0.55)';   // one knot, like always
-    pg.beginPath(); pg.ellipse(392, 74, 9, 5.5, 0.3, 0, 6.3); pg.fill();
-    this.boardMat = new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(ply) });
-    this.board = new THREE.Mesh(new THREE.BoxGeometry(TW, 0.05, TD), this.boardMat);
-    this.board.position.y = BASE - 0.026;
-    this.jar.add(this.board);
+
+    // the fascia — the painted board edge the scenery is built out to
+    this.fasciaMat = new THREE.MeshStandardMaterial({ color: 0x24301f, roughness: 0.8 });
+    const lip = EDGE_Y - BASE;
+    for (const [sx, sz, w, dd] of [
+      [0, -BOARD, BOARD * 2 + 0.03, 0.03], [0, BOARD, BOARD * 2 + 0.03, 0.03],
+      [-BOARD, 0, 0.03, BOARD * 2 + 0.03], [BOARD, 0, 0.03, BOARD * 2 + 0.03],
+    ]) {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, lip, dd), this.fasciaMat);
+      m.position.set(sx, BASE + lip / 2, sz);
+      this.jar.add(m);
+    }
+    const under = new THREE.Mesh(
+      new THREE.BoxGeometry(BOARD * 2, 0.028, BOARD * 2),
+      new THREE.MeshStandardMaterial({ color: 0x14100c, roughness: 1 })
+    );
+    under.position.y = BASE - 0.014;
+    this.jar.add(under);
+  }
+
+  // -- ground cover ----------------------------------------------------------
+  // ⚠️ THIS IS THE DIFFERENCE BETWEEN A PAINTED BOARD AND A LAYOUT. Age of Toys
+  // learned it the expensive way: its maps ran a dozen props over five thousand
+  // tiles and read as beautifully painted emptiness. A flat green texture is
+  // flat green no matter how good the texture is — what sells scale is a great
+  // many small things standing UP off the ground, and the only affordable way
+  // to have thousands of them is instancing. This is three draw calls.
+  // ⚠️ A lone small cone reads as a PIN, not as grass. Blades go down in
+  // clusters of three to six, leaning different ways.
+  _groundCover() {
+    const s = this.sim, N = s.N;
+    // deterministic from the WORLD's seed, and drawn from a view-local stream —
+    // the sim's rng must never be touched by decoration (Invariant 1)
+    let sd = (s.seed ^ 0x5bf03635) >>> 0;
+    const rnd = () => { sd = (Math.imul(sd, 1664525) + 1013904223) >>> 0; return sd / 4294967296; };
+    const wpos = (cx, cy) => [
+      (cx / (N - 1) - 0.5) * GR * 2,
+      this._heightAt(cx, cy),
+      (cy / (N - 1) - 0.5) * GR * 2,
+    ];
+
+    const blade = new THREE.ConeGeometry(0.0026, 0.0105, 4);
+    blade.translate(0, 0.0052, 0);
+    const rockG = new THREE.IcosahedronGeometry(0.0055, 0);
+    const budG = new THREE.SphereGeometry(0.0029, 5, 4);
+
+    const CAPB = 11000, CAPR = 190, CAPF = 210;
+    const grass = new THREE.InstancedMesh(blade,
+      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.92 }), CAPB);
+    const rocks = new THREE.InstancedMesh(rockG,
+      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95 }), CAPR);
+    const buds = new THREE.InstancedMesh(budG,
+      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.7 }), CAPF);
+
+    const o = new THREE.Object3D(), col = new THREE.Color();
+    let nb = 0, nr = 0, nf = 0, tries = 0;
+    const free = (i) => s.water[i] <= 0.004 && this.ballast[i] < 0.30;
+
+    while (nb < CAPB && tries++ < CAPB * 5) {
+      const cx = rnd() * (N - 1), cy = rnd() * (N - 1);
+      const i = s.idx(cx, cy);
+      if (!free(i)) continue;
+      const m = s.moss[i];
+      if (rnd() > 0.20 + m * 1.15) continue;          // density follows the flocking
+      const n = 4 + ((rnd() * 6) | 0);
+      const hue = 0.255 + rnd() * 0.085;              // one clump, one shade
+      for (let k = 0; k < n && nb < CAPB; k++) {
+        const jx = cx + (rnd() - 0.5) * 0.85, jy = cy + (rnd() - 0.5) * 0.85;
+        const p = wpos(jx, jy);
+        o.position.set(p[0], p[1], p[2]);
+        o.rotation.set((rnd() - 0.5) * 0.62, rnd() * 6.283, (rnd() - 0.5) * 0.62);
+        const sc = 0.7 + rnd() * 0.75;
+        o.scale.set(sc, sc * (0.72 + rnd() * 0.9), sc);
+        o.updateMatrix();
+        grass.setMatrixAt(nb, o.matrix);
+        col.setHSL(hue, 0.46 + rnd() * 0.24, 0.15 + m * 0.13 + rnd() * 0.07);
+        grass.setColorAt(nb, col);
+        nb++;
+      }
+    }
+
+    tries = 0;
+    while (nr < CAPR && tries++ < CAPR * 12) {
+      const cx = rnd() * (N - 1), cy = rnd() * (N - 1);
+      const i = s.idx(cx, cy);
+      if (!free(i)) continue;
+      if (rnd() < s.moss[i] * 0.75) continue;         // stones show where the flock is thin
+      const p = wpos(cx, cy);
+      o.position.set(p[0], p[1] + 0.002, p[2]);
+      o.rotation.set(rnd() * 3, rnd() * 6.283, rnd() * 3);
+      const sc = 0.5 + rnd() * 0.8;
+      o.scale.set(sc, sc * 0.55, sc);
+      o.updateMatrix();
+      rocks.setMatrixAt(nr, o.matrix);
+      const v = 0.15 + rnd() * 0.13;
+      col.setRGB(v, v * 0.95, v * 0.84);
+      rocks.setColorAt(nr, col);
+      nr++;
+    }
+
+    tries = 0;
+    while (nf < CAPF && tries++ < CAPF * 14) {
+      const cx = rnd() * (N - 1), cy = rnd() * (N - 1);
+      const i = s.idx(cx, cy);
+      if (!free(i) || s.moss[i] < 0.45) continue;
+      if (rnd() < 0.45) continue;
+      const p = wpos(cx, cy);
+      o.position.set(p[0], p[1] + 0.012 + rnd() * 0.008, p[2]);
+      o.rotation.set(0, rnd() * 6.283, 0);
+      const sc = 0.7 + rnd() * 0.8;
+      o.scale.set(sc, sc, sc);
+      o.updateMatrix();
+      buds.setMatrixAt(nf, o.matrix);
+      // dad's scatter: mostly white, some yellow, a little red
+      const r2 = rnd();
+      if (r2 < 0.5) col.setRGB(0.92, 0.90, 0.82);
+      else if (r2 < 0.82) col.setRGB(0.92, 0.80, 0.30);
+      else col.setRGB(0.78, 0.30, 0.32);
+      buds.setColorAt(nf, col);
+      nf++;
+    }
+
+    for (const [mesh, n] of [[grass, nb], [rocks, nr], [buds, nf]]) {
+      mesh.count = n;
+      mesh.instanceMatrix.needsUpdate = true;
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+      mesh.frustumCulled = false;
+      this.jar.add(mesh);
+    }
+    this.coverCounts = { grass: nb, rocks: nr, buds: nf };
   }
 
   // -- dad's loop ------------------------------------------------------------
   _track() {
-    // The rails are the edge of the world. The sim's boundary is a circle
-    // (inJar) — the track ring IS that circle wearing its fiction. Nothing
-    // inside ever crosses them.
-    const RT = GR * 1.075;
-    const ballast = new THREE.Mesh(
-      new THREE.RingGeometry(GR * 0.985, GR * 1.165, 96),
-      new THREE.MeshBasicMaterial({ color: 0x3b362e })
-    );
-    ballast.rotation.x = -Math.PI / 2; ballast.position.y = BASE + 0.004;
-    this.jar.add(ballast);
+    // The rails are the edge of the world: the sim's walkable circle wearing its
+    // fiction, and nothing inside ever crosses them.
+    // ⚠️ The track FOLLOWS the scenery. It used to be a flat torus, which was
+    // fine floating above a disc and impossible once the terrain filled the
+    // board — a level ring over hills either buries itself or flies.
+    const SEG = 132, N = this.sim.N;
+    const ringPt = (a, off) => {
+      const r = RT + off;
+      const wx = Math.cos(a) * r, wz = Math.sin(a) * r;
+      const cx = (wx / (GR * 2) + 0.5) * (N - 1);
+      const cy = (wz / (GR * 2) + 0.5) * (N - 1);
+      return [wx, this._surfaceY(cx, cy), wz];
+    };
 
     const ties = new THREE.InstancedMesh(
-      new THREE.BoxGeometry(0.062, 0.006, 0.015),
-      new THREE.MeshBasicMaterial({ color: 0x231a11 }), 84);
-    const m4 = new THREE.Matrix4(), q = new THREE.Quaternion();
-    const v = new THREE.Vector3(), one = new THREE.Vector3(1, 1, 1);
-    const Y = new THREE.Vector3(0, 1, 0);
-    for (let i = 0; i < 84; i++) {
-      const a = (i / 84) * Math.PI * 2;
-      q.setFromAxisAngle(Y, -a);
-      v.set(Math.cos(a) * RT, BASE + 0.010, Math.sin(a) * RT);
-      m4.compose(v, q, one);
-      ties.setMatrixAt(i, m4);
-    }
-    this.jar.add(ties);
+      new THREE.BoxGeometry(0.058, 0.005, 0.013),
+      new THREE.MeshStandardMaterial({ color: 0x2e2115, roughness: 0.95 }), SEG);
+    const railGeo = new THREE.BoxGeometry(0.0055, 0.0048, 1);   // unit length in z
+    const railMat = new THREE.MeshStandardMaterial({ color: 0xb4ada1, roughness: 0.34, metalness: 0.75 });
+    const rails = [
+      new THREE.InstancedMesh(railGeo, railMat, SEG),
+      new THREE.InstancedMesh(railGeo, railMat, SEG),
+    ];
 
-    const railMat = new THREE.MeshBasicMaterial({ color: 0x8f8a80 });
-    for (const r of [RT - 0.021, RT + 0.021]) {
-      const rail = new THREE.Mesh(new THREE.TorusGeometry(r, 0.0042, 6, 120), railMat);
-      rail.rotation.x = Math.PI / 2; rail.position.y = BASE + 0.0145;
-      this.jar.add(rail);
+    const o = new THREE.Object3D();
+    for (let i = 0; i < SEG; i++) {
+      const a0 = (i / SEG) * Math.PI * 2, a1 = ((i + 1) / SEG) * Math.PI * 2;
+      for (let r = 0; r < 2; r++) {
+        const off = r === 0 ? -0.019 : 0.019;
+        const p0 = ringPt(a0, off), p1 = ringPt(a1, off);
+        o.position.set((p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2 + 0.007, (p0[2] + p1[2]) / 2);
+        o.scale.set(1, 1, 1);
+        o.lookAt(p1[0], p1[1] + 0.007, p1[2]);
+        const len = Math.hypot(p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]);
+        o.scale.set(1, 1, len * 1.15);
+        o.updateMatrix();
+        rails[r].setMatrixAt(i, o.matrix);
+      }
+      const pm = ringPt(a0, 0);
+      o.position.set(pm[0], pm[1] + 0.003, pm[2]);
+      o.scale.set(1, 1, 1);
+      o.rotation.set(0, -a0, 0);
+      o.updateMatrix();
+      ties.setMatrixAt(i, o.matrix);
     }
+    ties.instanceMatrix.needsUpdate = true;
+    rails.forEach(m => { m.instanceMatrix.needsUpdate = true; this.jar.add(m); });
+    this.jar.add(ties);
 
     // the 6:15, stopped where dad left it, never fixed
     const carCols = [0x1c2f22, 0x5a2222, 0x3a3a42];
@@ -335,24 +433,24 @@ export class View {
       const car = new THREE.Group();
       const long = ci === 0 ? 0.105 : 0.085, tall = ci === 0 ? 0.042 : 0.032;
       const bodyM = new THREE.Mesh(new THREE.BoxGeometry(long, tall, 0.034),
-        new THREE.MeshBasicMaterial({ color: carCols[ci] }));
+        new THREE.MeshStandardMaterial({ color: carCols[ci], roughness: 0.6 }));
       bodyM.position.y = tall / 2 + 0.004; car.add(bodyM);
       if (ci === 0) {
         const stack = new THREE.Mesh(new THREE.CylinderGeometry(0.007, 0.010, 0.03, 8),
-          new THREE.MeshBasicMaterial({ color: 0x14161c }));
+          new THREE.MeshStandardMaterial({ color: 0x14161c, roughness: 0.7 }));
         stack.position.set(-long * 0.32, tall + 0.017, 0); car.add(stack);
         const cab = new THREE.Mesh(new THREE.BoxGeometry(0.034, 0.026, 0.036),
-          new THREE.MeshBasicMaterial({ color: 0x233528 }));
+          new THREE.MeshStandardMaterial({ color: 0x233528, roughness: 0.6 }));
         cab.position.set(long * 0.30, tall + 0.011, 0); car.add(cab);
       }
       const a = a0 + ci * 0.075;
-      car.position.set(Math.cos(a) * RT, BASE + 0.014, Math.sin(a) * RT);
+      const p = ringPt(a, 0);
+      car.position.set(p[0], p[1] + 0.008, p[2]);
       car.rotation.y = -a - Math.PI / 2;
       this.jar.add(car);
     }
   }
 
-  // -- dad's town ------------------------------------------------------------
   _scenery() {
     // Deterministic dressing from the WORLD's seed — the same colony must wake
     // up on the same table every boot. View-local PRNG; the sim's rng stream
@@ -370,7 +468,11 @@ export class View {
     for (let i = 0; i < s.count; i++) if (s.k.alive[i] && s.k.glued[i]) { keepX = s.k.x[i]; keepY = s.k.y[i]; }
     const ok = (x, y, hMin, clear = 0) => {
       const dx = x / (N - 1) - 0.5, dy = y / (N - 1) - 0.5;
-      if (Math.sqrt(dx * dx + dy * dy) > 0.385) return false;
+      // ⚠️ square, not radial — the corners of the board are prime scenery now,
+      // and they are the one part of the layout nobody lives in
+      if (Math.max(Math.abs(dx), Math.abs(dy)) > 0.455) return false;
+      // and keep the roadbed clear
+      if (this.ballast[y * N + x] > 0.25) return false;
       if (clear > 0 && Math.abs(x - keepX) < clear && Math.abs(y - keepY) < clear) return false;
       const i = y * N + x;
       return s.height[i] > s.pondLevel + hMin && s.water[i] < 0.002;
@@ -385,7 +487,7 @@ export class View {
     // snap-together houses ring the hearth — the town the kin woke up in.
     // The kin walk straight through them; at this scale nobody minds yet.
     const wallCols = [0xd6d0c2, 0xa23f33, 0x8797a6, 0xc7b789, 0xb8a27a];
-    const roofM = new THREE.MeshBasicMaterial({ color: 0x33241b });
+    const roofM = new THREE.MeshStandardMaterial({ color: 0x4a3427, roughness: 0.85 });
     let homes = 0, tries = 0;
     while (homes < 6 && tries++ < 160) {
       const ang = rnd() * Math.PI * 2, rr2 = 3.5 + rnd() * 5.5;
@@ -395,13 +497,13 @@ export class View {
       const w = 0.048 + rnd() * 0.02, hgt = 0.032 + rnd() * 0.014;
       const house = new THREE.Group();
       const wallsM = new THREE.Mesh(new THREE.BoxGeometry(w, hgt, w * 0.92),
-        new THREE.MeshBasicMaterial({ color: wallCols[homes % wallCols.length] }));
+        new THREE.MeshStandardMaterial({ color: wallCols[homes % wallCols.length], roughness: 0.72 }));
       wallsM.position.y = hgt / 2; house.add(wallsM);
       const roof = new THREE.Mesh(new THREE.ConeGeometry(w * 0.80, hgt * 0.72, 4), roofM);
       roof.position.y = hgt + hgt * 0.36; roof.rotation.y = Math.PI / 4; house.add(roof);
       if (homes === 0) {           // the church — every layout has one
         const spire = new THREE.Mesh(new THREE.ConeGeometry(0.008, 0.036, 6),
-          new THREE.MeshBasicMaterial({ color: 0xe4dfd2 }));
+          new THREE.MeshStandardMaterial({ color: 0xe4dfd2, roughness: 0.6 }));
         spire.position.y = hgt + hgt * 0.72 + 0.014; house.add(spire);
       }
       put(house, x, y);
@@ -409,42 +511,57 @@ export class View {
     }
 
     // bottle-brush trees
-    const trunkM = new THREE.MeshBasicMaterial({ color: 0x2a1c10 });
+    const trunkM = new THREE.MeshStandardMaterial({ color: 0x2a1c10, roughness: 1 });
     const greens = [0x174023, 0x1d4d2b, 0x25573a];
     let trees = 0; tries = 0;
-    while (trees < 14 && tries++ < 300) {
+    while (trees < 46 && tries++ < 900) {
       const x = (2 + rnd() * (N - 4)) | 0, y = (2 + rnd() * (N - 4)) | 0;
       if (!ok(x, y, 0.05, 1.8)) continue;
-      const th = 0.040 + rnd() * 0.034;
+      // ⚠️ ONE CONE IS A PARTY HAT. A bottle-brush tree is layered skirts of
+      // needles on a visible trunk, and it has to be tall enough to matter
+      // beside a 4mm figure — the old 0.040 cones read as scrub.
+      const th = 0.058 + rnd() * 0.062;
       const tree = new THREE.Group();
-      const cone = new THREE.Mesh(new THREE.ConeGeometry(th * 0.34, th, 7),
-        new THREE.MeshBasicMaterial({ color: greens[(rnd() * 3) | 0] }));
-      cone.position.y = th / 2 + 0.006;
-      tree.add(cone);
-      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.0035, 0.0045, 0.012, 5), trunkM);
-      trunk.position.y = 0.004; tree.add(trunk);
+      const needle = new THREE.MeshStandardMaterial({ color: greens[(rnd() * 3) | 0], roughness: 0.93 });
+      const tiers = 3 + ((rnd() * 2) | 0);
+      for (let t = 0; t < tiers; t++) {
+        const f2 = t / tiers;
+        const cone = new THREE.Mesh(
+          new THREE.ConeGeometry(th * (0.38 - f2 * 0.20), th * (0.52 - f2 * 0.16), 7), needle);
+        cone.position.y = 0.010 + th * (0.16 + f2 * 0.62);
+        cone.rotation.y = rnd() * 6.283;
+        tree.add(cone);
+      }
+      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.0032, 0.0052, 0.020, 5), trunkM);
+      trunk.position.y = 0.009; tree.add(trunk);
       put(tree, x, y);
       trees++;
     }
   }
 
   _paintGround() {
+    // ⚠️ THIS WRITES ALBEDO, NOT A LIT PIXEL. It used to bake a fake
+    // height-gradient shade and the daylight level straight into the colour,
+    // which was right for an unlit MeshBasicMaterial and doubles up the moment
+    // real lights exist — the board went to mud. The renderer does the light.
     const s = this.sim, N = s.N, d = this.groundData;
-    const light = 0.22 + s.daylight * 0.78;
     for (let y = 0; y < N; y++) {
       for (let x = 0; x < N; x++) {
         const i = y * N + x;
-        // fake backlit shading from the height gradient
-        const hl = s.height[s.idx(x - 1, y)], hr = s.height[s.idx(x + 1, y)];
-        const hu = s.height[s.idx(x, y - 1)], hd = s.height[s.idx(x, y + 1)];
-        const shade = 0.72 + (hu - hd) * 0.9 - (hr - hl) * 0.5;
-
         const m = s.moss[i], w = s.water[i], T = s.temp[i], q = s.moist[i];
-        // painted dirt, damp dirt, ground-foam green
-        let r = 92 - q * 30, g = 74 - q * 24, b = 52 - q * 16;
-        r = r * (1 - m) + (38 + m * 14) * m;
-        g = g * (1 - m) + (112 + m * 64) * m;
-        b = b * (1 - m) + (34 + m * 18) * m;
+        // ⚠️ THE RAMP IS sqrt(m), NOT m. Linear blending made the whole middle
+        // of the board olive: 93% of cells are mossy but the inner ring sits at
+        // 0.19, and 0.19 of a green mixed linearly into brown is mud. Thin
+        // ground foam over soil still READS as grass, so the colour has to get
+        // there faster than the quantity does.
+        const mm = Math.sqrt(m);
+        let r = 88 - q * 40, g = 68 - q * 32, b = 46 - q * 22;   // painted dirt
+        r = r * (1 - mm) + (58 + m * 26) * mm;
+        g = g * (1 - mm) + (124 + m * 74) * mm;
+        b = b * (1 - mm) + (44 + m * 26) * mm;
+        // grey ballast under dad's track, painted rather than modelled
+        const bl = this.ballast[i];
+        if (bl > 0.01) { const t2 = bl * 0.85; r = r * (1 - t2) + 118 * t2; g = g * (1 - t2) + 112 * t2; b = b * (1 - t2) + 104 * t2; }
         // the evidence: flocking pressed flat where a finger has been
         const fpv = this.fpGrid[i];
         if (fpv > 0.004) {
@@ -457,13 +574,13 @@ export class View {
         // water darkens and cools the ground beneath it
         if (w > 0.002) { const a = Math.min(1, w * 7); r = r * (1 - a) + 18 * a; g = g * (1 - a) + 34 * a; b = b * (1 - a) + 44 * a; }
 
-        const o = i * 4, k = shade * light;
-        d[o] = Math.max(0, Math.min(255, r * k));
-        d[o + 1] = Math.max(0, Math.min(255, g * k));
-        d[o + 2] = Math.max(0, Math.min(255, b * k));
+        const o = i * 4;
+        d[o] = Math.max(0, Math.min(255, r));
+        d[o + 1] = Math.max(0, Math.min(255, g));
+        d[o + 2] = Math.max(0, Math.min(255, b));
         // ⚠️ The heightfield is square and the jar is round. Without this the
         // terrain's corners flare out through the glass like a salad bowl.
-        d[o + 3] = this.mask[i];
+        d[o + 3] = 255;
       }
     }
     this.groundTex.needsUpdate = true;
@@ -478,9 +595,14 @@ export class View {
     this.waterData = new Uint8Array(N * N * 4);
     this.waterTex = new THREE.DataTexture(this.waterData, N, N, THREE.RGBAFormat);
     this.waterTex.minFilter = THREE.LinearFilter;
+    this.waterTex.colorSpace = THREE.SRGBColorSpace;
     this.waterTex.magFilter = THREE.LinearFilter;
-    this.water = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
-      map: this.waterTex, transparent: true, depthWrite: false, alphaTest: 0.02,
+    // ⚠️ alphaTest on a rippling 64x64 plane cut triangles in and out and
+    // hatched the pond with diagonal stripes. Plain transparency, and a low
+    // roughness so the water actually catches the lamp.
+    this.water = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
+      map: this.waterTex, transparent: true, depthWrite: false,
+      roughness: 0.16, metalness: 0.06,
     }));
     this.jar.add(this.water);
   }
@@ -488,19 +610,18 @@ export class View {
   _paintWater() {
     const s = this.sim, N = s.N, d = this.waterData;
     const pos = this.waterGeo.attributes.position;
-    const light = 0.3 + s.daylight * 0.7;
     const wob = this.t * 0.9;
     for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
       const i = y * N + x, w = s.water[i];
       const ripple = w > 0.004 ? Math.sin(x * 0.7 + wob) * Math.sin(y * 0.6 - wob * 1.3) * 0.0016 : 0;
       pos.setY(i, (s.height[i] + w) * YS + ripple);
       const o = i * 4;
-      const a = w <= 0.0015 ? 0 : Math.min(0.86, 0.24 + w * 5.5);
+      const a = w <= 0.007 ? 0 : Math.min(0.90, (w - 0.007) * 11);
       const dark = Math.min(1, w * 6);
-      d[o] = (light * (148 - dark * 76)) | 0;
-      d[o + 1] = (light * (188 - dark * 84)) | 0;
-      d[o + 2] = (light * (214 - dark * 58)) | 0;
-      d[o + 3] = Math.min(this.mask[i], (a * 255) | 0);
+      d[o] = (96 - dark * 48) | 0;
+      d[o + 1] = (140 - dark * 60) | 0;
+      d[o + 2] = (168 - dark * 44) | 0;
+      d[o + 3] = (a * 255) | 0;
     }
     pos.needsUpdate = true;
     this.waterTex.needsUpdate = true;
@@ -512,7 +633,7 @@ export class View {
     // body: one low-poly blob, instanced, silhouette-dark. One draw call.
     const body = new THREE.IcosahedronGeometry(0.0125, 1);
     body.scale(1.05, 1.3, 0.86);
-    this.bodies = new THREE.InstancedMesh(body, new THREE.MeshBasicMaterial({ color: 0x090b10 }), CAP);
+    this.bodies = new THREE.InstancedMesh(body, new THREE.MeshStandardMaterial({ color: 0x1b1f2a, roughness: 0.55 }), CAP);
     this.bodies.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.bodies.count = 0;
     this.bodies.frustumCulled = false;
@@ -665,7 +786,7 @@ export class View {
   _graves() {
     const geo = new THREE.ConeGeometry(0.007, 0.026, 5);
     this.graveMesh = new THREE.InstancedMesh(geo,
-      new THREE.MeshBasicMaterial({ color: 0x99a0a9 }), 900);
+      new THREE.MeshStandardMaterial({ color: 0xb6bcc4, roughness: 0.75 }), 900);
     this.graveMesh.count = 0;
     this.graveMesh.frustumCulled = false;
     this.jar.add(this.graveMesh);
@@ -698,12 +819,12 @@ export class View {
     // over the hill, not as plastic over a table (captured, then fixed).
     // Additive light cannot look like a dusty translucent sheet. Normal
     // blending, a real sag, and it has to cover the BOARD, not just the scenery.
-    const geo = new THREE.PlaneGeometry(TW * 1.04, TD * 1.10, 44, 26);
+    const geo = new THREE.PlaneGeometry(BOARD * 2.12, BOARD * 2.12, 40, 40);
     geo.rotateX(-Math.PI / 2);
     const pos = geo.attributes.position;
     for (let i = 0; i < pos.count; i++) {
       const x = pos.getX(i), z = pos.getZ(i);
-      const u = x / (TW * 0.52), w = z / (TD * 0.55);          // -1..1 over the board
+      const u = x / (BOARD * 1.06), w = z / (BOARD * 1.06);    // -1..1 over the board
       const r = Math.sqrt(u * u + w * w);
       const tent = Math.max(0, 1 - r * 1.05) * 0.34;           // it tents over the scenery
       const droop = Math.min(0, (0.86 - r)) * 1.15;            // and hangs off the edges
@@ -786,12 +907,15 @@ export class View {
     o.el += (o.tEl - o.el) * Math.min(1, dt * 9);
     o.dist += (o.tDist - o.dist) * Math.min(1, dt * 7);
     const cy = Math.cos(o.el), sy = Math.sin(o.el);
+    // ⚠️ the elevation floor is load-bearing: it is the only thing keeping the
+    // horizon — and therefore whatever is beyond the board — out of frame.
+    o.el = Math.max(EL_MIN, Math.min(EL_MAX, o.el));
     this.camera.position.set(
       Math.sin(o.az) * cy * o.dist,
-      sy * o.dist + 0.20,
+      sy * o.dist + 0.10,
       Math.cos(o.az) * cy * o.dist
     );
-    this.camera.lookAt(0, 0.14, 0);
+    this.camera.lookAt(0, 0.06, 0);
 
     // lifting one edge of the board off the sawhorses
     this.jar.rotation.z = -s.tilt.x * 2.6;
@@ -809,7 +933,7 @@ export class View {
     const ct = this.coverT;
     // pulled off, the sheet slides clear of the board and crumples beside it —
     // it does not vanish. Dad will notice it moved.
-    this.cover.position.set(ct * TW * 0.86, EDGE_Y + 0.03 - ct * 0.34, ct * 0.16);
+    this.cover.position.set(ct * BOARD * 2.1, EDGE_Y + 0.03 - ct * 0.34, ct * 0.16);
     this.cover.rotation.z = -ct * 0.40;
     this.cover.scale.set(1 - ct * 0.42, 1 - ct * 0.60, 1 - ct * 0.10);
     this.fogMesh.material.opacity =
@@ -833,7 +957,7 @@ export class View {
   // Returns { cell:[x,y], world:Vector3 } for a screen position, or null.
   pickGround(nx, ny) {
     this.raycaster.setFromCamera({ x: nx, y: ny }, this.camera);
-    const hit = this.raycaster.intersectObject(this.ground, false)[0];
+    const hit = this.raycaster.intersectObject(this.pickMesh, false)[0];
     if (!hit) return null;
     const p = this.jar.worldToLocal(hit.point.clone());
     const N = this.sim.N;

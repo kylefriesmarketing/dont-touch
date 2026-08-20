@@ -236,7 +236,14 @@ console.log('the hand');
 t('the finger, held on a village, kills more than leaving it alone', () => {
   // A control run and a cruel run from identical state. The colony grows either
   // way — what the finger changes is the death rate, not the headcount.
-  const a = new Sim({ seed: 'cruel' }); run(a, 40);
+  // ⚠️ MEASURED OVER SEVERAL SEEDS ON PURPOSE. On any single seed the cluster
+  // can be small enough that nobody dies either way — this asserted a one-seed
+  // outcome and failed on a terrain change while the finger was in fact still
+  // killing 4.16x as many kin across 24 seeds. Aggregate, then assert.
+  let cruelAll = 0, kindAll = 0, hottest = 0;
+  for (let seed = 0; seed < 6; seed++) { oneFinger(seed); }
+  function oneFinger(sd) {
+  const a = new Sim({ seed: 'cruel' + sd }); run(a, 40);
   const b = Sim.fromJSON(JSON.parse(JSON.stringify(a.toJSON())));
   let bx = 0, by = 0, best = -1;
   for (let id = 0; id < a.count; id++) {
@@ -252,9 +259,11 @@ t('the finger, held on a village, kills more than leaving it alone', () => {
   const d0 = a.stats.died;
   a.setHand(bx, by);
   run(a, 8); run(b, 8);
-  const cruel = a.stats.died - d0, kind = b.stats.died - d0;
-  ok(cruel > kind, `the finger cost nothing: ${cruel} dead vs ${kind} left alone`);
-  ok(Math.max(...a.temp) > 44, 'the finger never got lethal');
+  cruelAll += a.stats.died - d0; kindAll += b.stats.died - d0;
+  hottest = Math.max(hottest, Math.max(...a.temp));
+  }
+  ok(cruelAll > kindAll * 1.5, `the finger cost little: ${cruelAll} dead vs ${kindAll} left alone`);
+  ok(hottest > 44, `the finger never got lethal: ${hottest.toFixed(1)}C`);
 });
 t('the finger has a lethal core and a comfortable ring', () => {
   const s = new Sim({ seed: 'kind', founders: 0 });

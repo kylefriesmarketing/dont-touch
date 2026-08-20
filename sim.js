@@ -263,11 +263,24 @@ export class Sim {
       let h = 0, amp = 1, f = 1 / 22, tot = 0;
       for (let o = 0; o < 4; o++) { h += vnoise(x * f, y * f, s + o * 977) * amp; tot += amp; amp *= 0.5; f *= 2.1; }
       h /= tot;
-      // bowl: the jar's floor curves up at the glass
+      // ⚠️ THIS WAS A RADIAL BOWL — "the jar's floor curves up at the glass".
+      // With the scenery filling a square board it made the whole middle of the
+      // layout one enormous basin that the pond drowned, and left a cliff just
+      // inside the rails. The board is square, so the lip is square: a modest
+      // rise at the fascia that keeps water off the board edge, and honest
+      // terrain everywhere else.
       const dx = (x - (N - 1) / 2) / (N / 2), dy = (y - (N - 1) / 2) / (N / 2);
-      const r = Math.sqrt(dx * dx + dy * dy);
-      const bowl = r > 0.78 ? (r - 0.78) * 1.15 : 0;
-      this.height[i] = h * 0.72 + bowl;
+      const m = Math.abs(dx) > Math.abs(dy) ? Math.abs(dx) : Math.abs(dy);
+      // ⚠️ THE RISE IS A GAMEPLAY NUMBER, not a look. Its real job was never
+      // scenery — it is what guarantees ONE broad shallow pond in the middle
+      // instead of a deep noise hole somewhere random, and a broad shallow pond
+      // is the only kind TILT can move. Removing it killed one of the five
+      // verbs outright (the tilt test failed); flattening the land instead
+      // spread the pond into a marsh that evaporated by half in four days.
+      // So: keep the rise, make it square to match the board, and make it even
+      // — the radial version reached 0.70 at the corners and 0.23 at the edges.
+      const lip = m > 0.55 ? (m - 0.55) * 0.62 : 0;
+      this.height[i] = h * 0.68 + lip;
       this.temp[i] = C.AMBIENT_BASE;
       this.moist[i] = 0.45;
     }
