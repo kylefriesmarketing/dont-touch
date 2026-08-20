@@ -6,6 +6,10 @@ import { LOCI, L, NEEDS, STAGE, STAGE_NAME, expressed, carried, marrowHomozygous
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; };
 const hueCss = (h, l) => `hsl(${h} 72% ${l}%)`;
+// ⚠️ keep in step with the log() kinds in sim.js — a beat missing from here
+// still reaches the book, it just scrolls past in the feed looking ordinary.
+const BIG = new Set(['mutation', 'death-named', 'end', 'invented', 'reinvented',
+  'tradition', 'lost', 'stands', 'learned', 'stillgone', 'stillcarried']);
 
 export class UI {
   constructor(sim, app) {
@@ -77,7 +81,8 @@ export class UI {
       const line = el('div', 'line');
       line.appendChild(el('span', 'd', `${e.day}`));
       line.appendChild(el('span', 't', e.repeat > 1 ? `${e.text} (×${e.repeat})` : e.text));
-      if (e.kind === 'mutation' || e.kind === 'death-named' || e.kind === 'end') line.classList.add('big');
+      // the beats that matter enough to stand out in the feed
+      if (BIG.has(e.kind)) line.classList.add('big');
       this.chronBox.appendChild(line);
       if (e.kind === 'mutation') this.app.sfx.mutate();
       else if (e.kind === 'death-named') this.app.sfx.death();
@@ -103,7 +108,7 @@ export class UI {
     // with the goal list in sim.js _decide (0 wander … 9 tend)
     const GOALS = ['wandering', 'looking for food', 'going to water', 'looking for a warm place',
       'resting', 'looking for company', 'getting away', 'courting', 'carrying the dead',
-      'going to the one who stays'];
+      'going to the one who stays', 'making something'];
 
     const glued = !!k.glued[id];
     let h = `<div class="who"><span class="dot" style="background:${hueCss(k.hue[id], 55)}"></span>

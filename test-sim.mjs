@@ -2,12 +2,19 @@
 // Headless battery. `node test-sim.mjs`
 // Invariant 4: every era gets a soak, zero errors, no NaN, nothing outside the jar.
 
-import { Sim, C, LOCI, L, expressed, NEEDS, STAGE, makeRNG, S } from './sim.js';
+import { Sim, C, LOCI, L, expressed, NEEDS, STAGE, makeRNG, S, WORKS, WORK_AT } from './sim.js';
 
 let pass = 0, fail = 0;
+// ⚠️ the battery is a GATE — the house rule is to run it after every sim
+// change, and a gate that costs eight minutes teaches you not to run it. This
+// records where the time actually goes, so the expensive tests can be found and
+// made to share a fixture rather than each growing their own colony.
+const times = [];
 const t = (name, fn) => {
+  const t0 = Date.now();
   try { const r = fn(); if (r === false) throw new Error('returned false'); pass++; }
   catch (e) { fail++; console.log(`  ✗ ${name}\n    ${e.message}`); }
+  times.push([Date.now() - t0, name]);
 };
 const eq = (a, b, m) => { if (a !== b) throw new Error(`${m || ''} expected ${b}, got ${a}`); };
 const ok = (c, m) => { if (!c) throw new Error(m || 'assertion failed'); };
@@ -25,6 +32,18 @@ const saveEqual = (s, m) => {
   let i = 0; while (i < before.length && before[i] === after[i]) i++;
   throw new Error(`${m || 'save'} diverged at char ${i}: ...${before.slice(Math.max(0, i - 70), i + 70)}`);
 };
+
+// ⚠️ COLONIES ARE EXPENSIVE — a 240-day town at N=96 is ~40 seconds, and the
+// four page tests were each growing their own. Grow one, memoise it, and ask it
+// as many questions as it can answer. Anything that needs to advance the sim
+// takes a `clone()` so it cannot disturb the shared one.
+const FIX = new Map();
+const fixture = (seed, days) => {
+  const key = seed + ':' + days;
+  if (!FIX.has(key)) FIX.set(key, run(new Sim({ seed }), days));
+  return FIX.get(key);
+};
+const clone = (s) => Sim.fromJSON(JSON.parse(JSON.stringify(s.toJSON())));
 
 console.log("DON'T TOUCH — sim battery\n");
 
@@ -179,8 +198,7 @@ t('long drift does not corrupt the genome', () => {
 // --- life ------------------------------------------------------------------
 console.log('life');
 t('a seeded colony survives 200 days unattended', () => {
-  const s = new Sim({ seed: 'live' });
-  run(s, 200);
+  const s = fixture('live', 200);
   ok(s.alive > 0, 'colony died out');
   ok(s.stats.born > 0, 'nothing was born');
 });
@@ -370,24 +388,21 @@ t('three runs produce three different stories (M6 gate)', () => {
 // spanned days 0-62 and 178 days of lived history could not appear. If someone
 // "simplifies" page() back to a flat score sort, these three tests fail.
 t('a long life reaches the book (the page does not go blind)', () => {
-  const s = new Sim({ seed: 'page' });
-  run(s, 240);
+  const s = fixture('page', 240);
   const p = s.page();
   const newest = Math.max(...p.map(e => e.day));
   ok(newest > s.day * 0.4, `book is blind: newest line is day ${newest} of ${s.day}`);
 });
 t('the book has a beginning, a middle and an end', () => {
-  const s = new Sim({ seed: 'page' });
-  run(s, 240);
+  const s = fixture('page', 240);
   const acts = [0, 0, 0];
   s.page().forEach(e => acts[Math.min(2, Math.floor(e.day / (s.day / 3)))]++);
   ok(acts.every(a => a > 0), `all lines fell in one act: ${acts.join('/')}`);
 });
 t('page(fromDay) returns only that window', () => {
-  const s = new Sim({ seed: 'page' });
-  run(s, 200);
+  const s = clone(fixture('page', 240));
   const mark = s.day;
-  run(s, 40);
+  run(s, 30);
   const p = s.page(mark);
   ok(p.length > 0, 'no lines in the window');
   ok(p.every(e => e.day >= mark), 'leaked events from before the window');
@@ -400,11 +415,9 @@ t('a two-day-old colony still writes a page', () => {
   ok(new Set(p).size === p.length, 'the page repeated an entry');
 });
 t('the page never repeats an entry', () => {
-  for (const seed of ['page', 'live', 'basement']) {
-    const s = new Sim({ seed });
-    run(s, 150);
+  for (const s of [fixture('page', 240), fixture('live', 200), fixture('basement', 150)]) {
     const p = s.page();
-    ok(new Set(p).size === p.length, `${seed}: duplicate entries on the page`);
+    ok(new Set(p).size === p.length, 'duplicate entries on the page');
   }
 });
 t('rare kinds outrank common ones', () => {
@@ -519,11 +532,8 @@ t('founders are never born already past their lifespan', () => {
 });
 
 t('the whole save round-trips, not just the fingerprint', () => {
-  for (const seed of ['live', 'basement', 'c']) {
-    const s = new Sim({ seed });
-    run(s, 40);
-    saveEqual(s, seed);
-  }
+  saveEqual(fixture('live', 200), 'live');
+  for (const seed of ['basement', 'c']) saveEqual(run(new Sim({ seed }), 40), seed);
 });
 t('the narrator keeps its own place across a save', () => {
   const s = new Sim({ seed: 'live' });
@@ -575,6 +585,73 @@ t('the room temperature round-trips', () => {
   saveEqual(s, 'ambient');
 });
 
+// --- the weave (bible §7) ---------------------------------------------------
+console.log('the weave');
+// ⚠️ ONE FIXTURE, SHARED. Each of these used to grow its own 200-day colony,
+// which pushed the whole battery past ten minutes at N=96 — and a gate nobody
+// can afford to run is not a gate. Culture needs real time to happen, so grow
+// the town ONCE and ask it seven questions.
+const W = (() => {
+  const s = new Sim({ seed: 'bat0' });
+  const glueSeen = [];
+  for (let i = 0; i < C.TICKS_PER_DAY * 200; i++) {
+    s.step();
+    if (i % 997 !== 0) continue;
+    for (let id = 0; id < s.count; id++) {
+      if (s.k.alive[id] && s.k.glued[id]) glueSeen.push(s.k.goal[id]);
+    }
+  }
+  return { s, glueSeen };
+})();
+
+t('a town under pressure works something out', () => {
+  ok(W.s.prac.some(p => p.invented >= 0), 'nobody ever invented anything');
+  ok(W.s.works.length > 0, 'nothing was ever built');
+  ok(W.s.chronicle.some(e => e.kind === 'invented'), 'invention never reached the book');
+});
+t('what one works out, another can learn by watching', () => {
+  let holders = 0;
+  for (let id = 0; id < W.s.count; id++) if (W.s.k.alive[id] && W.s.k.knows[id]) holders++;
+  ok(holders > 1, `only ${holders} kin carry any practice — it is not spreading`);
+});
+t('a practice outlives the one who thought of it', () => {
+  // the bible's own acceptance test for culture (§7): somebody DOES it who
+  // cannot have been taught by the inventor, because they were born after that
+  // person died. This is the only thing k.born is read for.
+  ok(W.s.prac.some(p => p.tradition >= 0), 'no practice ever became a tradition');
+  ok(W.s.chronicle.some(e => e.kind === 'tradition'), 'tradition never reached the book');
+});
+t('what they build stands, and does something', () => {
+  const standing = W.s.works.filter(o => o.prog >= 0.9).length;
+  ok(standing > 0, 'nothing they built ever finished');
+  for (const o of W.s.works) {
+    ok(o.stock >= 0 && o.prog >= 0 && o.prog <= 1, 'a work has impossible state');
+    ok(Number.isFinite(o.x) && Number.isFinite(o.y), 'a work is nowhere');
+  }
+});
+t('the one who stays never builds', () => {
+  // same class as the errand bug — making a thing means going to it
+  ok(W.glueSeen.length > 0, 'never sampled a glued kin');
+  ok(!W.glueSeen.includes(10), 'a glued kin went to build something');
+});
+t('the weave round-trips through a save', () => {
+  ok(W.s.works.length > 0, 'nothing built, so this proves nothing');
+  saveEqual(W.s, 'weave');
+  const r = Sim.fromJSON(JSON.parse(JSON.stringify(W.s.toJSON())));
+  eq(r.works.length, W.s.works.length, 'works count');
+  eq(JSON.stringify(r.prac), JSON.stringify(W.s.prac), 'practice state');
+  let x = 0, y = 0;
+  for (let i = 0; i < W.s.count; i++) { x += W.s.k.knows[i]; y += r.k.knows[i]; }
+  eq(y, x, 'who knows what');
+  eq(r.fingerprint(), W.s.fingerprint(), 'fingerprint');
+});
+t('a restored town keeps building the same way', () => {
+  const a2 = Sim.fromJSON(JSON.parse(JSON.stringify(W.s.toJSON())));
+  const b2 = Sim.fromJSON(JSON.parse(JSON.stringify(W.s.toJSON())));
+  run(a2, 20); run(b2, 20);
+  eq(b2.fingerprint(), a2.fingerprint(), 'two restores of one save diverged');
+});
+
 // --- soak ------------------------------------------------------------------
 console.log('soak');
 t('4 seeds x 112 days, zero errors', () => {
@@ -610,5 +687,9 @@ console.log('');
   s.page().forEach(e => console.log(`    day ${String(e.day).padStart(3)} · ${e.text}`));
 }
 
+times.sort((x, y) => y[0] - x[0]);
+const total = times.reduce((s, x) => s + x[0], 0);
+console.log(`\nSLOWEST (of ${(total / 1000).toFixed(0)}s total):`);
+times.slice(0, 12).forEach(([ms, n]) => console.log(`  ${(ms / 1000).toFixed(1)}s  ${n}`));
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

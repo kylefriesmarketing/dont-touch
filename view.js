@@ -43,6 +43,7 @@ export class View {
     this._lights();
     this._ground();
     this._groundCover();
+    this._works();
     this._track();
     this._scenery();
     this._water();
@@ -261,6 +262,87 @@ export class View {
     );
     under.position.y = BASE - 0.014;
     this.jar.add(under);
+  }
+
+  // -- what the town has made ------------------------------------------------
+  // ⚠️ GLASSBOX: the thing on the board IS the agent's activity, never an
+  // illustration of it. A work rises out of the ground as its `prog` rises, so
+  // watching a half-built store is watching somebody actually building it.
+  _works() {
+    this.workViews = new Map();      // work object -> Group
+    this.workRoot = new THREE.Group();
+    this.jar.add(this.workRoot);
+    this.workMats = {
+      heap: new THREE.MeshStandardMaterial({ color: 0x6d5a33, roughness: 0.95 }),
+      stack: new THREE.MeshStandardMaterial({ color: 0x4a6a2e, roughness: 0.9 }),
+      stone: new THREE.MeshStandardMaterial({ color: 0x585048, roughness: 0.95 }),
+      cut: new THREE.MeshStandardMaterial({ color: 0x3c2f1f, roughness: 1 }),
+    };
+  }
+
+  _buildWorkView(o) {
+    const M = this.workMats, g = new THREE.Group();
+    // a view-local stream so a work looks the same every time it is drawn
+    let sd = ((o.x * 7349) ^ (o.y * 5741) ^ (o.kind * 977)) >>> 0;
+    const rnd = () => { sd = (Math.imul(sd, 1664525) + 1013904223) >>> 0; return sd / 4294967296; };
+
+    if (o.kind === 0) {                                  // the store
+      const base = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.050, 0.012, 9), M.heap);
+      base.position.y = 0.006; g.add(base);
+      for (let i = 0; i < 7; i++) {
+        const r = 0.010 + rnd() * 0.009;
+        const d = new THREE.Mesh(new THREE.SphereGeometry(r, 6, 5), M.stack);
+        const a = rnd() * 6.283, rr = rnd() * 0.026;
+        d.position.set(Math.cos(a) * rr, 0.012 + r * 0.7, Math.sin(a) * rr);
+        d.scale.y = 0.72; g.add(d);
+      }
+    } else if (o.kind === 1) {                           // the windbreak
+      const n = 9;
+      for (let i = 0; i < n; i++) {
+        const t = (i / (n - 1) - 0.5) * 0.135;
+        const h = 0.030 + rnd() * 0.016;
+        const b = new THREE.Mesh(new THREE.BoxGeometry(0.020, h, 0.016), M.stone);
+        b.position.set(t, h / 2, Math.abs(t) * 0.34);    // a shallow crescent
+        b.rotation.y = (rnd() - 0.5) * 0.5;
+        b.rotation.z = (rnd() - 0.5) * 0.16;
+        g.add(b);
+      }
+    } else {                                             // the channel
+      const n = 8;
+      for (let i = 0; i < n; i++) {
+        const t = (i / (n - 1) - 0.5) * 0.16;
+        const c = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.010, 0.019), M.cut);
+        c.position.set(t, -0.002, Math.sin(i * 0.9) * 0.010);
+        c.rotation.y = (rnd() - 0.5) * 0.3;
+        g.add(c);
+      }
+      const w = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.004, 0.012),
+        new THREE.MeshStandardMaterial({ color: 0x2f5a72, roughness: 0.2, metalness: 0.1 }));
+      w.position.y = 0.003; g.add(w);
+    }
+    g.rotation.y = rnd() * 6.283;
+    return g;
+  }
+
+  _paintWorks() {
+    const s = this.sim, live = new Set();
+    for (const o of s.works) {
+      live.add(o);
+      let g = this.workViews.get(o);
+      if (!g) { g = this._buildWorkView(o); this.workRoot.add(g); this.workViews.set(o, g); }
+      const p = this.cellToLocal(o.x, o.y, 0);
+      // it RISES as it is made — half-built is half out of the ground
+      const f = Math.min(1, o.prog);
+      g.position.set(p[0], p[1] - (1 - f) * 0.045, p[2]);
+      g.scale.setScalar(0.55 + f * 0.45);
+      g.visible = f > 0.04;
+    }
+    for (const [o, g] of this.workViews) {
+      if (live.has(o)) continue;
+      this.workRoot.remove(g);
+      g.traverse(n => { if (n.geometry) n.geometry.dispose(); });
+      this.workViews.delete(o);
+    }
   }
 
   // -- ground cover ----------------------------------------------------------
@@ -928,6 +1010,7 @@ export class View {
     this._paintWater();
     this._paintKin();
     this._paintGraves();
+    this._paintWorks();
 
     // the sheet slides off the board and slumps beside the track
     const want = s.lid ? 1 : 0;

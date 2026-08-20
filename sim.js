@@ -187,6 +187,33 @@ function vnoise(x, y, s) {
 }
 
 // ---------------------------------------------------------------------------
+// 5b. THE WEAVE — what the town works out for itself (bible §7)
+// ---------------------------------------------------------------------------
+// Anno's lesson is that a settlement should DEVELOP: needs gate an upgrade, and
+// the upgrade opens harder needs. SimCity's GlassBox lesson is that the thing
+// you see must BE the agent's activity, never an illustration of a statistic.
+// The bible's rule over both: "Nothing is ever unlocked by the player, and
+// there is no tech tree the player can see."
+//
+// So the town does not gain buildings. It works things out — under pressure,
+// out of what is lying about — and a thing it has worked out becomes a WORK
+// standing on the board. The player's leverage is total and entirely indirect:
+// the finger makes cold and heat, the tilt moves the water, the cover makes
+// drought. Pressure is what makes anybody try something new.
+//
+// ⚠️ A discovery is not culture until somebody who never met the discoverer
+// does it anyway. That is the whole of §7 and it is what `k.born` is for.
+export const WORKS = [
+  { key: 'store', name: 'the store', need: 2, pressure: 0.40, effort: 190, radius: 7.0, cap: 3,
+    made: 'piled food where it would keep' },
+  { key: 'windbreak', name: 'the windbreak', need: 0, pressure: 0.38, effort: 230, radius: 6.0, cap: 3,
+    made: 'heaped a wall against the cold' },
+  { key: 'channel', name: 'the channel', need: 1, pressure: 0.38, effort: 260, radius: 6.0, cap: 2,
+    made: 'scraped a channel from the water' },
+];
+export const WORK_AT = {}; WORKS.forEach((w, i) => WORK_AT[w.key] = i);
+
+// ---------------------------------------------------------------------------
 // 5. THE SIM
 // ---------------------------------------------------------------------------
 export class Sim {
@@ -231,11 +258,19 @@ export class Sim {
       // collapsed to 14 and everyone died). Both are typed arrays inside `k`,
       // so they round-trip through toJSON/fromJSON for free.
       glued: new Uint8Array(K), tender: new Int32Array(K),
+      // which practices this one carries in its head — a bitmask over WORKS
+      knows: new Uint8Array(K),
     };
     this.names = [];           // nameId -> string
     this.free = [];            // free kin slots
     this.count = 0;
 
+    // ⚠️ works and prac live on `this`, not in `k`, so unlike every per-kin
+    // array they do NOT round-trip for free — they are written into toJSON and
+    // read back in fromJSON by hand, and covered by saveEqual.
+    this.works = [];           // what stands on the board {kind,x,y,prog,by,day,stock}
+    this.prac = WORKS.map(() => ({ invented: -1, inventor: -1, inventorGone: -1,
+                                   lost: -1, tradition: -1, reinvented: 0, tries: 0 }));
     this.graves = [];          // {x,y,nameId,day,gen}
     this.corpses = [];         // {x,y,nameId,t}
     this.chronicle = [];       // {day,kind,text}
@@ -441,7 +476,7 @@ export class Sim {
     k.age[id] = 0; k.goal[id] = 0; k.goalT[id] = 0; k.hold[id] = 0; k.cool[id] = 0; k.strain[id] = 0;
     k.born[id] = this.day; k.mother[id] = mo; k.father[id] = fa;
     k.nameId[id] = -1; k.gen[id] = gen;
-    k.glued[id] = 0; k.tender[id] = -1;
+    k.glued[id] = 0; k.tender[id] = -1; k.knows[id] = 0;
     for (let j = 0; j < G; j++) k.genome[id * G + j] = genome[j];
     const span = SPAN_DAYS[expressed(genome, L.span)];
     const homo = marrowHomozygous(genome);
@@ -504,6 +539,8 @@ export class Sim {
       this._growth(F);
     }
     this._kin();
+    // culture runs at 1 Hz, not 15 (bible §20)
+    if (this.tick % 15 === 0) this._weave();
   }
 
   _thermal(F) {
@@ -645,9 +682,22 @@ export class Sim {
       const rate = st === STAGE.EGG ? 0 : st === STAGE.NIB ? 0.22 : st === STAGE.HALF ? 0.8 : 1;
       if (rate > 0) for (let n = 0; n < NN; n++) k.need[base + n] = Math.max(0, k.need[base + n] - C.DECAY[NEEDS[n]] * dt * rate);
 
-      // warmth is not a decay, it's a reading of where you are standing
+      // warmth is not a decay, it's a reading of where you are standing —
+      // and a windbreak is a warm place that is not the finger
+      let shelter = 0;
+      for (const o of this.works) {
+        if (o.prog < 1) continue;
+        const dx = o.x - k.x[id], dy = o.y - k.y[id];
+        const R2 = WORKS[o.kind].radius * S;
+        if (dx * dx + dy * dy > R2 * R2) continue;
+        if (o.kind === WORK_AT.windbreak) shelter = 1;
+        else if (o.kind === WORK_AT.store && o.stock > 0.02 && k.need[base + 2] < 0.55) {
+          const give = Math.min(o.stock, 0.010);
+          o.stock -= give; k.need[base + 2] = Math.min(1, k.need[base + 2] + give * 1.6);
+        }
+      }
       const comfort = (T >= band[0] && T <= band[1]) ? 1
-        : 1 - Math.min(1, (T < band[0] ? band[0] - T : T - band[1]) / 14);
+        : (1 - Math.min(1, (T < band[0] ? band[0] - T : T - band[1]) / 14)) * (1 - shelter) + shelter * 0.92;
       k.need[base + 0] += (comfort - k.need[base + 0]) * 0.02;
 
       // STRAIN. ⚠️ An empty need is not death — it is a clock. Instant death at
@@ -713,6 +763,134 @@ export class Sim {
     this.wellbeing = alive ? sumB / alive : 0;
     if (alive > this.stats.peak) this.stats.peak = alive;
     this._corpses();
+  }
+
+  // -- the weave (bible §7) --------------------------------------------------
+  // Runs on a 1 Hz slow lane, never the 15 Hz tick — culture is not a per-frame
+  // concern and the bible says so (§20).
+  _weave() {
+    const k = this.k, NN = NEEDS.length, rng = this.rng;
+    const day = this.day;
+
+    for (let wi = 0; wi < WORKS.length; wi++) {
+      const W = WORKS[wi], pr = this.prac[wi], bit = 1 << wi;
+
+      // ---- is the practice still in anybody's head?
+      let holders = 0;
+      for (let id = 0; id < this.count; id++) if (k.alive[id] && (k.knows[id] & bit)) holders++;
+      if (pr.invented >= 0 && holders === 0 && pr.lost < 0) {
+        pr.lost = day;
+        this.log('lost', `nobody left remembers how they made ${W.name}.`, 4.0);
+      }
+
+      // ---- somebody who knows it, working on one that is not finished, is
+      //      handled by goal 10. Here we only decide whether anybody TRIES.
+      const unfinished = this.works.some(o => o.kind === wi && o.prog < 0.985);
+      const mine = this.works.filter(o => o.kind === wi).length;
+      const relearning = pr.invented >= 0 && pr.lost >= 0;   // the knowledge is gone
+      if (unfinished || (mine >= W.cap && !relearning)) continue;
+
+      // ⚠️ PRESSURE, MATERIAL, WITNESSES — the bible's three, and the player
+      // controls all three without ever being offered a button. A comfortable
+      // town invents nothing, which is the point.
+      let best = -1, bestScore = 0;
+      for (let id = 0; id < this.count; id++) {
+        if (!k.alive[id] || k.stage[id] !== STAGE.WHOLE || k.glued[id]) continue;
+        const want = 1 - k.need[id * NN + W.need];
+        if (want < W.pressure) continue;
+        // material: the ground has to have something to work with
+        const i = this.idx(k.x[id], k.y[id]);
+        const material = wi === WORK_AT.channel
+          ? (this.water[i] < 0.02 ? this.moist[i] : 0)     // dry ground beside water
+          : this.moss[i];
+        if (material < 0.10) continue;
+        // witnesses: density. Somebody alone invents nothing worth keeping.
+        let seen = 0;
+        for (let o = 0; o < this.count; o++) {
+          if (!k.alive[o] || o === id || k.stage[o] < STAGE.HALF) continue;
+          const dx = k.x[o] - k.x[id], dy = k.y[o] - k.y[id];
+          if (dx * dx + dy * dy < 64 * S * S) seen++;
+        }
+        if (seen < 2) continue;
+        const g = k.genome.subarray(id * LOCI.length * 2, (id + 1) * LOCI.length * 2);
+        const curious = expressed(g, L.temper) === 'curious' ? 1.9 : 1;
+        const sc = want * curious * Math.min(3, seen) * (k.knows[id] & bit ? 0.35 : 1);
+        if (sc > bestScore) { bestScore = sc; best = id; }
+      }
+      if (best < 0) continue;
+
+      // failure teaches: every attempt makes the next one likelier (§7)
+      pr.tries++;
+      if (rng() > 0.010 * bestScore * (1 + pr.tries * 0.03)) continue;
+      pr.tries = 0;
+
+      const wx = k.x[best], wy = k.y[best];
+      const known = (k.knows[best] & bit) !== 0;
+      k.knows[best] |= bit;
+      // if the board is already full of them, what they worked out is the
+      // KNOWLEDGE, not another pile — somebody looked at a thing nobody
+      // understood any more and understood it
+      if (mine < W.cap) {
+        this.works.push({ kind: wi, x: wx, y: wy, prog: 0, by: k.nameId[best], day, stock: 0 });
+      }
+
+      const nm = this._name(best, `who first made ${W.name}`);
+      if (pr.invented < 0) {
+        pr.invented = day; pr.inventor = k.nameId[best]; pr.inventorGone = -1;
+        this.log('invented', `${nm} ${W.made}. nobody had done that before.`, 6.0);
+      } else if (pr.lost >= 0) {
+        pr.lost = -1; pr.reinvented++;
+        this.log('reinvented', `${nm} worked out ${W.name} again, from nothing.`, 5.5);
+      } else if (!known) {
+        this.log('again', `${nm} made ${W.name} of their own accord.`, 2.2);
+      }
+
+      // ⚠️ TRADITION: somebody doing it who cannot possibly have been taught by
+      // the person who thought of it. `k.born` finally earns its keep.
+
+    }
+
+    // ---- works age, and a finished one feeds or shelters whoever is near
+    for (let n = this.works.length - 1; n >= 0; n--) {
+      const o = this.works[n], W = WORKS[o.kind];
+      if (o.prog < 1) continue;
+      if (o.done == null) o.done = day;               // it stands. leave it alone a while.
+      if (o.kind === WORK_AT.store) {
+        // the store fills from the ground under it and empties into the hungry
+        const i = this.idx(o.x, o.y);
+        const take = Math.min(this.moss[i], 0.004);
+        this.moss[i] -= take; o.stock = Math.min(1, o.stock + take);
+      }
+      if (day - o.done > 12) o.prog -= 0.00006;    // nothing keeps itself, eventually
+      if (o.prog < 0.50) {
+        this.works.splice(n, 1);
+        this.log('fell', `${W.name} went back to the ground.`, 2.6);
+      }
+    }
+  }
+
+  // has anybody who knew this practice died? the tradition clock starts there
+  _weaveDeath(id) {
+    const k = this.k;
+    for (let wi = 0; wi < WORKS.length; wi++) {
+      const pr = this.prac[wi];
+      if (pr.inventor >= 0 && pr.inventorGone < 0 && k.nameId[id] === pr.inventor) {
+        pr.inventorGone = this.day;
+      }
+    }
+  }
+
+  // the nearest unfinished work of a kind this kin knows how to make
+  _workFor(id) {
+    const k = this.k;
+    let best = null, bd = 1e9;
+    for (const o of this.works) {
+      if (o.prog >= 0.985) continue;                  // done is done — see _weave
+      if (!(k.knows[id] & (1 << o.kind))) continue;
+      const d = Math.abs(o.x - k.x[id]) + Math.abs(o.y - k.y[id]);
+      if (d < bd) { bd = d; best = o; }
+    }
+    return best ? { work: best, d: bd } : null;
   }
 
   _lantern(id, g) {
@@ -887,6 +1065,13 @@ export class Sim {
       }
     }
 
+    // work: something they know how to make is standing half-finished
+    if (!k.glued[id] && k.stage[id] >= STAGE.WHOLE && k.need[base + 2] > 0.35 && k.need[base + 1] > 0.35) {
+      const w = this._workFor(id);
+      if (w) cand.push({ goal: 10, tx: w.work.x, ty: w.work.y,
+                         score: 1.15 / (1 + w.d * 0.05 / S) });
+    }
+
     if (!cand.length) {
       k.goal[id] = 0;
       k.tx[id] = k.glued[id] ? x : x + rr(rng, -4 * S, 4 * S);
@@ -932,6 +1117,10 @@ export class Sim {
       case 8:
         if (k.need[b + 2] < 0.35 || k.need[b + 1] < 0.35) return true;
         return !this.corpses.some(c => c.claim === id);
+      case 10: {                              // the work is done, or gone
+        const w = this._workFor(id);
+        return !w;
+      }
       case 9: {                               // ⚠️ without this they hold to expiry and starve
         if (k.need[b + 2] < 0.35 || k.need[b + 1] < 0.35) return true;
         const t = k.goal[id] === 9 ? (k.goalT[id] | 0) : -1;
@@ -994,10 +1183,77 @@ export class Sim {
       } break;
       case 3: break; // standing in the warm place is its own reward (handled by comfort)
       case 4: k.need[base + 3] = Math.min(1, k.need[base + 3] + 0.014); break;
-      case 5: if (near) k.need[base + 4] = Math.min(1, k.need[base + 4] + 0.018); break;
+      case 5: if (near) {
+        k.need[base + 4] = Math.min(1, k.need[base + 4] + 0.018);
+        // and while they are sitting together, they talk about how things are done
+        if (k.knows[id]) {
+          let o = -1, bd = 2.2 * S * 2.2 * S;
+          for (let t2 = 0; t2 < this.count; t2++) {
+            if (!k.alive[t2] || t2 === id || k.stage[t2] < STAGE.HALF) continue;
+            if ((k.knows[t2] & k.knows[id]) === k.knows[id]) continue;   // knows it all already
+            const dx = k.x[t2] - k.x[id], dy = k.y[t2] - k.y[id], d2 = dx * dx + dy * dy;
+            if (d2 < bd) { bd = d2; o = t2; }
+          }
+          if (o >= 0 && this.rng() < 0.02) {
+            const fresh = k.knows[id] & ~k.knows[o];
+            for (let wi2 = 0; wi2 < WORKS.length; wi2++) {
+              const b2 = 1 << wi2;
+              if (!(fresh & b2)) continue;
+              k.knows[o] |= b2;
+              const pr2 = this.prac[wi2];
+              if (pr2.tradition < 0 && pr2.inventorGone >= 0 && k.born[id] > pr2.inventorGone) {
+                pr2.tradition = this.day;
+                this.log('tradition', `${WORKS[wi2].name} outlived the one who thought of it — ${this._name(id, 'who does it because it has always been done')} never met them, and taught it anyway.`, 8.0);
+              }
+              if (pr2.told == null) {
+                pr2.told = this.day;
+                this.log('told', `${this._name(id, 'who told somebody how it was done')} showed ${this._name(o, 'who was told')} how ${WORKS[wi2].name} is made.`, 3.2);
+              }
+              break;
+            }
+          }
+        }
+      } break;
       // belt and braces on the range bug above: an errand needs legs
       case 7: if (near && !k.glued[id]) this._breed(id, k.goalT[id] | 0); break;
       case 8: if (near && !k.glued[id] && this.corpses.length) this._carry(id); break;
+      case 10: {                              // making the thing
+        if (!near) break;
+        const w = this._workFor(id);
+        if (!w || w.d > 1.6 * S) break;
+        const o = w.work, W = WORKS[o.kind];
+        o.prog = Math.min(1, o.prog + 1 / W.effort);
+        // ⚠️ WITNESSING IS HOW IT SPREADS. Watching somebody make a thing is
+        // how a private trick becomes something the town knows — without this
+        // every practice dies with whoever thought of it.
+        const bit = 1 << o.kind;
+        for (let t = 0; t < this.count; t++) {
+          if (!k.alive[t] || t === id || k.stage[t] < STAGE.HALF) continue;
+          if (k.knows[t] & bit) continue;
+          const dx = k.x[t] - o.x, dy = k.y[t] - o.y;
+          if (dx * dx + dy * dy > 16 * S * S) continue;
+          k.knows[t] |= bit;
+          const pr = this.prac[o.kind];
+          if (pr.learned == null) {
+            pr.learned = this.day;
+            this.log('learned', `${this._name(t, 'who watched, and learned')} now knows how ${W.name} is made.`, 3.4);
+          }
+        }
+        // ⚠️ TRADITION. Somebody is making this who cannot have been taught by
+        // the one who thought of it, because they were born after that person
+        // died. This is the bible's whole test for culture and it is the only
+        // thing `k.born` is read for.
+        const pr2 = this.prac[o.kind];
+        if (pr2.tradition < 0 && pr2.inventorGone >= 0 && k.born[id] > pr2.inventorGone) {
+          pr2.tradition = this.day;
+          const tn = this._name(id, 'who does it because it has always been done');
+          this.log('tradition', `${W.name} outlived the one who thought of it. ${tn} never met them.`, 8.0);
+        }
+        if (o.prog >= 1 && !o.told) {
+          o.told = 1;
+          this.log('stands', `${W.name} stands where they put it.`, 3.0);
+        }
+      } break;
       case 9: {                               // sitting with the one who stays
         const t = k.goalT[id] | 0;
         if (near && !k.glued[id] && k.alive[t] && k.glued[t]) {
@@ -1011,7 +1267,7 @@ export class Sim {
           k.need[t * NN + 4] = Math.min(1, k.need[t * NN + 4] + 0.03);
           if (this.day - (this._tendLog == null ? -99 : this._tendLog) > 6) {
             this._tendLog = this.day;
-            this.log('tend', `${this.nameOf(id)} went and sat a while with ${this.nameOf(t)}.`, 1.5);
+            this.log('tend', `${this._name(id, 'who went and sat with the one who stays')} went and sat a while with ${this.nameOf(t)}.`, 1.5);
           }
         }
       } break;
@@ -1065,6 +1321,7 @@ export class Sim {
     const k = this.k;
     const named = k.nameId[id] >= 0;
     const nm = named ? this.names[k.nameId[id]] : null;
+    this._weaveDeath(id);
     k.alive[id] = 0;
     this.free.push(id);
     this.stats.died++;
@@ -1201,12 +1458,18 @@ export class Sim {
     const k = this.k, G = LOCI.length * 2, NN = NEEDS.length;
     mix(this.tick); mix(this.alive || 0); mix(this.stats.born); mix(this.stats.died);
     mix(this.stats.buried); mix(this.graves.length); mix(this.corpses.length);
-    mix(this.names.length); mix(this.chronicle.length);
+    // ⚠️ NOT chronicle.length. The save deliberately keeps only the opening
+    // plus the recent past (HEAD_KEEP), so a restored colony legitimately holds
+    // fewer entries than the one it came from — asserting on it made the
+    // fingerprint fail for a save that had lost nothing at all.
+    mix(this.names.length); mix(this.works.length);
+    for (const o of this.works) { mix(o.kind); mix(o.x); mix(o.y); mix(o.prog); mix(o.stock || 0); }
+    for (const p of this.prac) { mix(p.invented); mix(p.lost); mix(p.tradition); mix(p.reinvented); }
     mix(this.humid); mix(this.rainLeft); mix(this.curtain); mix(this.lid ? 1 : 0); mix(this.lampOn ? 1 : 0);
     for (let id = 0; id < this.count; id++) {
       if (!k.alive[id]) continue;
       mix(k.x[id]); mix(k.y[id]); mix(k.age[id]); mix(k.stage[id]); mix(k.strain[id]);
-      mix(k.nameId[id]); mix(k.glued[id]); mix(k.tender[id]); mix(k.goal[id]);
+      mix(k.nameId[id]); mix(k.glued[id]); mix(k.tender[id]); mix(k.goal[id]); mix(k.knows[id]);
       for (let j = 0; j < G; j++) mix(k.genome[id * G + j]);
       for (let n = 0; n < NN; n++) mix(k.need[id * NN + n]);
     }
@@ -1219,6 +1482,7 @@ export class Sim {
       v: 1, seed: this.seed, tick: this.tick, day: this.day, dayFrac: this.dayFrac,
       count: this.count, free: this.free.slice(), names: this.names.slice(),
       graves: this.graves, corpses: this.corpses, stats: this.stats,
+      works: this.works, prac: this.prac,
       // keep the opening AND the recent past — see HEAD_KEEP in log()
       chronicle: this.chronicle.length <= 600 ? this.chronicle.slice()
         : this.chronicle.slice(0, HEAD_KEEP).concat(this.chronicle.slice(-(600 - HEAD_KEEP))),
@@ -1255,6 +1519,8 @@ export class Sim {
     s.tick = o.tick; s.day = o.day; s.dayFrac = o.dayFrac;
     s.count = o.count; s.free = o.free.slice(); s.names = o.names.slice();
     s.graves = o.graves; s.corpses = o.corpses; s.stats = o.stats;
+    s.works = o.works || [];
+    if (o.prac) s.prac = o.prac;
     s.chronicle = o.chronicle; s.curtain = o.curtain; s.lampOn = o.lampOn;
     s.lid = o.lid; s.humid = o.humid; s.rainLeft = o.rainLeft; s.fog = o.fog || 0;
     s.ambientBase = o.ambientBase != null ? o.ambientBase : C.AMBIENT_BASE;
