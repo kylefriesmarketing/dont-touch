@@ -368,6 +368,91 @@ t('identical player input replays identically', () => {
 });
 
 // --- save round-trip (Invariant 3) ----------------------------------------
+// --- the one you lifted (§9.3) ------------------------------------------
+console.log('the one you lifted');
+const someone = (s) => { for (let i = 0; i < s.count; i++) if (s.k.alive[i] && s.k.stage[i] !== STAGE.EGG) return i; return -1; };
+
+t('a lifted kin leaves the world but stays alive in it', () => {
+  const s = clone(fixture('live', 200));
+  const id = someone(s); ok(id >= 0, 'nobody to lift');
+  const x0 = s.k.x[id], y0 = s.k.y[id];
+  ok(s.lift(id), 'could not lift a living kin');
+  ok(!s.lift(someone(s)), 'lifted two at once');
+  run(s, 2);
+  eq(s.k.x[id], x0, 'a held kin drifted');
+  eq(s.k.y[id], y0, 'a held kin drifted');
+  ok(s.k.alive[id] === 1, 'a held kin stopped being alive');
+});
+
+t('the witnesses disagree, because their own bodies decide', () => {
+  // this is §9's schism seed and it must not quietly become unanimous
+  const s = clone(fixture('live', 200));
+  s.lift(someone(s));
+  const saw = [...Array(s.count).keys()].filter(i => s.k.alive[i] && s.k.saw[i] !== 0);
+  ok(saw.length > 0, 'nobody witnessed a lift in a whole town');
+  const pos = saw.filter(i => s.k.saw[i] > 0).length;
+  const neg = saw.filter(i => s.k.saw[i] < 0).length;
+  ok(pos + neg === saw.length, 'a witness recorded nothing');
+});
+
+t('what they saw never fades, while the hand itself does', () => {
+  const s = clone(fixture('live', 200));
+  s.lift(someone(s)); s.takeAway();
+  const w = [...Array(s.count).keys()].find(i => s.k.alive[i] && s.k.saw[i] !== 0);
+  ok(w != null, 'no surviving witness');
+  const saw0 = s.k.saw[w];
+  run(s, 40);
+  if (s.k.alive[w]) eq(s.k.saw[w], saw0, 'a witness forgot');
+});
+
+t('taken means no body, so there is never a stone for that one', () => {
+  const s = clone(fixture('live', 200));
+  const id = someone(s), nameId = s.k.nameId[id];
+  const corpses0 = s.corpses.length;
+  s.lift(id); s.takeAway();
+  ok(s.k.alive[id] === 0, 'the taken one survived');
+  eq(s.corpses.length, corpses0, 'a body was left behind by a taking');
+  run(s, 12);
+  const stones = s.graves.filter(g => g.nameId === nameId && nameId >= 0).length;
+  eq(stones, 0, 'somebody buried a kin that was never there');
+});
+
+t('setting down costs warmth, safety and a quarter of a death clock', () => {
+  const s = clone(fixture('live', 200));
+  const id = someone(s), NN = NEEDS.length;
+  const strain0 = s.k.strain[id];
+  s.lift(id); run(s, 1); s.setDown(30, 30);
+  ok(!s.held, 'still holding after setting down');
+  ok(Math.abs(s.k.x[id] - 30) < 0.01, 'set down in the wrong place');
+  eq(s.k.need[id * NN + 0], 1, 'not warmed by the hand');
+  ok(s.k.need[id * NN + 5] <= 0.06, 'not frightened by it');
+  ok(s.k.strain[id] >= Math.min(0.95, strain0 + 0.25) - 1e-9, 'no lasting cost');
+});
+
+t('a save taken mid-lift puts the same kin back in the air', () => {
+  // ⚠️ new persistent state the fingerprint cannot see is the project's own
+  // definition of a harness that lies — held and k.saw both have to round-trip.
+  const s = clone(fixture('live', 200));
+  s.lift(someone(s)); run(s, 1);
+  const fp = s.fingerprint();
+  const b = Sim.fromJSON(JSON.parse(JSON.stringify(s.toJSON())));
+  eq(b.fingerprint(), fp, 'a mid-lift save did not restore identically');
+  ok(b.held && b.held.id === s.held.id, 'the held kin came back to the ground');
+  b.setDown(40, 40); s.setDown(40, 40);
+  run(b, 3); run(s, 3);
+  eq(b.fingerprint(), s.fingerprint(), 'they diverged after the hand let go');
+});
+
+t('lifting the same one on the same seed writes the same town', () => {
+  const a = clone(fixture('live', 200)), b = clone(fixture('live', 200));
+  const ia = someone(a);
+  a.lift(ia); b.lift(ia);
+  run(a, 1); run(b, 1);
+  a.setDown(35, 35); b.setDown(35, 35);
+  run(a, 5); run(b, 5);
+  eq(a.fingerprint(), b.fingerprint(), 'the same act gave two different towns');
+});
+
 console.log('save');
 t('save -> JSON -> restore -> compare', () => {
   const a = new Sim({ seed: 'save' });

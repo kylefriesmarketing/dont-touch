@@ -281,6 +281,12 @@ export class Sim {
       // terror into another in the same tick. That contradiction is the seed
       // §9's schism needs and it costs one comparison. Inside `k`, so free.
       memX: new Float32Array(K), memY: new Float32Array(K), memV: new Float32Array(K),
+      // ⚠️ WHAT THEY SAW. Signed like memV and written the same way — from the
+      // witness's OWN comfort band — but deliberately EXEMPT from _daily's decay.
+      // Everything else about the hand fades; being in the room when somebody was
+      // picked up and carried out of the world does not. That exemption is one
+      // skipped line and it is the whole of §9.3.
+      saw: new Float32Array(K),
     };
     this.names = [];           // nameId -> string
     this.free = [];            // free kin slots
@@ -316,6 +322,7 @@ export class Sim {
     // board vents its whole sky in under a week. Starting uncovered made the
     // default state a slow drought that nobody chose.
     this.lid = true;
+    this.held = null;          // {id, since} — a kin in the air, out of the world
     this.curtain = 0.75;       // 0 = closed, 1 = open
     this.lampOn = false;
 
@@ -698,6 +705,12 @@ export class Sim {
     for (let id = 0; id < this.count; id++) {
       if (!k.alive[id]) continue;
       alive++;
+      // ⚠️ OUT OF THE WORLD. A held kin still counts as alive and still ages,
+      // but it has no tile, so it must not gather, drink, breed, be tended, be
+      // chosen as company, or carry anybody. Everything below this line reads
+      // this.temp at its position, and its position is meaningless while it is
+      // in the air.
+      if (this.held && this.held.id === id) { this._heldKin(id, dt); continue; }
       k.age[id] += dt;
       k.cool[id] = Math.max(0, k.cool[id] - dt);
 
@@ -1439,7 +1452,7 @@ export class Sim {
     }
   }
 
-  _die(id, cause) {
+  _die(id, cause, noBody) {
     const k = this.k;
     const named = k.nameId[id] >= 0;
     const nm = named ? this.names[k.nameId[id]] : null;
@@ -1447,11 +1460,11 @@ export class Sim {
     k.alive[id] = 0;
     this.free.push(id);
     this.stats.died++;
-    if (k.stage[id] !== STAGE.EGG) {
+    if (k.stage[id] !== STAGE.EGG && !noBody) {
       this.corpses.push({ x: k.x[id], y: k.y[id], nameId: k.nameId[id], gen: k.gen[id], t: this.tick, cause, claim: -1, glued: k.glued[id] ? 1 : 0 });
       if (this.corpses.length > 24) this.corpses.shift();
     }
-    const how = { age: 'grew old', hunger: 'went hungry', thirst: 'went dry', heat: 'was in the warm place too long', cold: 'went cold', water: 'was in the low end when it filled' }[cause] || 'stopped';
+    const how = { age: 'grew old', hunger: 'went hungry', thirst: 'went dry', heat: 'was in the warm place too long', cold: 'went cold', water: 'was in the low end when it filled', taken: 'did not come back' }[cause] || 'stopped';
     // there is only ever one of these, and there will never be another
     if (k.glued[id]) this.log('stillgone', `${nm} ${how}, in the one place ${nm} had ever been.`, 6.0);
     else if (named) this.log('death-named', `${nm} ${how}.`, 2.0);
@@ -1532,6 +1545,9 @@ export class Sim {
       if (!k.alive[id]) continue;
       k.memV[id] *= 0.994;
       if (Math.abs(k.memV[id]) < 0.004) { k.memV[id] = 0; k.memX[id] = -1; k.memY[id] = -1; }
+      // ⚠️ k.saw is NOT decayed here, and that is not an oversight. §9.3: the
+      // hand is forgotten; the one it took is not. It leaves this colony only
+      // when its last witness does.
     }
     this._handBeats();
     // seasonal room temperature from the real calendar is applied by the view via setRoom()
@@ -1600,6 +1616,96 @@ export class Sim {
   // e.pressure: that works on the developer's stylus and nowhere else.
   //
   // The hand stays TRANSIENT — never saved, never fingerprinted, as before.
+  // —— THE ONE YOU LIFTED (§9.3) —————————————————————————————
+  //
+  // Every other verb in this game acts on a RADIUS. This one acts on a PERSON,
+  // and it is the only irreversible thing anybody can do here. There is no
+  // confirmation dialog because a hand does not have one.
+  lift(id) {
+    const k = this.k;
+    if (this.held || !k.alive[id] || k.stage[id] === STAGE.EGG) return false;
+    this.held = { id, since: this.tick };
+    const nm = this._name(id, 'who was lifted out of the world');
+    // ⚠️ THE WITNESSES, AND WHY THEY DISAGREE. The sign comes from each watcher's
+    // OWN comfort band against the ground they are standing on — the identical
+    // rule the ordinary hand-memory uses. So one lift writes gratitude into a
+    // line the room happens to suit and terror into one it does not, in the same
+    // tick, and those two lines then interbreed. Nothing here decides what the
+    // player did; their bodies do.
+    const R = 14 * S;
+    let seen = 0;
+    for (let w = 0; w < this.count; w++) {
+      if (!k.alive[w] || w === id || k.stage[w] === STAGE.EGG) continue;
+      const dx = k.x[w] - k.x[id], dy = k.y[w] - k.y[id];
+      if (dx * dx + dy * dy > R * R) continue;
+      const g = k.genome.subarray(w * LOCI.length * 2, (w + 1) * LOCI.length * 2);
+      const band = HIDE_BAND[expressed(g, L.hide)];
+      const T = this.temp[this.idx(k.x[w], k.y[w])];
+      const good = (T >= band[0] && T <= band[1]);
+      k.saw[w] += good ? 0.8 : -1.0;
+      k.saw[w] = Math.max(-3, Math.min(3, k.saw[w]));
+      k.need[w * NEEDS.length + 5] = Math.max(0, k.need[w * NEEDS.length + 5] - 0.30);
+      k.pulse[w] = 2.6; k.hold[w] = 0;
+      seen++;
+    }
+    this._lifted = { x: k.x[id], y: k.y[id], seen };
+    this._placeFelt(k.x[id], k.y[id], -1.4, k.nameId[id]);
+    this.log('lifted', seen > 0
+      ? `${nm} went up, and ${seen === 1 ? 'one of them' : seen + ' of them'} watched it happen.`
+      : `${nm} went up, and nobody was near enough to see.`, 7.5);
+    return true;
+  }
+
+  // in the air: aging, and a body reading the temperature of a finger
+  _heldKin(id, dt) {
+    const k = this.k, NN = NEEDS.length, base = id * NN;
+    k.age[id] += dt;
+    // held still means held: nothing is being spent walking or working
+    for (let n = 0; n < NN; n++) k.need[base + n] = Math.max(0, k.need[base + n] - C.DECAY[NEEDS[n]] * dt * 0.35);
+    k.need[base + 4] = Math.max(0, k.need[base + 4] - C.DECAY.company * dt * 0.9);   // nobody is up here
+    k.need[base + 5] = Math.max(0, k.need[base + 5] - dt * 0.55);                    // and it is a long way down
+    // ⚠️ THE SAME HIDE_BAND EVERY OTHER KIN IS JUDGED BY. Being carried is
+    // comfortable for a plain kin [18,32] and lethal for a rime one [6,21] — the
+    // player performs one identical act and the world decides what it was.
+    const g = k.genome.subarray(id * LOCI.length * 2, (id + 1) * LOCI.length * 2);
+    const band = HIDE_BAND[expressed(g, L.hide)];
+    const T = this.hand ? this.hand.heat * 0.42 + this.ambient * 0.58 : 33;
+    const comfort = (T >= band[0] && T <= band[1]) ? 1 : 0;
+    k.need[base + 0] += (comfort - k.need[base + 0]) * 0.02;
+    if (T > band[3] || T < band[2]) k.strain[id] = Math.min(1, k.strain[id] + dt / 0.7);
+    if (k.strain[id] >= 1) { this.held = null; this._die(id, 'heat'); return; }
+    if (k.age[id] > k.lifespan[id]) { this.held = null; this._die(id, 'age'); }
+  }
+
+  // put back. Warm, safe nowhere, and carrying a quarter of a death clock.
+  setDown(x, y) {
+    if (!this.held) return false;
+    const k = this.k, id = this.held.id, NN = NEEDS.length;
+    this.held = null;
+    if (!k.alive[id]) return false;
+    k.x[id] = Math.max(1, Math.min(this.N - 2, x));
+    k.y[id] = Math.max(1, Math.min(this.N - 2, y));
+    k.need[id * NN + 0] = 1;                       // warmed, whatever else
+    k.need[id * NN + 5] = 0.05;                    // and badly frightened
+    k.strain[id] = Math.min(0.95, k.strain[id] + 0.25);
+    k.goal[id] = 0; k.hold[id] = 0; k.tender[id] = -1;
+    const nm = this.nameOf(id);
+    this.log('putback', `${nm} was set down again, somewhere ${nm} had never been.`, 6.4);
+    return true;
+  }
+
+  // ⚠️ NOT SET DOWN. No corpse is pushed, so there is no body, nobody comes to
+  // carry it, and the yard ends up with a stone for everyone except this one.
+  // That absence is the point and it is load-bearing: _carry has nothing to find.
+  takeAway() {
+    if (!this.held) return false;
+    const id = this.held.id;
+    this.held = null;
+    if (!this.k.alive[id]) return false;
+    this._die(id, 'taken', true);
+    return true;
+  }
+
   setHand(x, y, opt) {
     this.hand = (x == null) ? null : {
       x, y,
@@ -1688,11 +1794,12 @@ export class Sim {
     for (const p of this.prac) { mix(p.invented); mix(p.lost); mix(p.tradition); mix(p.reinvented); }
     for (const key of Object.keys(this.placeNames).sort()) mix(key.length + this.placeNames[key].length);
     mix(this.humid); mix(this.rainLeft); mix(this.curtain); mix(this.lid ? 1 : 0); mix(this.lampOn ? 1 : 0);
+    mix(this.held ? this.held.id + 1 : 0);
     for (let id = 0; id < this.count; id++) {
       if (!k.alive[id]) continue;
       mix(k.x[id]); mix(k.y[id]); mix(k.age[id]); mix(k.stage[id]); mix(k.strain[id]);
       mix(k.nameId[id]); mix(k.glued[id]); mix(k.tender[id]); mix(k.goal[id]); mix(k.knows[id]);
-      mix(k.memX[id]); mix(k.memY[id]); mix(k.memV[id]);
+      mix(k.memX[id]); mix(k.memY[id]); mix(k.memV[id]); mix(k.saw[id]);
       for (let j = 0; j < G; j++) mix(k.genome[id * G + j]);
       for (let n = 0; n < NN; n++) mix(k.need[id * NN + n]);
     }
@@ -1711,6 +1818,10 @@ export class Sim {
       chronicle: this.chronicle.length <= 600 ? this.chronicle.slice()
         : this.chronicle.slice(0, HEAD_KEEP).concat(this.chronicle.slice(-(600 - HEAD_KEEP))),
       curtain: this.curtain, lampOn: this.lampOn, lid: this.lid, ambientBase: this.ambientBase,
+      // ⚠️ a save written while a kin is in the air. Without this the held kin
+      // reloads standing wherever it was picked up, quietly undoing the one
+      // irreversible act in the game.
+      held: this.held,
       humid: this.humid, rainLeft: this.rainLeft, fog: this.fog,
       // ⚠️ NO height HERE ON PURPOSE — it is regenerated bit-identically from
       // the seed by fromJSON's own constructor call, and at N=96 a redundant
@@ -1760,6 +1871,7 @@ export class Sim {
     s.placeNames = o.placeNames || {};
     s.chronicle = o.chronicle; s.curtain = o.curtain; s.lampOn = o.lampOn;
     s.lid = o.lid; s.humid = o.humid; s.rainLeft = o.rainLeft; s.fog = o.fog || 0;
+    s.held = o.held || null;
     s.ambientBase = o.ambientBase != null ? o.ambientBase : C.AMBIENT_BASE;
     s.pond = o.pond; s.yard = o.yard; s.hearth = o.hearth || o.yard; s.lang = o.lang;
     if (o.narr) {

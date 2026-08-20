@@ -34,6 +34,7 @@ const HAND = {
   stillPx: 7,                      // under this is jitter, not a stroke
   stillCells: 2.5,                 // or a real move across the world, whichever first
   moveHold: 0.22,                  // s — how long one movement keeps the hand "moving"
+  reachMs: 900,                    // hold this long on a kin, with the sheet off, and you have them
 };
 
 const SAVE_KEY = 'donttouch-save';        // the house contract summary (§21)
@@ -202,6 +203,9 @@ class App {
     // ⚠️ a contact left open would be integrated across the ENTIRE burst below,
     // which is up to 26 days of board with a finger on it.
     this.sim.setHand(null); this.touch = null;
+    // ⚠️ somebody left in the air across a 26-day catch-up would starve in a
+    // hand that is not there any more. Put them down before time runs.
+    if (this.sim.held) { const k = this.sim.k, id = this.sim.held.id; this.sim.setDown(k.x[id], k.y[id]); }
     const days = Math.min(26, ms / 3600e3 * 1.1);
     const target = Math.floor(days * C.TICKS_PER_DAY);
     if (target < 200) return;
@@ -247,6 +251,18 @@ class App {
       const [nx, ny] = norm(e);
       const tilting = e.button === 2 || e.shiftKey;
       if (tilting) { mode = 'tilt'; this.tilt0 = { x: s.tilt.x, y: s.tilt.y }; return; }
+      // — THE REACH. With the sheet OFF, a press that lands on a KIN is not a
+      // press on the ground: hold it and you are holding a person. It is gated on
+      // the sheet because your arm has to be inside their sky to do it, and the
+      // sheet being off is charged for in drought and cold the whole time.
+      if (!s.lid && !s.held) {
+        const who = v.pickKin(nx, ny);
+        if (who >= 0 && s.k.alive[who] && s.k.stage[who] !== STAGE.EGG) {
+          mode = 'reach';
+          this.reach = { id: who, t: 0 };
+          return;
+        }
+      }
       const hit = v.pickGround(nx, ny);
       if (hit) {
         mode = 'warm';
@@ -277,6 +293,12 @@ class App {
         const wx = dx * Math.cos(a) - dy * 0 - 0;   // screen-x maps to world by camera yaw
         s.setTilt(this.tilt0.x + (dx * Math.cos(a) + dy * 0.0) * 0.9,
                   this.tilt0.y + (dy * 0.9 + dx * Math.sin(a) * 0.35));
+      } else if (mode === 'reach') {
+        // ⚠️ moving off the kin CANCELS the reach rather than dragging the board.
+        // Taking somebody must never be what happens when a click slips.
+        const hit = v.pickGround(nx, ny);
+        if (this.sim.held) { if (hit) this.heldCell = hit.cell; else this.heldCell = null; }
+        else if (moved > 26) { this.reach = null; mode = null; }
       } else if (mode === 'warm') {
         this.gest.move(e.clientX, e.clientY, performance.now());
         const hit = v.pickGround(nx, ny);
@@ -302,6 +324,27 @@ class App {
     const up = (e) => {
       if (!down) return;
       down = false;
+      if (mode === 'reach') {
+        const [nx2, ny2] = norm(e);
+        const hit = v.pickGround(nx2, ny2);
+        if (s.held) {
+          // ⚠️ OVER THE BOARD PUTS THEM BACK; OFF THE BOARD DOES NOT. There is no
+          // dialog on purpose — a hand does not have one — so the only protection
+          // is that letting go anywhere over their world is always the safe act.
+          if (hit) { s.setDown(hit.cell[0], hit.cell[1]); this.sfx.touch(); }
+          else { s.takeAway(); this.sfx.death(); }
+        }
+        else if (this.reach) {
+          // ⚠️ letting go before the ring closes must still DO something. With the
+          // sheet off, every press that lands on a kin becomes a reach, so without
+          // this a short press on one of them applies no warmth and opens nothing —
+          // the game would simply appear not to respond.
+          this.ui.select(this.reach.id);
+        }
+        this.reach = null; this.heldCell = null; mode = null;
+        if (v.setHandDisc) v.setHandDisc(null);
+        return;
+      }
       if (mode === 'warm') {
         const [nx, ny] = norm(e);
         const hit = v.pickGround(nx, ny);
@@ -318,7 +361,18 @@ class App {
       mode = null;
     };
     canvas.addEventListener('pointerup', up);
-    canvas.addEventListener('pointercancel', up);
+    // ⚠️ A CANCELLED POINTER MUST NEVER KILL A NAMED KIN. iOS steals touches for
+    // its own gestures all the time, and 'the browser took my finger' is not an
+    // acceptable cause of death in a game with no undo. Cancel always sets down.
+    canvas.addEventListener('pointercancel', (e) => {
+      if (mode === 'reach') {
+        if (s.held) { const k = s.k, id = s.held.id; s.setDown(k.x[id], k.y[id]); }
+        this.reach = null; this.heldCell = null; mode = null; down = false;
+        if (v.setHandDisc) v.setHandDisc(null);
+        return;
+      }
+      up(e);
+    });
 
     canvas.addEventListener('wheel', (e) => {
       e.preventDefault();
@@ -383,6 +437,17 @@ class App {
   // curve is evaluated, so the board's disc and the sim's kernel can never
   // disagree about what the hand is currently doing.
   _pushHand(dt = 0) {
+    // the reach builds in real seconds, and the board shows it building
+    if (this.reach && !this.sim.held) {
+      this.reach.t += dt * 1000;
+      const f = Math.min(1, this.reach.t / HAND.reachMs);
+      if (this.view.setReach) this.view.setReach(this.reach.id, f);
+      if (f >= 1) {
+        this.sim.lift(this.reach.id);
+        this.sfx.mutate();
+      }
+    } else if (this.view.setReach && !this.sim.held) this.view.setReach(-1, 0);
+    if (this.sim.held && this.view.setHeldAt) this.view.setHeldAt(this.heldCell);
     const t = this.touch;
     if (!t) return;
     const moving = (t.moveT || 0) > 0;

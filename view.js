@@ -79,6 +79,8 @@ export class View {
     // view-only title dressing. NEVER mirror these into sim state.
     this.titleDim = 0;          // 0 = the room as it is, 1 = dark at the bottom of the stairs
     this.titleTo = 0;           // eased toward; the light comes on, it does not snap
+    this.reachId = -1; this.reachF = 0;   // who your hand is closing on, and how far
+    this.heldCell = null;                 // where a lifted kin is being carried
     this._foc = new THREE.Vector3();
     this.focusY = 0.47;
 
@@ -1084,6 +1086,16 @@ export class View {
   // the lantern is the entire UI (Invariant 7), so both the walking path and
   // the one-who-stays path must light identically
   _paintLantern(id, n, x, y, z, sz, grow, st) {
+    // somebody in the air is drawn where your hand is, well above the layout
+    if (this.sim.held && this.sim.held.id === id) {
+      const c = this.heldCell;
+      if (c) {
+        const N = this.sim.N;
+        x = (c[0] / (N - 1) - 0.5) * GR * 2;
+        z = (c[1] / (N - 1) - 0.5) * GR * 2;
+      }
+      y = (y || 0) + 0.16 + Math.sin(this.t * 2.1) * 0.006;   // held, and not steady
+    }
     const s = this.sim, k = s.k;
     const pulse = 0.72 + 0.28 * Math.sin((this.t * k.pulse[id] + (this.phase ? this.phase[id] : k.phase[id])) * 6.28);
     const b = k.bright[id] * pulse;
@@ -1304,6 +1316,13 @@ export class View {
   // obvious place to hook without hunting for callers.
   repaintLanterns() { this._paletteDirty = true; }
 
+  // ⚠️ THE ONLY WARNING THERE IS. Taking somebody is irreversible and has no
+  // confirm dialog, so the whole of the player's protection is that they can
+  // SEE it coming: the ring tightens onto one figure and goes red over 900ms,
+  // and letting go before it closes costs nothing.
+  setReach(id, f) { this.reachId = id; this.reachF = f; }
+  setHeldAt(cell) { this.heldCell = cell; }
+
   // cx, cy in cells; r in cells; e is 0 (hot and narrow) … 1 (resting and wide)
   setHandDisc(cx, cy, r, e) {
     if (!this.handDisc) return;
@@ -1393,6 +1412,21 @@ export class View {
       Math.cos(o.az) * cy * o.dist
     );
     this.camera.lookAt(0, 0.06, 0);
+
+    // — THE REACH RING. Drawn from the same disc as the hand, so the player is
+    // never looking at two different vocabularies for what their finger is doing.
+    // It closes ONTO one figure and goes red, which is the only notice anybody
+    // gets before an irreversible act. 900ms is long enough to change your mind
+    // and short enough not to feel like a menu.
+    if (this.reachF > 0 && this.reachId >= 0 && s.k.alive[this.reachId]) {
+      const id = this.reachId, f = this.reachF;
+      const r = 9 * S * (1 - f * 0.72) + 1.4 * S;      // tightening onto them
+      this.setHandDisc(s.k.x[id], s.k.y[id], r, 0);
+      this._handWant = 1;
+      // amber -> red as it closes. Every other use of this disc is warm; this
+      // is the one time it is a warning.
+      this.handDisc.material.color.setHSL(0.055 * (1 - f), 0.62 + 0.34 * f, 0.50 + 0.12 * f);
+    }
 
     if (this.handDisc) {
       const m = this.handDisc.material;

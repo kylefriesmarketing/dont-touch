@@ -377,4 +377,168 @@ second species is v1 or a patch. Nothing in the code assumes an answer to any of
 
 ---
 
+---
+
+## v0.5 — THE SHELL, THE CONTACT LAW, AND THE ONE YOU LIFTED (2026-08-20)
+
+**File table above is stale from v0.4 on:** `sim.js` is ~1,850 lines, `test-sim.mjs` is
+**85 tests**, and there are two new modules — `gesture.js` (pointer → named gesture; knows
+nothing about the sim) and `palette.js` (colourblind hue LUTs; view-side only).
+
+### ⚠️⚠️ THE COVER WAS INVERTED — FIVE SITES, AND A GREEN TEST GUARDING IT
+
+`lid === true` means the sheet is **ON**. That is what the button says and what the help
+card has always promised — *"under the plastic their rain comes back."* But `C.LID_LOSS`
+and `C.VENT` are both documented **in the constants block** as the cost of the board being
+**OPEN**, and both were applied when it was **CLOSED**.
+
+Measured over 20 days: covering the town drained the pond to 0 and the air to 0 and left
+**3 of 13 alive**. One of the five verbs did the exact opposite of what the game said it did.
+
+Five sites, all consistent with each other and all disagreeing with the player:
+1. `_thermal`'s heat-loss term
+2. `_fluids`' vapour vent
+3. the narrator's `'cover'` drought beat
+4. `view.js`'s `want = s.lid ? 1 : 0` (ct = 1 slides the sheet OFF)
+5. `view.js`'s `coverT` **initialiser**, which the render loop then eased away from
+
+**And the suite was green the whole time**, because the test called `setLid(true)` and
+labelled it *"open lid"*. The bug had a passing test guarding it. A green test is not
+evidence the behaviour is right — it is evidence the code and the test agree, and here both
+were wrong. The board now **starts covered**, because dad keeps it covered, and taking the
+sheet off is the transgression the title is named after.
+
+### THE CONTACT LAW — why there is no sixth verb
+
+`setHand(x, y, {r, heat})`. A **still** hand opens out and cools to 40°; a **moving** one
+stays a small 150° point. Everything the finger can do is a curve through those two numbers.
+Measured on a settled board: resting holds the ground at 32°, inside the comfort band of
+plain [18,32], ash [26,41] and slick [20,34]. Moving holds 86° at the centre, past every
+lethal ceiling in the game.
+
+⚠️ **Before this, EVERY touch ran at the moving number** — which is why the finger only ever
+read as cruel. There was no gentle setting to find.
+
+⚠️ **Stillness is measured in PIXELS, not cells.** Whether a hand is moving is a fact about
+the hand. A finger resting on a capacitive screen wanders 1–3px continuously at 60Hz, so a
+cell-based threshold makes the game's *kindest* verb unreachable on a phone. (The cell
+threshold survives as a second gate, for a big sweep at a zoomed-out camera.)
+
+⚠️ **Do not key any of this off `PointerEvent.pressure`.** It reads 0.5 for every mouse
+button that is down and 0 when it is up. "Press harder" has to mean "press longer."
+
+### ⚠️ THE KIND HALF OF THE FINGER RENDERED AS NOTHING
+
+`_paintGround` only tinted above 40° and below 8°. Every comfort band tops out under 40, so
+a hand resting at a perfectly kind 33° changed the board by **zero pixels** — and the first
+feedback anybody ever got about their own hand was a scorch mark.
+
+⚠️ **The warm floor is RELATIVE to the room and has to be.** A settled board sits at 20.5°
+with the bulb off and 23.8° with it on; a fixed floor of 25 lit all 9,216 cells as "touched"
+the moment a hand rested anywhere. It is now `ambient + daylight*SUN_GAIN + 3`, hoisted out
+of the per-cell loop. Measured after: untouched board **0.0%** warmed, a resting hand **2.4%**,
+nothing burned.
+
+### THE ONE YOU LIFTED (§9.3) — the first literal new power
+
+Kyle explicitly softened P1 to allow powers the five verbs cannot reach. This is the one that
+matters: every other verb acts on a **radius**; this acts on a **person**, and it is the only
+irreversible act in the game.
+
+- Sheet off + press and hold **900ms** on a kin. The ring tightens onto them and goes red —
+  that is the only warning, and there is no dialog because a hand does not have one.
+- Release **over the board** → set down: warmth full, safety 0.05, strain +0.25, and a name.
+- Release **off the board** → `_die(id, 'taken', noBody)`. **No corpse is pushed**, so there
+  is no body, nobody comes to carry it, and the yard ends with a stone for everyone except
+  that one. Verified: the taken one gets 0 stones, an ordinary death gets 1.
+- ⚠️ `pointercancel` **always sets down**. iOS steals touches constantly and "the browser
+  took my finger" is not an acceptable cause of death in a game with no undo.
+- ⚠️ `catchUp()` sets down before its burst, or somebody starves in a hand that is not there.
+- ⚠️ A short press that never completes the ring **selects** the kin. Without that, with the
+  sheet off, every press on a kin did nothing at all and the game looked broken.
+
+**`k.saw`** (inside `k`, so it round-trips free) records the witnesses, and is deliberately
+**exempt from `_daily`'s memV decay** — the hand is forgotten, the one it took is not.
+The sign comes from each witness's **own comfort band against the ground they are standing
+on**, the same rule the ordinary hand-memory uses. Measured on a real town: **12 witnesses,
+10 took it well, 2 did not.** That disagreement is §9's schism seed and it is generated, not
+authored.
+
+### The shell
+
+Title screen = the board under its sheet in the dark, entered by pulling the light on.
+⚠️ **The title is a LOOK, never state** — it must not call `setLamp`/`setLid`/`setCurtain`,
+all three of which are persistent and fingerprinted. Verified: a returning player's lid, bulb
+and curtain all survive it untouched. Pulling the chain turns the bulb on **only on a fresh
+town**.
+
+**Colourblind palettes, solved not guessed** (`palette.js`, CIE Lab ΔE under the Viénot
+projection, worst pair in each set):
+
+| | need hues | genetic hues |
+|---|---|---|
+| as painted, normal | 26.2 | 44.3 |
+| as painted, **deuteranopia** | **1.0** | **6.7** |
+| green&red palette, deuteranopia | **24.1** | **31.1** |
+| blue&yellow palette, tritanopia | **20.4** | **27.6** |
+
+⚠️ The need hues were the emergency, not the bloodline ones: NEED warmth 205 and water 190
+are 15° apart, so for roughly one man in twelve the light meaning *"I am freezing"* and the
+one meaning *"I am dying of thirst"* were the same colour. ⚠️ **The remap is view-side only** —
+`k.hue` is written by sim code and folds into the save and the fingerprint. ⚠️ **Hue alone
+cannot carry six categories for a dichromat**; a first attempt folded the wheel onto the
+surviving axis and collapsed everything to ΔE 1 (many-to-one). The warps are monotonic and
+bijective, which is the most hue can do — the glyph channel is the rest of the answer.
+
+### Smaller things that were simply wrong
+
+- **The weather strip was a constant.** It asked `humid > 4.4`, but humid is S²-scaled: it
+  starts at 11.25 on a 96 board and the rain threshold is `C.CLOUD` = 24.75. Measured over
+  60 days it said "close" **59 times and "clear" zero times, ever.** Now a fraction of
+  `C.CLOUD`, which also makes it predictive — the only job a weather readout has.
+- **The speed keys were 1/2/3** while the help card advertised **1 · 4 · 20**. Pressing the
+  key the game told you to press did nothing. Both work now.
+- **No target guard on keydown**: with the window slider focused, L still dragged the cover
+  off and space still breathed on the town.
+- **375px**: the fascia came to 391px of content in a 375px bar, so *book* and *box* sat off
+  the right edge with no keyboard to reach them. Fixed by dropping the two toggle captions
+  under 430px. Verified: nothing off-screen, no control under 40px, no horizontal scroll.
+- **Removed from the always-on HUD**: `% lit` (a mean of `k.bright` — a health bar with the
+  label filed off) and the running grave count (§9.5's scoreboard, printed). The rule that
+  generated this: *the always-on layer may show only what is true of the ROOM, never what is
+  true of the KIN.* Both live in the book now, where you had to go and open them.
+
+### ⚠️ Measured, and therefore NOT built
+
+- **THE RING as a recognised gesture.** A drawn circle already isolates a kin, because
+  `_decide`'s warmth scan rejects cells above `band[3]-3`. The "fence" version changes
+  pathing on every board in the game, not just inside your rings, and its effect on the death
+  histogram (hunger is 60–75% of all deaths) is unmeasured. `gesture.js`'s latched ring test
+  also fires on any out-and-back scrub over 40px — a nervous hand would draw circles.
+- **LEAN as a discrete gesture class.** Its premise is backwards: a *smaller* kernel runs
+  **cooler**, not hotter (R=4 → 78.7°, R=12.75 → 93.2°), because a small hot spot loses more
+  laterally into cold ground. The continuous still↔moving crossfade degrades gracefully where
+  a discrete flip does not.
+- **THE SHADE (hover to block light).** Its idle state is "shaded" — a cursor parked over the
+  board is always still, so going to make tea starves the town with a famine nobody performed.
+- **A seventh genome locus.** `genome` is flat and per-kin-strided and `fromJSON` does a bare
+  `.set()`, so adding a locus misaligns every kin after the first and randomly reassigns every
+  hide band, lifespan, brood, temper and marrow allele in the colony. Needs its own commit.
+- **A tray, a hotbar, or any inventory.** A fixed strip of pickable tools is a mode selector,
+  and putting TAKE in it turns the pivot of the theology into a button.
+- **Any tally of taken against given.** That is an alignment bar with the adjectives filed
+  off. The sanctioned alignment display is a TEXTURE, not a total: render `worn`, the scorch
+  and the water stain live, store nothing, count nothing.
+
+### Still open
+
+**THE CRUMB** (give) and **DAD'S CORNER** (move the world) are specified and unbuilt — they
+are the other two powers, and both hang off the same press-and-drag on an object lying at
+world scale, gated on the sheet being off so they are paid for in drought and cold. The
+7th WORKS row, *"the mark"* (inventor gate = `k.saw > 0.5` near a recorded lift, then the
+unmodified weave: invented → taught → decayed → lost → **tradition**), is the payoff that
+makes the take generate a religion, and it is not built either.
+
+---
+
 *Dirty Boy Devs. The jar runs, the tests are green, and nobody has told the player what they were.*
