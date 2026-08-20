@@ -86,7 +86,8 @@ serve.mjs       node serve.mjs 8460
 ## Tests
 
 ```
-node test-sim.mjs        # 40 tests: rng, world, blood, life, the hand, determinism, save, soak
+node test-sim.mjs        # 61 tests: rng, world, blood, life, the hand, the one who stays,
+                         #           determinism, save integrity, chronicle, soak
 node serve.mjs 8460 &    # then, with playwright installed:
 node test-view.mjs       # 19 checks: every verb, the inspector, the book, save/reload
 ```
