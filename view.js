@@ -363,9 +363,15 @@ export class View {
       sd = (Math.imul(sd, 1664525) + 1013904223) >>> 0;
       return sd / 4294967296;
     };
-    const ok = (x, y, hMin) => {
+    // ⚠️ dad built the town around the figures, not on top of them. Captured
+    // with the one who stays standing INSIDE a house, their glue just visible
+    // at the wall — which hides the one character the layout is about.
+    let keepX = -99, keepY = -99;
+    for (let i = 0; i < s.count; i++) if (s.k.alive[i] && s.k.glued[i]) { keepX = s.k.x[i]; keepY = s.k.y[i]; }
+    const ok = (x, y, hMin, clear = 0) => {
       const dx = x / (N - 1) - 0.5, dy = y / (N - 1) - 0.5;
       if (Math.sqrt(dx * dx + dy * dy) > 0.385) return false;
+      if (clear > 0 && Math.abs(x - keepX) < clear && Math.abs(y - keepY) < clear) return false;
       const i = y * N + x;
       return s.height[i] > s.pondLevel + hMin && s.water[i] < 0.002;
     };
@@ -385,7 +391,7 @@ export class View {
       const ang = rnd() * Math.PI * 2, rr2 = 3.5 + rnd() * 5.5;
       const x = Math.round(s.hearth.x + Math.cos(ang) * rr2);
       const y = Math.round(s.hearth.y + Math.sin(ang) * rr2);
-      if (x < 1 || y < 1 || x > N - 2 || y > N - 2 || !ok(x, y, 0.08)) continue;
+      if (x < 1 || y < 1 || x > N - 2 || y > N - 2 || !ok(x, y, 0.08, 3.2)) continue;
       const w = 0.048 + rnd() * 0.02, hgt = 0.032 + rnd() * 0.014;
       const house = new THREE.Group();
       const wallsM = new THREE.Mesh(new THREE.BoxGeometry(w, hgt, w * 0.92),
@@ -408,7 +414,7 @@ export class View {
     let trees = 0; tries = 0;
     while (trees < 14 && tries++ < 300) {
       const x = (2 + rnd() * (N - 4)) | 0, y = (2 + rnd() * (N - 4)) | 0;
-      if (!ok(x, y, 0.05)) continue;
+      if (!ok(x, y, 0.05, 1.8)) continue;
       const th = 0.040 + rnd() * 0.034;
       const tree = new THREE.Group();
       const cone = new THREE.Mesh(new THREE.ConeGeometry(th * 0.34, th, 7),
@@ -550,13 +556,21 @@ export class View {
     // a fixed offset either floats or sinks under the ground and depth-fails.
     const gc = document.createElement('canvas'); gc.width = gc.height = 64;
     const gg = gc.getContext('2d');
-    const grd = gg.createRadialGradient(32, 32, 2, 32, 32, 32);
-    grd.addColorStop(0, 'rgba(228,186,96,0.92)');
-    grd.addColorStop(0.55, 'rgba(198,150,62,0.55)');
-    grd.addColorStop(1, 'rgba(170,124,48,0)');
+    // ⚠️ captured as a washed-out grey speck at first — a hard amber core with
+    // a wet-looking rim reads as a dried drop of glue; a soft gradient does not
+    const grd = gg.createRadialGradient(32, 32, 1, 32, 32, 31);
+    grd.addColorStop(0, 'rgba(255,214,122,0.98)');
+    grd.addColorStop(0.40, 'rgba(236,178,74,0.95)');
+    grd.addColorStop(0.74, 'rgba(198,140,52,0.72)');
+    grd.addColorStop(0.92, 'rgba(160,108,38,0.30)');
+    grd.addColorStop(1, 'rgba(140,94,32,0)');
     gg.fillStyle = grd; gg.fillRect(0, 0, 64, 64);
+    // a bright fleck where the lamp catches the hardened surface
+    const sh = gg.createRadialGradient(24, 23, 0, 24, 23, 9);
+    sh.addColorStop(0, 'rgba(255,246,214,0.85)'); sh.addColorStop(1, 'rgba(255,246,214,0)');
+    gg.fillStyle = sh; gg.fillRect(10, 9, 30, 30);
     this.glue = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.062, 0.062),
+      new THREE.PlaneGeometry(0.105, 0.105),
       new THREE.MeshBasicMaterial({
         map: new THREE.CanvasTexture(gc), transparent: true, depthWrite: false,
         polygonOffset: true, polygonOffsetFactor: -5, polygonOffsetUnits: -5,
