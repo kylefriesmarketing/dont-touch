@@ -652,6 +652,68 @@ t('a restored town keeps building the same way', () => {
   eq(b2.fingerprint(), a2.fingerprint(), 'two restores of one save diverged');
 });
 
+// --- the town remembers the hand (bible §6.4 / §9) --------------------------
+console.log('memory of the hand');
+const MEM = (() => {
+  const s = new Sim({ seed: 'bat0' });
+  run(s, 90);
+  s.setHand(s.hearth.x, s.hearth.y);
+  run(s, 40);
+  return s;
+})();
+
+t('the finger writes a memory, and the sign is the KIN’S OWN', () => {
+  // ⚠️ THE HEADLINE. One press, one tick, and the same warmth is remembered as
+  // good by a bloodline whose comfort band contains it and as bad by one it
+  // overshoots. Measured: plain (18-32) 0% bad, rime (6-21, lethal 34) 53% bad.
+  // Never assert this on DISTANCE — kin cluster around food and water and it
+  // drowns the signal. The memory itself is the thing under test.
+  const by = {};
+  for (let id = 0; id < MEM.count; id++) {
+    if (!MEM.k.alive[id] || MEM.k.memV[id] === 0) continue;
+    const g = MEM.k.genome.subarray(id * LOCI.length * 2, (id + 1) * LOCI.length * 2);
+    const h = expressed(g, L.hide);
+    (by[h] || (by[h] = [])).push(MEM.k.memV[id]);
+  }
+  ok(Object.keys(by).length > 0, 'nobody remembers the hand at all');
+  const mean = (a) => a.reduce((x, y) => x + y, 0) / a.length;
+  if (by.plain && by.rime) {
+    ok(mean(by.plain) > mean(by.rime),
+      `bloodlines did not diverge: plain ${mean(by.plain).toFixed(2)} vs rime ${mean(by.rime).toFixed(2)}`);
+    ok(by.rime.some(v => v < 0), 'no rime kin holds the warmth as harm');
+  }
+});
+t('the hand reaches the town’s own record', () => {
+  const kinds = ['scorch', 'drought', 'nonight', 'warmth', 'placename'];
+  ok(MEM.chronicle.some(e => kinds.includes(e.kind)), 'the hand never appears in the book');
+});
+t('the town has no word for the player', () => {
+  // P3: cruelty is simulated and visible, and NEVER addressed. If a line ever
+  // says "you", the game has started telling the player what they are.
+  for (const s of [MEM, fixture('page', 240), W.s]) {
+    for (const e of s.chronicle) {
+      ok(!/\byou(r|rs)?\b/i.test(e.text), `the record spoke to the player: "${e.text}"`);
+    }
+  }
+});
+t('memory round-trips, and a remembering town continues identically', () => {
+  let held = 0;
+  for (let i = 0; i < MEM.count; i++) if (MEM.k.alive[i] && MEM.k.memV[i] !== 0) held++;
+  ok(held > 0, 'nothing to round-trip');
+  saveEqual(MEM, 'memory');
+  const r = Sim.fromJSON(JSON.parse(JSON.stringify(MEM.toJSON())));
+  eq(r.fingerprint(), MEM.fingerprint(), 'fingerprint');
+  eq(JSON.stringify(r.placeNames), JSON.stringify(MEM.placeNames), 'place names');
+  const a2 = clone(MEM), b2 = clone(MEM);
+  a2.setHand(a2.hearth.x, a2.hearth.y); b2.setHand(b2.hearth.x, b2.hearth.y);
+  run(a2, 15); run(b2, 15);
+  eq(b2.fingerprint(), a2.fingerprint(), 'two remembering towns diverged');
+});
+t('the same hand on the same seed writes the same memory', () => {
+  const mk = () => { const s = new Sim({ seed: 'handdet' }); run(s, 30); s.setHand(20 * S, 20 * S); run(s, 20); s.setHand(null); run(s, 10); return s; };
+  eq(mk().fingerprint(), mk().fingerprint(), 'a scripted hand was not deterministic');
+});
+
 // --- soak ------------------------------------------------------------------
 console.log('soak');
 t('4 seeds x 112 days, zero errors', () => {

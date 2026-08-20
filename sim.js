@@ -260,6 +260,12 @@ export class Sim {
       glued: new Uint8Array(K), tender: new Int32Array(K),
       // which practices this one carries in its head — a bitmask over WORKS
       knows: new Uint8Array(K),
+      // ⚠️ WHAT THEY REMEMBER OF THE HAND. memV is SIGNED and the sign is
+      // decided by their OWN comfort band, never by a rule about what the
+      // player did — so a single press writes gratitude into one bloodline and
+      // terror into another in the same tick. That contradiction is the seed
+      // §9's schism needs and it costs one comparison. Inside `k`, so free.
+      memX: new Float32Array(K), memY: new Float32Array(K), memV: new Float32Array(K),
     };
     this.names = [];           // nameId -> string
     this.free = [];            // free kin slots
@@ -268,6 +274,11 @@ export class Sim {
     // ⚠️ works and prac live on `this`, not in `k`, so unlike every per-kin
     // array they do NOT round-trip for free — they are written into toJSON and
     // read back in fromJSON by hand, and covered by saveEqual.
+    // what happened WHERE, coarsely — and the names the town gives places once
+    // enough different kin have felt strongly enough about them. Purely
+    // mechanical: frequency x magnitude x distinct kin. Never a judgement.
+    this.placeMem = {};        // coarse cell -> {v, ids:[nameId], n}
+    this.placeNames = {};      // coarse cell -> a word in their own language
     this.works = [];           // what stands on the board {kind,x,y,prog,by,day,stock}
     this.prac = WORKS.map(() => ({ invented: -1, inventor: -1, inventorGone: -1,
                                    lost: -1, tradition: -1, reinvented: 0, tries: 0 }));
@@ -477,6 +488,7 @@ export class Sim {
     k.born[id] = this.day; k.mother[id] = mo; k.father[id] = fa;
     k.nameId[id] = -1; k.gen[id] = gen;
     k.glued[id] = 0; k.tender[id] = -1; k.knows[id] = 0;
+    k.memX[id] = -1; k.memY[id] = -1; k.memV[id] = 0;
     for (let j = 0; j < G; j++) k.genome[id * G + j] = genome[j];
     const span = SPAN_DAYS[expressed(genome, L.span)];
     const homo = marrowHomozygous(genome);
@@ -681,6 +693,23 @@ export class Sim {
       const st = k.stage[id];
       const rate = st === STAGE.EGG ? 0 : st === STAGE.NIB ? 0.22 : st === STAGE.HALF ? 0.8 : 1;
       if (rate > 0) for (let n = 0; n < NN; n++) k.need[base + n] = Math.max(0, k.need[base + n] - C.DECAY[NEEDS[n]] * dt * rate);
+
+      // ⚠️ THE TOWN REMEMBERS THE HAND. Written here because this is where the
+      // kin's own comfort has just been computed — the sign has to come from
+      // their body, not from what the player intended.
+      if (this.hand && st !== STAGE.EGG) {
+        const hdx = this.hand.x - k.x[id], hdy = this.hand.y - k.y[id];
+        const hr = C.HAND_RADIUS * 1.4;
+        if (hdx * hdx + hdy * hdy < hr * hr) {
+          let v;
+          if (T >= band[0] && T <= band[1]) v = 1;                          // this is good ground now
+          else if (T > band[1]) v = -Math.min(1, (T - band[1]) / Math.max(1, band[3] - band[1]));
+          else v = -0.5 * Math.min(1, (band[0] - T) / Math.max(1, band[0] - band[2]));
+          k.memV[id] += (v - k.memV[id]) * dt * 3.4;
+          if (Math.abs(v) >= Math.abs(k.memV[id]) * 0.9) { k.memX[id] = this.hand.x; k.memY[id] = this.hand.y; }
+          this._placeFelt(this.hand.x, this.hand.y, v * dt * 3.4, k.nameId[id]);
+        }
+      }
 
       // warmth is not a decay, it's a reading of where you are standing —
       // and a windbreak is a warm place that is not the finger
@@ -1072,6 +1101,22 @@ export class Sim {
                          score: 1.15 / (1 + w.d * 0.05 / S) });
     }
 
+    // ⚠️ MEMORY BIASES WHERE THEY CHOOSE TO GO — it cannot weight paths,
+    // because _move walks a straight line at tx,ty and there are no routes to
+    // weight. Biasing the choice is enough: what the player eventually notices
+    // is that the town has stopped using a place, and nothing ever told them.
+    if (k.memV[id] !== 0 && k.memX[id] >= 0) {
+      const mv = k.memV[id], mx = k.memX[id], my = k.memY[id], MR = 6 * S;
+      const mul = Math.max(0.3, Math.min(1.6, 1 + mv * 0.6));
+      for (const c of cand) {
+        const ddx = c.tx - mx, ddy = c.ty - my;
+        if (ddx * ddx + ddy * ddy > MR * MR) continue;
+        c.score *= mul;
+      }
+      // a place that was kind to them is somewhere to go back to
+      if (mv > 0.4) cand.push({ goal: 3, tx: mx, ty: my, score: deficit(0) * mv * 1.7 });
+    }
+
     if (!cand.length) {
       k.goal[id] = 0;
       k.tx[id] = k.glued[id] ? x : x + rr(rng, -4 * S, 4 * S);
@@ -1366,7 +1411,52 @@ export class Sim {
     }
   }
 
+  // ⚠️ THE HAND HAS NEVER ONCE APPEARED IN THE TOWN'S OWN RECORD, and the book
+  // is what P2 says the whole game is for. These fire from MEASURED WORLD STATE,
+  // never from a setter — the town has no word for the player, so it reports
+  // ground and weather. Nothing here may ever say 'you'.
+  _handBeats() {
+    const k = this.k, N = this.N;
+    const since = (key, days) => {
+      if (this._beat == null) this._beat = {};
+      if (this.day - (this._beat[key] == null ? -999 : this._beat[key]) < days) return false;
+      this._beat[key] = this.day; return true;
+    };
+    // SCORCH — ground that has been cooked past anything's tolerance
+    let hot = 0;
+    for (let i = 0; i < N * N; i += 3) if (this.temp[i] > 54 && this.moss[i] < 0.02) hot++;
+    if (hot > 26 && since('scorch', 14)) {
+      this.log('scorch', `nothing grows on that ground any more.`, 5.0);
+    }
+    // COVER — the air stops giving its water back
+    if (this.lid && this.humid < 2.2 * S * S && since('cover', 20)) {
+      this.log('drought', `the air stopped giving anything back.`, 5.0);
+    }
+    // LIGHT — a night that never came
+    if (this.lampOn && this.curtain > 0.55 && since('light', 18)) {
+      this.log('nonight', `the light did not go down, and nobody rested well.`, 4.2);
+    }
+    // WARM — they went TO the warm ground, which is the kind version
+    let drawn = 0;
+    for (let id = 0; id < this.count; id++) {
+      if (!k.alive[id] || k.goal[id] !== 3 || k.memV[id] <= 0.35) continue;
+      drawn++;
+    }
+    if (drawn >= Math.max(4, this.alive * 0.18) && since('warmdrawn', 16)) {
+      this.log('warmth', `the ground came up warm on one side, and they went to it.`, 4.4);
+    }
+  }
+
   _daily() {
+    const k = this.k;
+    // what they felt fades, but slowly — and the strongest thing that ever
+    // happened to somebody is the last of it to go
+    for (let id = 0; id < this.count; id++) {
+      if (!k.alive[id]) continue;
+      k.memV[id] *= 0.994;
+      if (Math.abs(k.memV[id]) < 0.004) { k.memV[id] = 0; k.memX[id] = -1; k.memY[id] = -1; }
+    }
+    this._handBeats();
     // seasonal room temperature from the real calendar is applied by the view via setRoom()
     if (this.alive === 0 && !this._ended) {
       this._ended = true;
@@ -1374,8 +1464,29 @@ export class Sim {
     }
   }
 
+  // coarse cell — places are neighbourhoods, not pixels
+  _coarse(x, y) { const c = Math.max(2, Math.round(8 * S)); return ((y / c) | 0) * 999 + ((x / c) | 0); }
+
+  // ⚠️ PURELY MECHANICAL. Frequency x magnitude x distinct kin, and no lookup
+  // anywhere asks whether what happened was good or bad. The town names a fact.
+  _placeFelt(x, y, dv, nameId) {
+    const key = this._coarse(x, y);
+    let p = this.placeMem[key];
+    if (!p) p = this.placeMem[key] = { v: 0, ids: [], n: 0 };
+    p.v += dv;
+    if (nameId >= 0 && p.ids.length < 12 && !p.ids.includes(nameId)) { p.ids.push(nameId); p.n++; }
+    if (!this.placeNames[key] && Math.abs(p.v) > 2.4 && p.n >= 3) {
+      const nm = coinName(this.lang, this.rng);
+      this.placeNames[key] = nm;
+      this.log('placename', `they have started calling that ground ${nm}.`, 4.5);
+    }
+  }
+
   placeName(i) {
     const N = this.N, x = i % N, y = (i / N) | 0;
+    // somewhere enough of them felt enough about has its own word now
+    const named = this.placeNames[this._coarse(x, y)];
+    if (named) return named;
     const dp = Math.abs(x - this.pond.x) + Math.abs(y - this.pond.y);
     const dy_ = Math.abs(x - this.yard.x) + Math.abs(y - this.yard.y);
     if (this.water[i] > 0.02) return 'water';
@@ -1465,11 +1576,13 @@ export class Sim {
     mix(this.names.length); mix(this.works.length);
     for (const o of this.works) { mix(o.kind); mix(o.x); mix(o.y); mix(o.prog); mix(o.stock || 0); }
     for (const p of this.prac) { mix(p.invented); mix(p.lost); mix(p.tradition); mix(p.reinvented); }
+    for (const key of Object.keys(this.placeNames).sort()) mix(key.length + this.placeNames[key].length);
     mix(this.humid); mix(this.rainLeft); mix(this.curtain); mix(this.lid ? 1 : 0); mix(this.lampOn ? 1 : 0);
     for (let id = 0; id < this.count; id++) {
       if (!k.alive[id]) continue;
       mix(k.x[id]); mix(k.y[id]); mix(k.age[id]); mix(k.stage[id]); mix(k.strain[id]);
       mix(k.nameId[id]); mix(k.glued[id]); mix(k.tender[id]); mix(k.goal[id]); mix(k.knows[id]);
+      mix(k.memX[id]); mix(k.memY[id]); mix(k.memV[id]);
       for (let j = 0; j < G; j++) mix(k.genome[id * G + j]);
       for (let n = 0; n < NN; n++) mix(k.need[id * NN + n]);
     }
@@ -1483,6 +1596,7 @@ export class Sim {
       count: this.count, free: this.free.slice(), names: this.names.slice(),
       graves: this.graves, corpses: this.corpses, stats: this.stats,
       works: this.works, prac: this.prac,
+      placeMem: this.placeMem, placeNames: this.placeNames,
       // keep the opening AND the recent past — see HEAD_KEEP in log()
       chronicle: this.chronicle.length <= 600 ? this.chronicle.slice()
         : this.chronicle.slice(0, HEAD_KEEP).concat(this.chronicle.slice(-(600 - HEAD_KEEP))),
@@ -1521,6 +1635,8 @@ export class Sim {
     s.graves = o.graves; s.corpses = o.corpses; s.stats = o.stats;
     s.works = o.works || [];
     if (o.prac) s.prac = o.prac;
+    s.placeMem = o.placeMem || {};
+    s.placeNames = o.placeNames || {};
     s.chronicle = o.chronicle; s.curtain = o.curtain; s.lampOn = o.lampOn;
     s.lid = o.lid; s.humid = o.humid; s.rainLeft = o.rainLeft; s.fog = o.fog || 0;
     s.ambientBase = o.ambientBase != null ? o.ambientBase : C.AMBIENT_BASE;

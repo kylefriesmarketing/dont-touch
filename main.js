@@ -160,7 +160,10 @@ class App {
       const tilting = e.button === 2 || e.shiftKey;
       if (tilting) { mode = 'tilt'; this.tilt0 = { x: s.tilt.x, y: s.tilt.y }; return; }
       const hit = v.pickGround(nx, ny);
-      if (hit) { mode = 'warm'; s.setHand(hit.cell[0], hit.cell[1]); this.sfx.touch(); }
+      if (hit) {
+        mode = 'warm'; s.setHand(hit.cell[0], hit.cell[1]); this.sfx.touch();
+        v.flinch(hit.cell[0], hit.cell[1]);
+      }
       else mode = 'orbit';
     });
 
@@ -240,6 +243,8 @@ class App {
       k.hold[id] = 0;
     }
     s.log('tap', 'the whole world knocked, once, and every one of them stopped.', 2.4);
+    // they flinch as one body, then come apart into individuals again
+    this.view.flinch((s.N - 1) / 2, (s.N - 1) / 2);
   }
 
   // -- loop ----------------------------------------------------------------

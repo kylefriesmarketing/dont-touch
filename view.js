@@ -264,6 +264,47 @@ export class View {
     this.jar.add(under);
   }
 
+  // ⚠️ THE ALARM CHORD (bible §4.2). `k.phase` is set once at spawn and never
+  // changes, so the colony has always been permanently, statically out of sync
+  // — every lantern breathing to its own clock forever. When the board is
+  // struck they should flinch AS ONE BODY and then slowly come apart into
+  // individuals again, and that is the clearest statement the game can make
+  // that they noticed. Deliberately view-side: this reads sim state and writes
+  // none, so determinism and the save are untouched.
+  flinch(cx, cy) {
+    const s = this.sim, k = s.k;
+    if (!this.phase) return;
+    for (let id = 0; id < s.count; id++) {
+      if (!k.alive[id]) continue;
+      const d = Math.hypot(k.x[id] - cx, k.y[id] - cy);
+      // near the touch they snap together hard; far off it only ripples
+      const pull = Math.max(0, 1 - d / (26 * S));
+      if (pull <= 0) continue;
+      this.phase[id] += (this.chordPhase - this.phase[id]) * pull * 0.92;
+    }
+  }
+
+  _tickPhases(dt) {
+    const s = this.sim, k = s.k;
+    if (!this.phase) {
+      this.phase = new Float32Array(k.phase.length);
+      this.phase.set(k.phase);
+      this.chordPhase = 0;
+    }
+    this.chordPhase = (this.chordPhase + dt * 0.21) % 1;
+    // and then they drift apart again, because no two of them are the same
+    for (let id = 0; id < s.count; id++) {
+      if (!k.alive[id]) continue;
+      if (this.phase[id] === 0 && k.phase[id] !== 0) this.phase[id] = k.phase[id];
+      // ⚠️ this coefficient is the whole second half of the effect. At 0.030 the
+      // spread in pulse rates was too small to pull them apart again and they
+      // stayed locked together after a flinch (measured: sync 0.43 -> 0.45 over
+      // twenty seconds, when it should fall back toward 0.12). They have to
+      // become a crowd of individuals again or the chord means nothing.
+      this.phase[id] = (this.phase[id] + dt * (k.pulse[id] - 0.4) * 0.14) % 1;
+    }
+  }
+
   // -- what the town has made ------------------------------------------------
   // ⚠️ GLASSBOX: the thing on the board IS the agent's activity, never an
   // illustration of it. A work rises out of the ground as its `prog` rises, so
@@ -805,7 +846,7 @@ export class View {
   // the one-who-stays path must light identically
   _paintLantern(id, n, x, y, z, sz, grow, st) {
     const s = this.sim, k = s.k;
-    const pulse = 0.72 + 0.28 * Math.sin(this.t * k.pulse[id] * 6.28);
+    const pulse = 0.72 + 0.28 * Math.sin((this.t * k.pulse[id] + (this.phase ? this.phase[id] : k.phase[id])) * 6.28);
     const b = k.bright[id] * pulse;
     this._col.setHSL(k.hue[id] / 360, st === STAGE.EGG ? 0.45 : 0.92, 0.22 + b * 0.34);
     const o = n * 3;
@@ -825,7 +866,7 @@ export class View {
       const sz = k.size[id] * grow;
 
       // gait: a squash-and-stretch bob. View-only, so Math.sin is fine here.
-      const ph = this.t * (2.2 + k.pulse[id] * 0.5) + k.phase[id] * 6.28;
+      const ph = this.t * (2.2 + k.pulse[id] * 0.5) + (this.phase ? this.phase[id] : k.phase[id]) * 6.28;
       const moving = Math.abs(k.tx[id] - k.x[id]) + Math.abs(k.ty[id] - k.y[id]) > 0.5 && st !== STAGE.EGG;
       const bob = moving ? Math.abs(Math.sin(ph)) : 0.5 + Math.sin(ph * 0.35) * 0.08;
       const sq = 1 + (moving ? Math.sin(ph * 2) * 0.16 : Math.sin(ph * 0.5) * 0.04);
@@ -1005,6 +1046,7 @@ export class View {
     this.jar.rotation.z = -s.tilt.x * 2.6;
     this.jar.rotation.x = s.tilt.y * 2.6;
 
+    this._tickPhases(dt);
     this._paintSky();
     this._paintGround();
     this._paintWater();
