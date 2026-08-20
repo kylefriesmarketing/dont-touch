@@ -50,7 +50,12 @@ export const C = {
   TICKS_PER_DAY: 900,    // 60 real seconds per in-game day at 1x
   CAP: 400,              // max kin
 
-  AMBIENT_BASE: 19.0,    // the room, degrees
+  // The basement, degrees. ⚠️ A TRUE CONSTANT — never assign to it. The room's
+  // real temperature follows the calendar and lives on the Sim instance as
+  // `ambientBase`; main.js used to write the season into this shared object,
+  // which meant the same seed generated a different world in January than in
+  // July. Worldgen fills from this fixed value so a seed is a world, forever.
+  AMBIENT_BASE: 19.0,
   SUN_GAIN: 9.0,         // full curtain-open sun adds this at the sunward side
   HAND_HEAT: 150.0,      // the finger's own heat, before the glass takes its cut
   HAND_K: 0.010,         // how fast the glass accepts it — this is the 4-8s lag (§3.1)
@@ -227,9 +232,17 @@ export class Sim {
     this.curtain = 0.75;       // 0 = closed, 1 = open
     this.lampOn = false;
 
+    // the basement's own temperature — set from the real calendar by main.js,
+    // kept OFF the shared constants object so a seed is always the same world
+    this.ambientBase = opts.ambientBase != null ? opts.ambientBase : C.AMBIENT_BASE;
+
     this.tick = 0;
     this.day = 0;
     this.dayFrac = 0;
+    // these are computed at the end of every _kin() pass, but the HUD, the save
+    // and the audio all read them before the first tick ever runs
+    this.alive = 0;
+    this.wellbeing = 0;
 
     this._genWorld();
     // ⚠️⚠️ `||` MEANT `founders: 0` SPAWNED FOURTEEN. Sim.fromJSON restores into
@@ -438,7 +451,7 @@ export class Sim {
 
   // -- the day ---------------------------------------------------------------
   get ambient() {
-    return C.AMBIENT_BASE + (this.lampOn ? 1.6 : 0);
+    return this.ambientBase + (this.lampOn ? 1.6 : 0);
   }
   get daylight() {
     // one day = one sine of light; curtain scales it; lamp puts a floor under night
@@ -1176,7 +1189,7 @@ export class Sim {
       // keep the opening AND the recent past — see HEAD_KEEP in log()
       chronicle: this.chronicle.length <= 600 ? this.chronicle.slice()
         : this.chronicle.slice(0, HEAD_KEEP).concat(this.chronicle.slice(-(600 - HEAD_KEEP))),
-      curtain: this.curtain, lampOn: this.lampOn, lid: this.lid,
+      curtain: this.curtain, lampOn: this.lampOn, lid: this.lid, ambientBase: this.ambientBase,
       humid: this.humid, rainLeft: this.rainLeft, fog: this.fog,
       fields: {
         height: Array.from(this.height), temp: Array.from(this.temp),
@@ -1208,6 +1221,7 @@ export class Sim {
     s.graves = o.graves; s.corpses = o.corpses; s.stats = o.stats;
     s.chronicle = o.chronicle; s.curtain = o.curtain; s.lampOn = o.lampOn;
     s.lid = o.lid; s.humid = o.humid; s.rainLeft = o.rainLeft; s.fog = o.fog || 0;
+    s.ambientBase = o.ambientBase != null ? o.ambientBase : C.AMBIENT_BASE;
     s.pond = o.pond; s.yard = o.yard; s.hearth = o.hearth || o.yard; s.lang = o.lang;
     if (o.narr) {
       s._hatches = o.narr.hatches || 0;
@@ -1224,8 +1238,10 @@ export class Sim {
     if (o.rngState) { s.rng.setState(o.rngState[0]); s.rngWeather.setState(o.rngState[1]); s.rngGene.setState(o.rngState[2]); }
     for (const key of ['height', 'temp', 'water', 'moss', 'moist']) s[key].set(o.fields[key]);
     for (const key of Object.keys(s.k)) if (o.k[key]) s.k[key].set(o.k[key]);
-    let alive = 0; for (let i = 0; i < s.count; i++) if (s.k.alive[i]) alive++;
+    let alive = 0, sumB = 0;
+    for (let i = 0; i < s.count; i++) if (s.k.alive[i]) { alive++; sumB += s.k.bright[i]; }
     s.alive = alive;
+    s.wellbeing = alive ? sumB / alive : 0;   // the audio reads this on frame one
     return s;
   }
 }

@@ -547,6 +547,24 @@ t('the founding survives a very long life', () => {
   ok(r.chronicle.some(e => e.kind === 'open'), 'the book deleted its own first page');
 });
 
+t('a seed is the same world whatever month it is', () => {
+  // ⚠️ main.js used to write the season into the shared C object, so the same
+  // seed grew a different town in January than in July.
+  const jan = new Sim({ seed: 'season', ambientBase: 12.5 });
+  const jul = new Sim({ seed: 'season', ambientBase: 24.5 });
+  for (let i = 0; i < jan.N * jan.N; i++) eq(jan.height[i], jul.height[i], 'terrain differs by month');
+  eq(JSON.stringify(jan.pond), JSON.stringify(jul.pond), 'pond differs by month');
+  eq(JSON.stringify(jan.hearth), JSON.stringify(jul.hearth), 'hearth differs by month');
+  ok(jan.ambient < jul.ambient, 'the basement is not colder in winter');
+});
+t('the room temperature round-trips', () => {
+  const s = new Sim({ seed: 'amb', ambientBase: 14.25 });
+  run(s, 6);
+  const r = Sim.fromJSON(JSON.parse(JSON.stringify(s.toJSON())));
+  eq(r.ambientBase, 14.25, 'ambientBase');
+  saveEqual(s, 'ambient');
+});
+
 // --- soak ------------------------------------------------------------------
 console.log('soak');
 t('4 seeds x 112 days, zero errors', () => {

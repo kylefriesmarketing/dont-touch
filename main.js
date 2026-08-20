@@ -62,9 +62,22 @@ class App {
 
     let away = 0;
     if (saved) {
-      this.sim = Sim.fromJSON(saved.state);
-      away = Math.min(Date.now() - (saved.at || Date.now()), 24 * 3600e3);
-    } else {
+      // ⚠️ A HALF-WRITTEN SAVE USED TO BE A PERMANENT LOCKOUT. fromJSON throws
+      // on a missing `k` or `fields`, boot() had no guard, and the outer handler
+      // painted a raw TypeError over a game with no restart control anywhere in
+      // its UI — the player's only route back was clearing site data. Now the
+      // unreadable blob is set aside under its own key (so the 25s autosave
+      // cannot overwrite the evidence) and the town starts again.
+      try {
+        this.sim = Sim.fromJSON(saved.state);
+        away = Math.min(Date.now() - (saved.at || Date.now()), 24 * 3600e3);
+      } catch (e) {
+        console.warn('unreadable save, keeping it aside and starting over', e);
+        try { await put('save-broken', { at: Date.now(), why: String(e && e.message), state: saved.state }); } catch (e2) { /* nothing more we can do */ }
+        this.sim = null;
+      }
+    }
+    if (!this.sim) {
       const seed = params.get('seed') || String(Date.now() & 0xffffff);
       this.sim = new Sim({ seed, founders: 14 });
     }
@@ -93,7 +106,11 @@ class App {
     const doy = (d - new Date(d.getFullYear(), 0, 0)) / 864e5;
     const s = 0.5 - Math.cos((doy / 365) * Math.PI * 2) * 0.5;   // 0 = deep winter, 1 = midsummer
     this.sim.season = s;
-    C.AMBIENT_BASE = 12.5 + s * 12;
+    // ⚠️ this used to write into the shared C object, so the SEED no longer
+    // determined the world — the same seed grew a different town in January
+    // than in July. The room's temperature belongs to this colony, not to the
+    // module. (C.AMBIENT_BASE is a constant again; do not assign to it.)
+    this.sim.ambientBase = 12.5 + s * 12;
   }
 
   // "While you were away." Bounded by a compute budget, not by ambition. (§13.2)
