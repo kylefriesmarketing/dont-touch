@@ -7,6 +7,7 @@
 import * as THREE from './lib/three.module.js';
 import { STAGE, NEEDS, LANTERN_HUE, LOCI, L, expressed, S, C } from './sim.js';
 import { Post } from './post.js';
+import { hueOf } from './palette.js';
 
 const R = 1.0;
 const GR = R * 0.94;    // half-width of the scenery — the heightfield is square
@@ -70,10 +71,14 @@ export class View {
     this._graves();
     this._cover();
     this._dust();
+    this._handDisc();
 
     // the miniature look. Falls back to a plain render where WebGL2 is not
     // available, so nothing depends on it existing.
     this.post = new Post(this.renderer);
+    // view-only title dressing. NEVER mirror these into sim state.
+    this.titleDim = 0;          // 0 = the room as it is, 1 = dark at the bottom of the stairs
+    this.titleTo = 0;           // eased toward; the light comes on, it does not snap
     this._foc = new THREE.Vector3();
     this.focusY = 0.47;
 
@@ -147,6 +152,12 @@ export class View {
     this.key.intensity = 0.30 + d * 1.05;
     this.fill.intensity = 0.12 + d * 0.34;
     this.key.color.setRGB(1, 0.92 - d * 0.02, 0.78 + d * 0.04);
+    // the title screen: the room before anybody came downstairs. View-only, and
+    // applied last so it scales whatever the day had already decided.
+    if (this.titleDim > 0.001) {
+      const q = 1 - this.titleDim * 0.86;
+      this.hemi.intensity *= q; this.key.intensity *= q; this.fill.intensity *= q;
+    }
     // the lamp swings a little across the day so shadows are not painted on
     const ang = 0.55 + s.dayFrac * 1.9;
     this.key.position.set(Math.cos(ang) * 1.7, 1.6 + Math.sin(s.dayFrac * 3.14) * 1.1, Math.sin(ang) * 1.2);
@@ -848,6 +859,14 @@ export class View {
     // which was right for an unlit MeshBasicMaterial and doubles up the moment
     // real lights exist — the board went to mud. The renderer does the light.
     const s = this.sim, N = s.N, d = this.groundData;
+    // ⚠⚠ THE WARM FLOOR IS RELATIVE TO THE ROOM, AND IT HAS TO BE. A fixed 25°
+    // was tried and measured wrong: a settled board with the bulb OFF sits at
+    // 20.5°, but with the bulb ON it sits at 23.8° — and a hand resting on that
+    // warmer board lifts EVERY ONE of the 9,216 cells past 25, so the whole
+    // layout lit up as 'touched'. The room's own baseline moves with the bulb,
+    // the window and the month, so a constant can only ever be right for one of
+    // them. This is the same number _thermal relaxes toward, plus a margin.
+    const warmFloor = s.ambient + s.daylight * C.SUN_GAIN + 3;
     for (let y = 0; y < N; y++) {
       for (let x = 0; x < N; x++) {
         const i = y * N + x;
@@ -894,6 +913,20 @@ export class View {
           const pr = Math.min(0.55, fpv);
           r = r * (1 - pr) + 84 * pr; g = g * (1 - pr) + 74 * pr; b = b * (1 - pr) + 60 * pr;
         }
+        // ⚠⚠ THE KIND HALF OF THE FINGER USED TO RENDER AS NOTHING AT ALL.
+        // The only ground tints were scorch above 40° and frost below 8° — but
+        // every comfort band in the game tops out under 40 (plain [18,32], ash
+        // [26,41], rime [6,21], slick [20,34]). So a hand resting at a perfectly
+        // kind 33° changed the board by literally zero pixels, and the FIRST
+        // feedback anybody ever got about their own hand was a burn mark. Half a
+        // verb was invisible.
+        //
+        // The floor is hoisted above and is relative to the room — see there.
+        //
+        // It is deliberately a PALE, DRY lift rather than more of the scorch's
+        // saturated orange: warming a place and cooking it have to read as two
+        // different events, not as two amounts of one.
+        if (T > warmFloor) { const wv = Math.min(1, (T - warmFloor) / 9); r += wv * 40; g += wv * 21; b += wv * 4; }
         // the finger's mark: scorch, then heat glow
         if (T > 40) { const h = Math.min(1, (T - 40) / 45); r += h * 150; g += h * 46; b -= h * 20; }
         if (T < 8) { const c2 = Math.min(1, (8 - T) / 18); r += c2 * 20; g += c2 * 34; b += c2 * 62; }
@@ -1054,7 +1087,11 @@ export class View {
     const s = this.sim, k = s.k;
     const pulse = 0.72 + 0.28 * Math.sin((this.t * k.pulse[id] + (this.phase ? this.phase[id] : k.phase[id])) * 6.28);
     const b = k.bright[id] * pulse;
-    this._col.setHSL(k.hue[id] / 360, st === STAGE.EGG ? 0.45 : 0.92, 0.22 + b * 0.34);
+    // ⚠️ the palette remap happens HERE and nowhere else. k.hue is written by
+    // sim code and round-trips through the save and the fingerprint, so a
+    // colourblind palette must never touch it — two players on one seed have to
+    // agree about their town even when they see it differently.
+    this._col.setHSL(hueOf(k.hue[id]) / 360, st === STAGE.EGG ? 0.45 : 0.92, 0.22 + b * 0.34);
     const o = n * 3;
     this.lanternPos[o] = x; this.lanternPos[o + 1] = y + 0.024 * sz; this.lanternPos[o + 2] = z;
     this.lanternCol[o] = this._col.r; this.lanternCol[o + 1] = this._col.g; this.lanternCol[o + 2] = this._col.b;
@@ -1194,7 +1231,11 @@ export class View {
     }));
     this.cover.position.y = EDGE_Y + 0.03;
     this.jar.add(this.cover);
-    this.coverT = this.sim.lid ? 1 : 0;
+    // ⚠️ FIFTH SITE of the lid inversion — the initialiser, which the render
+    // loop then eases AWAY from. Flipping `want` without flipping this made the
+    // sheet start slid-off on a covered board and crawl back over it, which
+    // looks exactly like a slow-loading asset rather than a bug.
+    this.coverT = this.sim.lid ? 0 : 1;
 
     // their weather, visible: the haze that hangs over the town before rain
     this.fogMesh = new THREE.Mesh(
@@ -1219,6 +1260,79 @@ export class View {
       const i = y * N + x;
       g[i] = Math.min(1, g[i] + add);
     }
+  }
+
+
+  // -- THE CONTACT DISC ------------------------------------------------------
+  // ⚠️ THIS IS THE TUTORIAL FOR THE WHOLE FINGER, and it works only because it
+  // LEADS the simulation. The ground takes 4-8 seconds to accept heat (§3.1),
+  // so without a readout a player holding still has no way to know the hand has
+  // softened — they let go long before the kindness lands, and conclude the
+  // finger only ever burns. The disc is drawn from the SAME r and e that were
+  // just pushed into setHand, so it can never disagree with the kernel; it just
+  // arrives first.
+  //
+  // ⚠️ It is parented to `jar`, not `scene` — the disc belongs to the board and
+  // has to lift with it when the plywood comes off the sawhorses.
+  _handDisc() {
+    const SEG = 72;
+    const g = new THREE.BufferGeometry();
+    // a flat ring built directly in XZ. RingGeometry lives in XY, and laying it
+    // down with a rotation makes per-vertex terrain height a nightmare to apply.
+    const pos = new Float32Array(SEG * 2 * 3);
+    const idx = [];
+    for (let i = 0; i < SEG; i++) {
+      const j = (i + 1) % SEG;
+      idx.push(i * 2, i * 2 + 1, j * 2 + 1, i * 2, j * 2 + 1, j * 2);
+    }
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    g.setIndex(idx);
+    this.handDisc = new THREE.Mesh(g, new THREE.MeshBasicMaterial({
+      color: 0xffc98a, transparent: true, opacity: 0,
+      depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+    }));
+    this.handDisc.renderOrder = 8;
+    this.handDisc.frustumCulled = false;
+    this.jar.add(this.handDisc);
+    this._handWant = 0;          // opacity we are easing toward
+    this._handSeg = SEG;
+  }
+
+  // The lanterns are repainted from k.hue every single frame, so a palette
+  // change needs no invalidation — this exists so the settings code has one
+  // honest place to call, and so a future cached-colour optimisation has an
+  // obvious place to hook without hunting for callers.
+  repaintLanterns() { this._paletteDirty = true; }
+
+  // cx, cy in cells; r in cells; e is 0 (hot and narrow) … 1 (resting and wide)
+  setHandDisc(cx, cy, r, e) {
+    if (!this.handDisc) return;
+    if (cx == null) { this._handWant = 0; return; }
+    this._handWant = 1;
+    const N = this.sim.N, SEG = this._handSeg;
+    const pos = this.handDisc.geometry.attributes.position;
+    const cell2w = (GR * 2) / (N - 1);
+    const wx0 = (cx / (N - 1) - 0.5) * GR * 2;
+    const wz0 = (cy / (N - 1) - 0.5) * GR * 2;
+    const rw = r * cell2w;
+    // the band is thin when the hand is hot and hard, and soft when it is resting
+    const band = rw * (0.06 + 0.16 * e);
+    for (let i = 0; i < SEG; i++) {
+      const a = (i / SEG) * Math.PI * 2, ca = Math.cos(a), sa = Math.sin(a);
+      for (let k = 0; k < 2; k++) {
+        const rr = k === 0 ? rw - band : rw + band;
+        const wx = wx0 + ca * rr, wz = wz0 + sa * rr;
+        // ⚠️ ride the terrain. A level ring over hills either buries itself in a
+        // slope or floats off one — the same trap the track ring hit.
+        const gx = (wx / (GR * 2) + 0.5) * (N - 1);
+        const gy = (wz / (GR * 2) + 0.5) * (N - 1);
+        pos.setXYZ(i * 2 + k, wx, this._surfaceY(gx, gy) + 0.004, wz);
+      }
+    }
+    pos.needsUpdate = true;
+    // amber and open when resting; a small white-hot coal when it is not
+    this.handDisc.material.color.setHSL(
+      (0.055 + 0.020 * e), 0.55 + 0.35 * (1 - e), 0.52 + 0.16 * (1 - e));
   }
 
   // -- dust in the light -----------------------------------------------------
@@ -1280,6 +1394,15 @@ export class View {
     );
     this.camera.lookAt(0, 0.06, 0);
 
+    if (this.handDisc) {
+      const m = this.handDisc.material;
+      // in fast, out slow — a hand leaves a moment of afterglow, and a hard cut
+      // reads as a bug rather than as letting go
+      const want = this._handWant * (0.30 + 0.26 * Math.sin(this.t * 4.2));
+      m.opacity += (want - m.opacity) * Math.min(1, dt * (this._handWant ? 14 : 4));
+      this.handDisc.visible = m.opacity > 0.004;
+    }
+
     // lifting one edge of the board off the sawhorses
     this.jar.rotation.z = -s.tilt.x * 2.6;
     this.jar.rotation.x = s.tilt.y * 2.6;
@@ -1290,10 +1413,22 @@ export class View {
     this._paintWater();
     this._paintKin();
     this._paintGraves();
+    // the bulb warming up, rather than a cut to daylight
+    if (this.titleDim !== this.titleTo) {
+      this.titleDim += (this.titleTo - this.titleDim) * Math.min(1, dt * 1.6);
+      if (Math.abs(this.titleDim - this.titleTo) < 0.002) this.titleDim = this.titleTo;
+    }
+
     this._paintWorks();
 
     // the sheet slides off the board and slumps beside the track
-    const want = s.lid ? 1 : 0;
+    // ⚠⚠ THE COVER WAS DRAWN BACKWARDS TOO. ct === 1 slides the sheet OFF the
+    // board (see the position/scale below), and this asked for ct = 1 when
+    // `lid` was TRUE — but lid true means the sheet is ON. This is the fourth
+    // site of one inversion: the heat term, the vapour term, the narrator beat
+    // and now the thing you can actually see. They were consistent with each
+    // other and all four disagreed with the button and the help card.
+    const want = s.lid ? 0 : 1;
     this.coverT += (want - this.coverT) * Math.min(1, dt * 3.4);
     const ct = this.coverT;
     // pulled off, the sheet slides clear of the board and crumples beside it —
@@ -1344,6 +1479,8 @@ export class View {
         this.post.p.bandCenter = this.focusY;
       }
     }
+    if (this.post.enabled === false) this.postOn = false;
+    else if (this.post.enabled === true) this.postOn = true;
     if (this.postOn !== false && this.post.ok) this.post.render(this.scene, this.camera);
     else { this.renderer.setRenderTarget(null); this.renderer.render(this.scene, this.camera); }
   }

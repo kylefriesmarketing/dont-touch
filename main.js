@@ -5,6 +5,36 @@ import { Sim, C, STAGE } from './sim.js';
 import { View } from './view.js';
 import { UI } from './ui.js';
 import { Sfx } from './sfx.js';
+import { Gesture } from './gesture.js';
+
+// ⚠️ THE CONTACT CURVE. A still hand OPENS and COOLS; a moving one stays small
+// and hot. That single rule is the whole difference between comfort and a burn,
+// and it is why the game needs no sixth verb: resting and bearing down are the
+// same gesture at two rates.
+//
+// Measured on a settled board (4 days, seed 'law'): a resting hand holds the
+// ground at 32°, inside the comfort band of plain [18-32], ash [26-41] and
+// slick [20-34]. A moving one holds 86° at the centre, which is past every
+// lethal ceiling in the game — rime dies at 34, ash at 53. Before this, EVERY
+// touch ran at the moving number, which is why the finger only ever read as
+// cruel: there was no gentle setting to find.
+const HAND = {
+  restHeat: 40, hotHeat: 150,      // °, the finger's own temperature
+  restR: 1.50, hotR: 0.62,         // × C.HAND_RADIUS
+  cool: 1.7,                       // per second, toward resting, while still
+  warm: 5.0,                       // per second, back to hot, the moment it moves
+  // ⚠️ TWO THRESHOLDS, AND THE PIXEL ONE IS THE REAL ONE. Whether a hand is
+  // moving is a fact about the HAND, so it is measured in pixels: a finger
+  // resting on a capacitive screen wanders 1-3px continuously at 60Hz, so a
+  // tight threshold would make the game's KINDEST verb literally unreachable on
+  // a phone — every rest would classify as a stroke and stay at 150°.
+  // The cell threshold is the second gate, so that a big deliberate sweep still
+  // reads as drawing even when the camera is zoomed so far out that the whole
+  // stroke is only a few pixels.
+  stillPx: 7,                      // under this is jitter, not a stroke
+  stillCells: 2.5,                 // or a real move across the world, whichever first
+  moveHold: 0.22,                  // s — how long one movement keeps the hand "moving"
+};
 
 const SAVE_KEY = 'donttouch-save';        // the house contract summary (§21)
 const DB = 'donttouch', STORE = 'colony';
@@ -43,8 +73,11 @@ class App {
     this.speed = 1;
     this.acc = 0;
     this.last = performance.now();
-    this.paused = false;
+    this.paused = true;
+    this.phase = 'title';
     this.sfx = new Sfx();
+    this.gest = new Gesture();
+    this.touch = null;      // the live contact: {cx, cy, e} — e is 0 hot … 1 resting
   }
 
   async boot() {
@@ -90,14 +123,65 @@ class App {
     this.bindInput(canvas);
 
     document.getElementById('boot').classList.add('hide');
+    this.away = away;
+    this.showTitle(!!saved);
 
+    if (params.has('skiptitle')) this.enter();          // for the harness
     if (params.has('pause')) this.setSpeed(0);
-    if (away > 60e3) await this.catchUp(away);
 
     addEventListener('resize', () => this.view.resize());
     setInterval(() => this.save(), 25000);
     addEventListener('beforeunload', () => this.saveSummary());
     requestAnimationFrame(() => this.frame());
+  }
+
+  // ⚠️⚠️ THE TITLE IS A LOOK, NOT A STATE. It must NEVER call setLamp,
+  // setCurtain or setLid to make the room dark and the sheet drawn — all three
+  // are persistent world state inside toJSON AND the fingerprint, so a loaded
+  // colony would come back with its cover and its bulb silently rewritten by a
+  // screen the player never played. The darkness lives in view.titleDim and the
+  // sheet is simply whatever sim.lid already says. View-only, cleared by enter().
+  showTitle(hasSave) {
+    this.phase = 'title';
+    this.paused = true;
+    const t = document.getElementById('title');
+    t.classList.remove('hide', 'going');
+    if (this.view) { this.view.titleDim = 1; this.view.titleTo = 1; }
+    if (hasSave) {
+      document.getElementById('chainSay').textContent = 'pull the light back on';
+      document.getElementById('tsub').textContent =
+        'you left it in the dark. it did not stop while you were upstairs.';
+    }
+    document.getElementById('chain').onclick = () => this.enter(!hasSave);
+    document.getElementById('tBox').onclick = () => this.ui.showBox(true);
+    document.getElementById('tNew').onclick = async () => {
+      // ⚠️ a real town is being thrown away. There is no undo and the save is
+      // the only copy, so this asks — the one confirm in the whole game.
+      if (!confirm('start a new town? the one on the board now is not kept anywhere else.')) return;
+      await window.__G.wipe();
+    };
+  }
+
+  enter(fresh) {
+    if (this.phase === 'play') return;
+    this.phase = 'play';
+    const t = document.getElementById('title');
+    t.classList.add('going');
+    setTimeout(() => t.classList.add('hide'), 950);
+    // ⚠️ the room has to come BACK. Leaving titleDim at 1 here left the
+    // whole board sitting at 14% light for the rest of the session, which
+    // reads as a broken renderer rather than as a screen that forgot to lift.
+    this.view.titleTo = 0;
+    for (const id of ['strip', 'fascia', 'chronWrap']) document.getElementById(id).classList.remove('hide');
+    this.sfx.start();
+    // Pulling the chain turns the bulb on — that is what the chain IS, and it
+    // is the player's own hand doing it, so this one really is world state.
+    // ⚠️ only on a FRESH town. Somebody who deliberately left their town in
+    // the dark and came back would otherwise find a screen had overruled them.
+    if (fresh) this.sim.setLamp(true);
+    this.setSpeed(1);
+    this.ui.sync();
+    if (this.away > 60e3) { const a = this.away; this.away = 0; this.catchUp(a); }
   }
 
   // The window is a real window: the room is cold in January. (§11.4)
@@ -115,6 +199,9 @@ class App {
 
   // "While you were away." Bounded by a compute budget, not by ambition. (§13.2)
   async catchUp(ms) {
+    // ⚠️ a contact left open would be integrated across the ENTIRE burst below,
+    // which is up to 26 days of board with a finger on it.
+    this.sim.setHand(null); this.touch = null;
     const days = Math.min(26, ms / 3600e3 * 1.1);
     const target = Math.floor(days * C.TICKS_PER_DAY);
     if (target < 200) return;
@@ -153,6 +240,7 @@ class App {
     canvas.addEventListener('contextmenu', e => e.preventDefault());
 
     canvas.addEventListener('pointerdown', (e) => {
+      if (this.phase !== 'play') return;
       this.sfx.start();
       canvas.setPointerCapture(e.pointerId);
       down = true; moved = 0; sx = e.clientX; sy = e.clientY;
@@ -161,7 +249,14 @@ class App {
       if (tilting) { mode = 'tilt'; this.tilt0 = { x: s.tilt.x, y: s.tilt.y }; return; }
       const hit = v.pickGround(nx, ny);
       if (hit) {
-        mode = 'warm'; s.setHand(hit.cell[0], hit.cell[1]); this.sfx.touch();
+        mode = 'warm';
+        this.gest.start(e.clientX, e.clientY, performance.now());
+        // ⚠️ a fresh contact starts HOT. Landing on a town is a shock; staying
+        // still is what turns it into warmth. Do not start this at rest — the
+        // player would never feel the difference the holding makes.
+        this.touch = { cx: hit.cell[0], cy: hit.cell[1], e: 0, px: e.clientX, py: e.clientY };
+        this._pushHand();
+        this.sfx.touch();
         v.flinch(hit.cell[0], hit.cell[1]);
       }
       else mode = 'orbit';
@@ -183,9 +278,22 @@ class App {
         s.setTilt(this.tilt0.x + (dx * Math.cos(a) + dy * 0.0) * 0.9,
                   this.tilt0.y + (dy * 0.9 + dx * Math.sin(a) * 0.35));
       } else if (mode === 'warm') {
+        this.gest.move(e.clientX, e.clientY, performance.now());
         const hit = v.pickGround(nx, ny);
-        if (hit) {
-          s.setHand(hit.cell[0], hit.cell[1]);
+        if (hit && this.touch) {
+          const t = this.touch;
+          // ⚠️ measured in CELLS, not pixels. A pixel threshold means the same
+          // physical wobble counts as a stroke when the camera is zoomed in and
+          // as stillness when it is out — the hand would change meaning with the
+          // camera, which is not a thing a hand does.
+          const d = Math.hypot(hit.cell[0] - t.cx, hit.cell[1] - t.cy);
+          const dpx = Math.hypot(e.clientX - (t.px || e.clientX), e.clientY - (t.py || e.clientY));
+          t.cx = hit.cell[0]; t.cy = hit.cell[1]; t.px = e.clientX; t.py = e.clientY;
+          // ⚠️ a WINDOW, not a flag. Armed for a single frame, a slow careful
+          // drag cools between pointermove events and draws with a resting
+          // hand — the drawing verb would silently become the gentle one. The
+          // window also absorbs sparse pointermove on a loaded main thread.
+          if (dpx > HAND.stillPx || d > HAND.stillCells) t.moveT = HAND.moveHold;
           if (performance.now() - lastPrint > 260) { v.fingerprintAt(hit.cell[0], hit.cell[1]); lastPrint = performance.now(); }
         }
       }
@@ -198,7 +306,9 @@ class App {
         const [nx, ny] = norm(e);
         const hit = v.pickGround(nx, ny);
         if (hit) v.fingerprintAt(hit.cell[0], hit.cell[1]);
-        s.setHand(null);
+        s.setHand(null); this.touch = null;
+        if (v.setHandDisc) v.setHandDisc(null);
+        this.gest.end(performance.now());
         if (moved < 6) {                       // a tap, not a hold: try to select a kin
           const id = v.pickKin(nx, ny);
           this.ui.select(id);
@@ -218,19 +328,41 @@ class App {
 
     addEventListener('keydown', (e) => {
       if (e.repeat) return;
-      this.sfx.start();
+      // ⚠️ WITHOUT THIS GUARD the verbs fire through the controls: with the
+      // window slider focused, L still drags the cover off the town and space
+      // still breathes on it while you are only trying to nudge a setting. It
+      // becomes load-bearing the moment the box has inputs in it.
+      if (e.target && e.target.closest && e.target.closest('input,textarea,select')) return;
       const k = e.key.toLowerCase();
+      if (k === 'escape') {
+        const box = document.getElementById('boxWrap');
+        const page = document.getElementById('pageWrap');
+        if (!page.classList.contains('hide')) page.classList.add('hide');
+        else this.ui.showBox(box.classList.contains('hide'));
+        return;
+      }
+      if (this.phase !== 'play') {
+        if (k === ' ' || k === 'enter') { e.preventDefault(); this.enter(); }
+        return;
+      }
+      this.sfx.start();
       if (k === ' ') { e.preventDefault(); this.breathing = true; }
       else if (k === 'l') { s.setLid(!s.lid); this.sfx.lid(); this.ui.sync(); }
+      else if (k === 'k') { s.setLamp(!s.lampOn); this.sfx.touch(); this.ui.sync(); }
       else if (k === 't') { this.sfx.tap(); this.startle(); }
       else if (k === 'p') this.setSpeed(this.speed ? 0 : 1);
+      // ⚠️ the help card and the README have always advertised "1 · 4 · 20",
+      // while the code bound 1 · 2 · 3 — so pressing the key the game told you
+      // to press did nothing at all. Both sets work now.
       else if (k === '1') this.setSpeed(1);
-      else if (k === '2') this.setSpeed(4);
-      else if (k === '3') this.setSpeed(20);
+      else if (k === '4' || k === '2') this.setSpeed(4);
+      else if (k === '0' || k === '3') this.setSpeed(20);
       else if (k === 'b') this.ui.showPage();
-      else if (k === '?' || k === '/') document.getElementById('help').classList.toggle('hide');
+      else if (k === '?' || k === '/') this.ui.showBox(document.getElementById('boxWrap').classList.contains('hide'));
     });
     addEventListener('keyup', (e) => { if (e.key === ' ') this.breathing = false; });
+    // a tab switch while breathing used to leave the town under a held breath
+    addEventListener('blur', () => { this.breathing = false; });
   }
 
   // the tap you should not do — the whole colony hears it
@@ -247,14 +379,41 @@ class App {
     this.view.flinch((s.N - 1) / 2, (s.N - 1) / 2);
   }
 
+  // The hand's radius and heat, pushed every frame. This is the ONLY place the
+  // curve is evaluated, so the board's disc and the sim's kernel can never
+  // disagree about what the hand is currently doing.
+  _pushHand(dt = 0) {
+    const t = this.touch;
+    if (!t) return;
+    const moving = (t.moveT || 0) > 0;
+    t.moveT = Math.max(0, (t.moveT || 0) - dt);
+    const to = moving ? 0 : 1;
+    const rate = moving ? HAND.warm : HAND.cool;
+    t.e += (to - t.e) * Math.min(1, rate * dt);
+    const r = C.HAND_RADIUS * (HAND.hotR + (HAND.restR - HAND.hotR) * t.e);
+    const heat = HAND.hotHeat + (HAND.restHeat - HAND.hotHeat) * t.e;
+    this.sim.setHand(t.cx, t.cy, { r, heat });
+    // ⚠️ the disc is drawn from the SAME numbers, and it moves instantly while
+    // the ground takes 4-8 seconds to catch up. That lead is the entire tutorial
+    // for this verb: you can see the hand soften before you can feel it.
+    if (this.view.setHandDisc) this.view.setHandDisc(t.cx, t.cy, r, t.e);
+  }
+
   // -- loop ----------------------------------------------------------------
   frame() {
     const now = performance.now();
     let dt = Math.min(0.25, (now - this.last) / 1000);
     this.last = now;
 
-    if (this.breathing) this.sim.breathe(dt);
-    else this.sim.ventFog(dt);
+    this._pushHand(dt);
+
+    // ⚠️ breathe/ventFog sit OUTSIDE the paused guard below, so without the
+    // phase test the title screen quietly fogs and un-fogs a town nobody is
+    // playing — and fog is real weather, not decoration.
+    if (this.phase === 'play') {
+      if (this.breathing) this.sim.breathe(dt);
+      else this.sim.ventFog(dt);
+    }
 
     if (!this.paused) {
       this.acc += dt * this.speed;
@@ -266,7 +425,7 @@ class App {
 
     this.sfx.update(this.sim, dt);
     this.view.render(dt);
-    this.ui.frame();
+    this.ui.frame(dt);
     requestAnimationFrame(() => this.frame());
   }
 

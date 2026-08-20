@@ -130,14 +130,38 @@ t('breathing enough makes it rain', () => {
   let wet = 0; for (let i = 0; i < s.N * s.N; i++) wet += s.water[i];
   ok(wet > dry, `no rain: ${dry.toFixed(2)} -> ${wet.toFixed(2)}`);
 });
-t('a sealed jar keeps its water; an open lid loses it', () => {
+// ⚠️⚠️ THIS TEST USED TO GUARD THE BUG. It called `setLid(true)` and labelled
+// it "open lid" — but `lid === true` means the sheet is ON, which is what the
+// button and the help card have always said. Three places disagreed about the
+// same boolean: the UI ("cover on"), the constants block (LID_LOSS/VENT are both
+// documented as the cost of being OPEN, and both were applied when CLOSED), and
+// this test, which sided with the constants. So the suite was green while
+// covering a town drained its pond to zero and killed ten of thirteen — the
+// exact opposite of the promise on the help card. A green test is not evidence
+// that the behaviour is right; it is evidence that the code and the test agree.
+// Both of them were wrong.
+//
+// The vocabulary is now fixed everywhere: lid === true means UNDER THE SHEET.
+t('under the sheet it keeps its water; with the sheet off the room drinks it', () => {
   const total = (s) => { let w = s.humid + s.rainLeft; for (let i = 0; i < s.N * s.N; i++) w += s.water[i]; return w; };
   const a = new Sim({ seed: 'seal', founders: 0 });
+  ok(a.lid === true, 'the board is supposed to start under the sheet — dad keeps it covered');
   const t0 = total(a); run(a, 34);
-  ok(total(a) > t0 * 0.97, `sealed jar leaked: ${t0.toFixed(2)} -> ${total(a).toFixed(2)}`);
+  ok(total(a) > t0 * 0.97, `a covered board leaked: ${t0.toFixed(2)} -> ${total(a).toFixed(2)}`);
   const b = new Sim({ seed: 'seal', founders: 0 });
-  b.setLid(true); run(b, 34);
-  ok(total(b) < total(a) * 0.8, `open lid did not dry it out: ${total(b).toFixed(2)} vs ${total(a).toFixed(2)}`);
+  b.setLid(false);                                   // pull the sheet OFF
+  run(b, 34);
+  ok(total(b) < total(a) * 0.8, `an uncovered board did not dry out: ${total(b).toFixed(2)} vs ${total(a).toFixed(2)}`);
+});
+t('the cover holds heat in rather than letting it go', () => {
+  // the other half of the same inversion: a sheet INSULATES. LID_LOSS is the
+  // cost of the board being open, so it must not be charged to a covered one.
+  const warm = (s) => { let t = 0; for (let i = 0; i < s.N * s.N; i += 7) t += s.temp[i]; return t / Math.ceil(s.N * s.N / 7); };
+  const a = new Sim({ seed: 'heat', founders: 0 });   // covered
+  const b = new Sim({ seed: 'heat', founders: 0 }); b.setLid(false);
+  a.setLamp(true); b.setLamp(true);                   // give them both something to hold
+  run(a, 6); run(b, 6);
+  ok(warm(a) > warm(b), `covered board was not the warmer one: ${warm(a).toFixed(2)} vs ${warm(b).toFixed(2)}`);
 });
 t('sustained heat sterilises moss', () => {
   const s = new Sim({ seed: 'a', founders: 0 });

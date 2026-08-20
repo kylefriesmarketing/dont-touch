@@ -309,7 +309,13 @@ export class Sim {
     this.fog = 0;              // 0..1, the player's breath on the outside
     this.humid = 5.0 * S2;     // suspended water in the sealed air
     this.rainLeft = 0;         // water still to fall from the current cloud
-    this.lid = false;
+    // ⚠️ THE BOARD STARTS UNDER THE SHEET — 'dad keeps it covered', which is
+    // the help card's own words and the reason the town is alive to be found.
+    // Sealed, the water it evaporates comes back as rain. Pulling the sheet off
+    // is the player's choice and it costs them the cycle: measured, an open
+    // board vents its whole sky in under a week. Starting uncovered made the
+    // default state a slow drought that nobody chose.
+    this.lid = true;
     this.curtain = 0.75;       // 0 = closed, 1 = open
     this.lampOn = false;
 
@@ -573,7 +579,7 @@ export class Sim {
   _thermal(F) {
     const N = this.N, T = this.temp, T2 = this.tmp2;
     const amb = this.ambient + this.daylight * C.SUN_GAIN;
-    const loss = Math.min(0.5, (C.LOSS + (this.lid ? C.LID_LOSS : 0)) * F);
+    const loss = Math.min(0.5, (C.LOSS + (this.lid ? 0 : C.LID_LOSS)) * F);
     const D = Math.min(0.24, C.DIFFUSE * F);
     for (let y = 0; y < N; y++) {
       for (let x = 0; x < N; x++) {
@@ -589,14 +595,14 @@ export class Sim {
     }
     // the hand. Heat arrives slowly and leaves slowly — bible §3.1
     if (this.hand) {
-      const hx = this.hand.x, hy = this.hand.y, R = C.HAND_RADIUS;
+      const hx = this.hand.x, hy = this.hand.y, R = this.hand.r;
       const x0 = Math.max(0, (hx - R) | 0), x1 = Math.min(N - 1, (hx + R) | 0);
       const y0 = Math.max(0, (hy - R) | 0), y1 = Math.min(N - 1, (hy + R) | 0);
       for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
         const dx = x - hx, dy = y - hy, d = Math.sqrt(dx * dx + dy * dy);
         if (d > R) continue;
         const f = 1 - d / R;
-        T2[y * N + x] += (C.HAND_HEAT - T2[y * N + x]) * Math.min(0.4, C.HAND_K * F) * f * (0.45 + 0.55 * f);
+        T2[y * N + x] += (this.hand.heat - T2[y * N + x]) * Math.min(0.4, C.HAND_K * F) * f * (0.45 + 0.55 * f);
       }
     }
     this.temp = T2; this.tmp2 = T;
@@ -623,7 +629,15 @@ export class Sim {
         this.log('rain', how, 0.6);
       }
     }
-    if (this.lid) this.humid = Math.max(0, this.humid * (1 - C.VENT * F));
+    // ⚠️⚠️ THE COVER WAS INVERTED, AND IT WAS KILLING TOWNS. `lid === true`
+    // means the sheet is ON (see the button label and the help card), but both
+    // C.LID_LOSS and C.VENT are documented in the constants block as the cost of
+    // the board being OPEN — and both were applied when it was closed. Measured
+    // over 20 days: covering the town drained the pond to 0 and the air to 0 and
+    // left 3 of 13 alive, while the help card promised 'under the plastic their
+    // rain comes back'. One of the five verbs did the exact opposite of what the
+    // game said it did. The narrator agreed with the bug, which is why it hid.
+    if (!this.lid) this.humid = Math.max(0, this.humid * (1 - C.VENT * F));
     // tilt as a precomputed per-axis ramp — avoids a modulo and a divide per lookup
     const tx = this.tilt.x / N, ty = this.tilt.y / N;
     const flow = Math.min(0.85, C.FLOW * F * 0.4);
@@ -719,7 +733,7 @@ export class Sim {
       // their body, not from what the player intended.
       if (this.hand && st !== STAGE.EGG) {
         const hdx = this.hand.x - k.x[id], hdy = this.hand.y - k.y[id];
-        const hr = C.HAND_RADIUS * 1.4;
+        const hr = this.hand.r * 1.4;
         if (hdx * hdx + hdy * hdy < hr * hr) {
           let v;
           if (T >= band[0] && T <= band[1]) v = 1;                          // this is good ground now
@@ -1492,7 +1506,7 @@ export class Sim {
       this.log('scorch', `nothing grows on that ground any more.`, 5.0);
     }
     // COVER — the air stops giving its water back
-    if (this.lid && this.humid < 2.2 * S * S && since('cover', 20)) {
+    if (!this.lid && this.humid < 2.2 * S * S && since('cover', 20)) {
       this.log('drought', `the air stopped giving anything back.`, 5.0);
     }
     // LIGHT — a night that never came
@@ -1573,7 +1587,26 @@ export class Sim {
   }
 
   // -- player verbs ----------------------------------------------------------
-  setHand(x, y) { this.hand = (x == null) ? null : { x, y }; }
+  // ⚠️ THE CONTACT LAW. A finger is not one thing. Resting lightly and bearing
+  // down are the SAME gesture at two rates, so the hand carries its own radius
+  // and its own heat, and main.js decides them from how the stroke is going.
+  // Everything the finger can do is a curve through these two numbers — which is
+  // why this whole vocabulary needs no sixth verb and no palette of powers.
+  //
+  // ⚠️ PointerEvent.pressure reads 0.5 for every mouse button that is down and
+  // 0 when it is up — it carries no information at all on the hardware most
+  // people have. So "press harder" HAS to mean "press longer", and the
+  // classifier in main.js is time-based on purpose. Do not "improve" it to read
+  // e.pressure: that works on the developer's stylus and nowhere else.
+  //
+  // The hand stays TRANSIENT — never saved, never fingerprinted, as before.
+  setHand(x, y, opt) {
+    this.hand = (x == null) ? null : {
+      x, y,
+      r: (opt && opt.r) || C.HAND_RADIUS,
+      heat: (opt && opt.heat != null) ? opt.heat : C.HAND_HEAT,
+    };
+  }
   setTilt(x, y) { this.tilt.x = Math.max(-0.22, Math.min(0.22, x)); this.tilt.y = Math.max(-0.22, Math.min(0.22, y)); }
   breathe(dt) { this.fog = Math.min(1, this.fog + dt * 0.55); }
   ventFog(dt) { this.fog = Math.max(0, this.fog - dt * 0.22); }

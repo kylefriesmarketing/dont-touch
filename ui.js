@@ -1,15 +1,19 @@
 // DON'T TOUCH — ui.js
 // DOM overlay. The game must be fully playable with every panel closed. (Invariant 7)
 
-import { LOCI, L, NEEDS, STAGE, STAGE_NAME, expressed, carried, marrowHomozygous, LANTERN_HUE } from './sim.js';
+import { LOCI, L, NEEDS, STAGE, STAGE_NAME, expressed, carried, marrowHomozygous, C } from './sim.js';
+import { LUT, setPalette, setGlyphs, hueOf, NEED_MARK, NEED_WORD, worstNeed } from './palette.js';
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; };
-const hueCss = (h, l) => `hsl(${h} 72% ${l}%)`;
+const hueCss = (h, l) => `hsl(${hueOf(h)} 72% ${l}%)`;
 // ⚠️ keep in step with the log() kinds in sim.js — a beat missing from here
 // still reaches the book, it just scrolls past in the feed looking ordinary.
 const BIG = new Set(['mutation', 'death-named', 'end', 'invented', 'reinvented',
   'tradition', 'lost', 'stands', 'learned', 'stillgone', 'stillcarried']);
+
+const SET_KEY = 'donttouch-settings';
+const DEFAULTS = { palette: 'off', glyph: 0, text: 1, post: 1, motion: 0, sound: 1 };
 
 export class UI {
   constructor(sim, app) {
@@ -17,24 +21,93 @@ export class UI {
     this.selected = -1;
     this.lastChron = 0;
     this.chronBox = $('chron');
+    this.settings = this.loadSettings();
+    this.seen = new Set(JSON.parse(localStorage.getItem('donttouch-seen') || '[]'));
+    this.nudgeT = 0;
     this.wire();
+    this.applySettings();
+  }
+
+  // -- settings --------------------------------------------------------------
+  loadSettings() {
+    let s = {};
+    try { s = JSON.parse(localStorage.getItem(SET_KEY) || '{}'); } catch (e) { /* corrupt, use defaults */ }
+    return Object.assign({}, DEFAULTS, s);
+  }
+  saveSettings() {
+    try { localStorage.setItem(SET_KEY, JSON.stringify(this.settings)); } catch (e) { /* quota */ }
+  }
+  applySettings() {
+    const s = this.settings;
+    setPalette(s.palette);
+    setGlyphs(+s.glyph);
+    document.documentElement.style.setProperty('--ui', s.text);
+    document.body.classList.toggle('still', !!+s.motion);
+    if (this.app.sfx) this.app.sfx.setMuted(!+s.sound);
+    // ⚠️ the view may not exist yet on the first call — the UI is built before
+    // the first frame, and applySettings runs from the constructor.
+    const v = this.app.view;
+    if (v) {
+      if (v.post) v.post.enabled = !!+s.post;
+      if (v.repaintLanterns) v.repaintLanterns();
+    }
+    // reflect into every segmented control
+    for (const [id, key] of [['setPalette', 'palette'], ['setGlyph', 'glyph'], ['setText', 'text'],
+                             ['setPost', 'post'], ['setMotion', 'motion'], ['setSound', 'sound']]) {
+      const box = $(id); if (!box) continue;
+      [...box.children].forEach(b => b.classList.toggle('on', String(b.dataset.v) === String(s[key])));
+    }
   }
 
   wire() {
-    $('speed').addEventListener('click', (e) => {
-      const b = e.target.closest('button'); if (!b) return;
-      this.app.setSpeed(+b.dataset.s);
+    // --- the fascia ---------------------------------------------------------
+    const SPEEDS = [1, 4, 20, 0];
+    $('speedChip').addEventListener('click', () => {
+      const i = SPEEDS.indexOf(this.app.speed);
+      this.app.setSpeed(SPEEDS[(i + 1) % SPEEDS.length]);
     });
     $('curtain').addEventListener('input', (e) => this.sim.setCurtain(+e.target.value / 100));
     $('lamp').addEventListener('click', () => { this.sim.setLamp(!this.sim.lampOn); this.app.sfx.touch(); this.sync(); });
-    $('lidBtn').addEventListener('click', () => { this.sim.setLid(!this.sim.lid); this.app.sfx.lid(); this.sync(); });
-    $('mute').addEventListener('click', () => { this.app.sfx.setMuted(!this.app.sfx.muted); this.sync(); });
+    $('lidBtn').addEventListener('click', () => {
+      this.sim.setLid(!this.sim.lid); this.app.sfx.lid(); this.sync();
+      // the one thing about this verb a player cannot see coming, said once
+      if (!this.sim.lid) this.nudge('the room is dry. whatever they lose to the air now, the air keeps.', 'sheetoff');
+    });
     $('pageBtn').addEventListener('click', () => this.showPage());
+    $('boxBtn').addEventListener('click', () => this.showBox(true));
+    $('closeBox').addEventListener('click', () => this.showBox(false));
     $('closePage').addEventListener('click', () => $('pageWrap').classList.add('hide'));
     $('savePage').addEventListener('click', () => this.exportPage());
-    $('closeInspect').addEventListener('click', () => { this.selected = -1; $('inspect').classList.add('hide'); });
-    $('helpBtn').addEventListener('click', () => $('help').classList.toggle('hide'));
-    $('help').addEventListener('click', () => $('help').classList.add('hide'));
+    $('closeInspect').addEventListener('click', () => this.select(-1));
+
+    // --- the box ------------------------------------------------------------
+    const seg = (id, key, after) => {
+      const box = $(id); if (!box) return;
+      box.addEventListener('click', (e) => {
+        const b = e.target.closest('button'); if (!b) return;
+        this.settings[key] = b.dataset.v;
+        this.saveSettings(); this.applySettings();
+        if (after) after();
+      });
+    };
+    seg('setPalette', 'palette'); seg('setGlyph', 'glyph'); seg('setText', 'text');
+    seg('setPost', 'post'); seg('setMotion', 'motion'); seg('setSound', 'sound');
+    $('boxWrap').addEventListener('click', (e) => { if (e.target.id === 'boxWrap') this.showBox(false); });
+    $('pageWrap').addEventListener('click', (e) => { if (e.target.id === 'pageWrap') $('pageWrap').classList.add('hide'); });
+  }
+
+  showBox(on) { $('boxWrap').classList.toggle('hide', !on); }
+
+  // ⚠️ THE GAME'S ONLY VOICE, AND IT NEVER GIVES AN ORDER. P3 forbids the game
+  // telling the player what they are or what to do, so every one of these is
+  // written as an observation about the WORLD — never "you should", never "try
+  // holding still", never a verdict on what just happened. Each fires once ever.
+  nudge(text, key) {
+    if (key) { if (this.seen.has(key)) return; this.seen.add(key);
+      try { localStorage.setItem('donttouch-seen', JSON.stringify([...this.seen])); } catch (e) { /* quota */ } }
+    const n = $('nudge');
+    n.textContent = text; n.classList.add('up');
+    this.nudgeT = 6.5;
   }
 
   select(id) {
@@ -43,27 +116,49 @@ export class UI {
   }
 
   sync() {
-    $('mute').textContent = this.app.sfx.muted ? 'sound off' : 'sound on';
-    $('lamp').textContent = this.sim.lampOn ? 'bulb on' : 'bulb off';
-    $('lidBtn').textContent = this.sim.lid ? 'cover off' : 'cover on';
-    [...$('speed').children].forEach(b => b.classList.toggle('on', +b.dataset.s === this.app.speed));
+    const on = (id, v) => $(id).setAttribute('aria-pressed', v ? 'true' : 'false');
+    on('lamp', this.sim.lampOn);
+    on('lidBtn', this.sim.lid);
+    $('speedChip').textContent = this.app.speed === 0 ? '‖' : `${this.app.speed}×`;
+    $('curtain').value = Math.round(this.sim.curtain * 100);
   }
 
-  frame() {
+  frame(dt = 0) {
     const s = this.sim;
-    $('hud').innerHTML =
-      `<b>day ${s.day}</b><span>·</span>` +
-      `<b>${s.alive || 0}</b> alive<span>·</span>` +
-      `${s.graves.length} graves<span>·</span>` +
-      `gen ${s.stats.generations}<span>·</span>` +
-      `${(s.wellbeing * 100 || 0) | 0}% lit`;
 
-    // the weather strip
+    // ⚠️ THE RULE FOR THIS LINE: the always-on layer may show only what is true
+    // of the ROOM, never what is true of the KIN. That is Invariant 7 (the
+    // lantern already says how they are, better than a number can) plus P3 (no
+    // score). It is what removed "% lit" — a mean of k.bright, which is a health
+    // bar with the serial numbers filed off — and the running grave count, which
+    // is §9.5's scoreboard printed in the corner. Both live in the book now,
+    // where aggregate numbers are allowed because you went and opened it.
+    $('hud').innerHTML = `<b>day ${s.day}</b>`;
+
+    // the day arc: "is night coming" is the one thing the lanterns cannot tell
+    // you, and it governs rest, moss growth and every cold death.
+    const dot = $('arcDot');
+    if (dot) {
+      const a = Math.PI * (1 - (s.dayFrac || 0));
+      dot.setAttribute('cx', (23 + Math.cos(a) * 20).toFixed(1));
+      dot.setAttribute('cy', (13 - Math.sin(a) * 20 * 0.5).toFixed(1));
+      dot.setAttribute('fill', s.daylight > 0.55 ? '#f0d9ac' : s.daylight > 0.12 ? '#9aa7b8' : '#4a5563');
+    }
+
+    // ⚠️ THIS STRIP USED TO BE A CONSTANT. It asked `humid > 4.4`, but humid is
+    // in S²-scaled units — it starts at 5.0*S² = 11.25 on a 96 board and the
+    // real rain threshold is C.CLOUD = 24.75. Measured over 60 days: it said
+    // "close" 59 times, "clear" ZERO times, ever. Reading it against C.CLOUD
+    // makes it a fraction of the way to rain, which also makes it predictive —
+    // the only job a weather readout has.
     const t = s.temp[s.idx(s.hearth.x, s.hearth.y)];
+    const p = s.humid / C.CLOUD;
     $('weather').innerHTML =
       `${t.toFixed(0)}°<span>·</span>` +
-      `${s.rainLeft > 0 ? 'raining' : s.humid > 4.4 ? 'close' : 'clear'}<span>·</span>` +
-      `${s.daylight > 0.55 ? 'bright' : s.daylight > 0.12 ? 'low sun' : 'dark'}`;
+      `${s.rainLeft > 0 ? 'raining' : p > 0.8 ? 'about to rain' : p > 0.45 ? 'heavy air' : 'clear'}` +
+      (s.lid ? '' : '<span>·</span>uncovered');
+
+    if (this.nudgeT > 0) { this.nudgeT -= dt; if (this.nudgeT <= 0) $('nudge').classList.remove('up'); }
 
     this.pumpChronicle();
     if (this.selected >= 0) this.paintInspector();
@@ -81,7 +176,6 @@ export class UI {
       const line = el('div', 'line');
       line.appendChild(el('span', 'd', `${e.day}`));
       line.appendChild(el('span', 't', e.repeat > 1 ? `${e.text} (×${e.repeat})` : e.text));
-      // the beats that matter enough to stand out in the feed
       if (BIG.has(e.kind)) line.classList.add('big');
       this.chronBox.appendChild(line);
       if (e.kind === 'mutation') this.app.sfx.mutate();
@@ -105,25 +199,35 @@ export class UI {
     const nm = s.nameOf(id);
     const st = STAGE_NAME[k.stage[id]];
     // ⚠️ an index past the end of GOALS renders 'standing' — keep this in step
-    // with the goal list in sim.js _decide (0 wander … 9 tend)
+    // with the goal list in sim.js _decide (0 wander … 10 make)
     const GOALS = ['wandering', 'looking for food', 'going to water', 'looking for a warm place',
       'resting', 'looking for company', 'getting away', 'courting', 'carrying the dead',
       'going to the one who stays', 'making something'];
 
     const glued = !!k.glued[id];
-    let h = `<div class="who"><span class="dot" style="background:${hueCss(k.hue[id], 55)}"></span>
+    const worst = worstNeed(k.need, base);
+    const mark = LUT.glyphs ? NEED_MARK[worst] : '';
+    let h = `<div class="who"><span class="dot" style="background:${hueCss(k.hue[id], 55)}">${mark}</span>
       <b>${nm}</b><i>${st} · ${k.age[id].toFixed(0)} of ~${k.lifespan[id].toFixed(0)} days</i></div>`;
     // they still want everything anyone wants. they simply cannot go and get it.
     h += `<div class="doing">${glued ? 'wants ' + (GOALS[k.goal[id]] || 'nothing').replace(/^(looking for|going to) /, '') + ' · cannot move' : (GOALS[k.goal[id]] || 'standing')}</div>`;
     if (glued) h += `<div class="line2" style="color:#c79a3e">stuck fast to the world. whatever ${nm} needs, somebody has to bring it.</div>`;
 
+    // ⚠️ these bars used to be #6fc / #fc6 / #f66 — green, amber, red, which is
+    // the single worst triple for the commonest colour blindness, on the one
+    // panel a player opens to find out what is wrong. The number beside each bar
+    // is the fix that works for everyone; the colour is now a bonus, not the
+    // message.
     h += '<div class="needs">';
     for (let n = 0; n < NN; n++) {
       const v = k.need[base + n];
+      const col = v > 0.55 ? '#6fc' : v > 0.25 ? '#fc6' : '#f66';
       h += `<div class="need"><label>${NEEDS[n]}</label>
-        <div class="bar"><i style="width:${(v * 100) | 0}%;background:${v > 0.55 ? '#6fc' : v > 0.25 ? '#fc6' : '#f66'}"></i></div></div>`;
+        <div class="bar"><i style="width:${(v * 100) | 0}%;background:${col}"></i></div>
+        <em>${(v * 100) | 0}</em></div>`;
     }
     h += '</div>';
+    h += `<div class="line2" style="margin-top:0">most of all, ${NEED_WORD[worst]}.</div>`;
     if (k.strain[id] > 0.02) {
       h += `<div class="strain">failing — ${((1 - k.strain[id]) * 100 | 0)}% left</div>`;
     }
@@ -154,9 +258,10 @@ export class UI {
     const p = s.page(fromDay);
     const body = $('pageBody');
     const title = fromDay > 0 ? 'while you were away' : 'the book of the town';
+    // aggregates are allowed HERE, and only here — you had to go and open it
     const sub = fromDay > 0
       ? `${s.day - fromDay} days passed · ${s.alive || 0} alive · ${s.graves.length} in the yard`
-      : `day ${s.day} · ${s.alive || 0} alive · ${s.graves.length} in the yard`;
+      : `day ${s.day} · ${s.alive || 0} alive · ${s.graves.length} in the yard · ${s.stats.generations} generations`;
     let h = `<h2>${title}</h2><div class="sub">${sub}</div><ol>`;
     p.forEach(e => { h += `<li><span>${e.day}</span>${e.text}</li>`; });
     h += '</ol>';
@@ -175,10 +280,11 @@ export class UI {
     grad.addColorStop(0, '#0b0e14'); grad.addColorStop(0.55, '#12161f'); grad.addColorStop(1, '#080a0e');
     g.fillStyle = grad; g.fillRect(0, 0, W, H);
 
-    // a field of lanterns as the letterhead
+    // a field of lanterns as the letterhead — through the live palette, so the
+    // picture a colourblind player saves looks like the town they actually saw
     for (let i = 0; i < 160; i++) {
       const x = Math.random() * W, y = 120 + Math.random() * 420;
-      const hue = [172, 44, 340, 104, 282, 18][(Math.random() * 6) | 0];
+      const hue = hueOf([172, 44, 340, 104, 282, 18][(Math.random() * 6) | 0]);
       const rad = g.createRadialGradient(x, y, 0, x, y, 22 + Math.random() * 26);
       rad.addColorStop(0, `hsla(${hue},80%,68%,0.85)`);
       rad.addColorStop(1, `hsla(${hue},80%,50%,0)`);

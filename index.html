@@ -3,19 +3,22 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#06080c">
 <title>DON'T TOUCH — a Dirty Boy Devs game</title>
 <style>
   :root{
     --ink:#dbe4f0; --dim:#7b8798; --faint:#4a5563;
-    --panel:rgba(10,13,19,.72); --edge:rgba(140,165,195,.14);
+    --panel:rgba(10,13,19,.74); --edge:rgba(140,165,195,.14);
+    --warm:#d8a45c; --sw:#8fb6dd;
+    --ui:1;                       /* text size, driven by the box */
+    --fascia:58px;
   }
   *{box-sizing:border-box}
   html,body{margin:0;height:100%;background:#06080c;color:var(--ink);
     font:14px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
-    overflow:hidden;-webkit-font-smoothing:antialiased}
+    overflow:hidden;-webkit-font-smoothing:antialiased;overscroll-behavior:none}
   canvas{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}
   .hide{display:none!important}
-  /* a vignette and a warm grade — free, and it does a lot */
   #vig{position:fixed;inset:0;pointer-events:none;z-index:5;
     background:radial-gradient(ellipse 78% 72% at 50% 46%,
       rgba(0,0,0,0) 42%, rgba(2,4,8,.42) 78%, rgba(2,3,6,.82) 100%)}
@@ -24,54 +27,113 @@
     letter-spacing:.01em}
   button:hover{background:rgba(255,255,255,.09)}
   button.on{background:rgba(150,200,255,.16);border-color:rgba(150,200,255,.4)}
+  button:focus-visible,input:focus-visible{outline:2px solid var(--sw);outline-offset:2px}
 
-  /* ---------- top bar ---------- */
-  #top{position:fixed;top:0;left:0;right:0;display:flex;gap:10px;align-items:center;
-    padding:10px 14px;pointer-events:none;
-    background:linear-gradient(#06080ccc,#06080c00)}
-  #top > *{pointer-events:auto}
-  #hud,#weather{font-variant-numeric:tabular-nums;display:flex;gap:7px;align-items:baseline}
+  /* ============ THE TITLE — the board, covered, in the dark ============= */
+  #title{position:fixed;inset:0;z-index:35;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;text-align:center;padding:24px;
+    background:radial-gradient(ellipse 62% 56% at 50% 44%,
+      rgba(6,8,12,.26),rgba(4,6,9,.86) 68%,#04060a 100%);
+    transition:opacity .9s ease}
+  #title.going{opacity:0;pointer-events:none}
+  #title h1{font:300 clamp(30px,8.4vw,58px)/1 Georgia,serif;letter-spacing:.34em;
+    margin:0 0 8px;text-indent:.34em;color:#e9eef6;
+    text-shadow:0 0 44px rgba(216,164,92,.26)}
+  #title .sub{color:#6e7b8c;font:italic 300 15px/1.7 Georgia,serif;
+    max-width:34ch;margin:0 0 34px}
+  /* the pull-chain: the way in, and it is the light verb */
+  #chain{display:flex;flex-direction:column;align-items:center;cursor:pointer;
+    background:none;border:0;padding:8px 18px}
+  #chain:hover,#chain:focus-visible{background:none}
+  #chain .cord{width:1px;height:56px;background:linear-gradient(#20262f,#5d6775)}
+  #chain .bead{width:9px;height:17px;border-radius:5px;background:#8d7a5c;
+    box-shadow:0 0 14px rgba(216,164,92,.32);transition:transform .18s ease}
+  #chain:hover .bead,#chain:focus-visible .bead{transform:translateY(6px)}
+  #chain .say{margin-top:15px;font:300 15px/1 Georgia,serif;color:#a9b6c6;letter-spacing:.06em}
+  #chain:hover .say,#chain:focus-visible .say{color:#e6d3ae}
+  #tmeta{margin-top:28px;color:#3f4956;font-size:12px;letter-spacing:.05em}
+  #tmeta button{background:none;border:0;color:#5b6675;padding:3px 8px;font-size:12px;
+    text-decoration:underline;text-underline-offset:3px}
+  #tmeta button:hover{color:#9fb0c4;background:none}
+  #tfoot{position:fixed;bottom:calc(15px + env(safe-area-inset-bottom));left:0;right:0;
+    color:#333c48;font-size:11px;letter-spacing:.16em}
+
+  /* ============ THE STRIP — the top line is about the ROOM ============== */
+  #strip{position:fixed;top:0;left:0;right:0;display:flex;gap:12px;align-items:center;
+    padding:calc(9px + env(safe-area-inset-top)) 14px 9px;pointer-events:none;z-index:6;
+    background:linear-gradient(#06080ccc,#06080c00);font-size:calc(14px * var(--ui))}
+  #strip > *{pointer-events:auto}
+  #hud,#weather{font-variant-numeric:tabular-nums;display:flex;gap:8px;align-items:center}
   #hud b{font-weight:650}
   #hud span,#weather span{color:var(--faint)}
-  #weather{color:var(--dim);font-size:13px}
+  #weather{color:var(--dim);font-size:calc(13px * var(--ui))}
+  #dayarc{flex:none}
   .grow{flex:1}
-  #speed{display:flex;gap:4px}
 
-  /* ---------- chronicle ---------- */
-  #chronWrap{position:fixed;left:14px;bottom:14px;width:min(38ch,44vw);
-    max-height:34vh;display:flex;flex-direction:column;gap:6px;pointer-events:none}
+  /* ============ THE FASCIA — the panel screwed to the front edge ======== */
+  #fascia{position:fixed;right:14px;top:50%;transform:translateY(-50%);
+    display:flex;flex-direction:column;gap:11px;align-items:center;z-index:7;
+    background:var(--panel);border:1px solid var(--edge);border-radius:12px;
+    padding:13px 11px;backdrop-filter:blur(9px)}
+  .sw{display:flex;flex-direction:column;align-items:center;gap:5px;cursor:pointer;
+    background:none;border:0;padding:0;width:46px}
+  .sw:hover{background:none}
+  .sw .track{width:26px;height:42px;border-radius:13px;background:#11151c;
+    border:1px solid rgba(150,175,205,.18);position:relative;transition:background .18s}
+  .sw .knob{position:absolute;left:3px;top:3px;width:18px;height:18px;border-radius:9px;
+    background:#5c6674;box-shadow:0 1px 3px #0008;
+    transition:transform .18s cubic-bezier(.4,1.5,.5,1),background .18s}
+  .sw[aria-pressed="true"] .track{background:#1b2533;border-color:rgba(216,164,92,.42)}
+  .sw[aria-pressed="true"] .knob{transform:translateY(18px);background:var(--warm);
+    box-shadow:0 0 12px rgba(216,164,92,.5)}
+  .sw .lab{font-size:calc(9.5px * var(--ui));letter-spacing:.08em;color:var(--faint);
+    white-space:nowrap}
+  .sw[aria-pressed="true"] .lab{color:#9aa7b8}
+  .txtsw{width:auto;padding:6px 9px;border:1px solid var(--edge);border-radius:8px;
+    min-height:34px;justify-content:center}
+  .txtsw .lab{font-size:calc(11px * var(--ui));color:#9aa7b8}
+  #winWrap{display:flex;flex-direction:column;align-items:center;gap:6px}
+  input[type=range]{accent-color:#8fb6dd}
+  #curtain{width:42px;height:96px;writing-mode:vertical-lr;direction:rtl}
+  #speedChip{width:46px;height:34px;border-radius:8px;font-variant-numeric:tabular-nums;
+    padding:0;font-size:calc(13px * var(--ui))}
+  .fdiv{width:28px;height:1px;background:var(--edge)}
+
+  /* ============ the feed =============================================== */
+  #chronWrap{position:fixed;left:14px;bottom:calc(14px + env(safe-area-inset-bottom));
+    width:min(38ch,42vw);max-height:32vh;display:flex;flex-direction:column;gap:6px;
+    pointer-events:none;z-index:6}
   #chron{overflow-y:auto;mask-image:linear-gradient(#0000,#000 22%);
     padding-right:6px;pointer-events:auto;scrollbar-width:thin}
-  #chron .line{display:flex;gap:8px;padding:2px 0;color:var(--dim);font-size:13px;
-    animation:in .5s ease}
+  #chron .line{display:flex;gap:8px;padding:2px 0;color:var(--dim);
+    font-size:calc(13px * var(--ui));animation:in .5s ease}
   #chron .line.big{color:var(--ink)}
   #chron .d{color:var(--faint);min-width:3.2ch;text-align:right;font-variant-numeric:tabular-nums}
   @keyframes in{from{opacity:0;transform:translateY(5px)}to{opacity:1}}
 
-  /* ---------- right rail ---------- */
-  #rail{position:fixed;right:14px;top:52px;display:flex;flex-direction:column;gap:8px;
-    align-items:flex-end}
-  #curtainWrap{display:flex;align-items:center;gap:8px;background:var(--panel);
-    border:1px solid var(--edge);border-radius:9px;padding:6px 10px;font-size:12px;color:var(--dim)}
-  input[type=range]{width:96px;accent-color:#8fb6dd}
-
-  /* ---------- inspector ---------- */
-  #inspect{position:fixed;right:14px;bottom:14px;width:min(320px,86vw);
-    background:var(--panel);border:1px solid var(--edge);border-radius:11px;
-    padding:12px 13px;backdrop-filter:blur(9px)}
-  #inspect h3{margin:0 0 8px;font-size:12px;letter-spacing:.14em;text-transform:uppercase;
-    color:var(--faint);font-weight:600;display:flex;justify-content:space-between}
+  /* ============ the inspector ========================================== */
+  #inspect{position:fixed;right:96px;bottom:calc(14px + env(safe-area-inset-bottom));
+    width:min(320px,86vw);background:var(--panel);border:1px solid var(--edge);
+    border-radius:11px;padding:12px 13px;backdrop-filter:blur(9px);z-index:8;
+    font-size:calc(14px * var(--ui))}
+  #inspect h3{margin:0 0 8px;font-size:calc(12px * var(--ui));letter-spacing:.14em;
+    text-transform:uppercase;color:var(--faint);font-weight:600;
+    display:flex;justify-content:space-between}
   .who{display:flex;align-items:center;gap:8px;margin-bottom:2px}
-  .who b{font-size:17px}
-  .who i{color:var(--dim);font-style:normal;font-size:12px}
-  .dot{width:11px;height:11px;border-radius:50%;box-shadow:0 0 12px currentColor;flex:none}
-  .doing{color:var(--dim);font-size:12.5px;margin:2px 0 9px;font-style:italic}
+  .who b{font-size:calc(17px * var(--ui))}
+  .who i{color:var(--dim);font-style:normal;font-size:calc(12px * var(--ui))}
+  .dot{width:13px;height:13px;border-radius:50%;box-shadow:0 0 12px currentColor;flex:none;
+    display:flex;align-items:center;justify-content:center;font-size:9px;
+    color:#080b10;font-weight:700}
+  .doing{color:var(--dim);font-size:calc(12.5px * var(--ui));margin:2px 0 9px;font-style:italic}
   .needs{display:grid;grid-template-columns:1fr 1fr;gap:4px 10px;margin-bottom:9px}
-  .need{display:flex;align-items:center;gap:6px}
-  .need label{font-size:10.5px;color:var(--faint);width:6.4ch;text-transform:lowercase}
-  .bar{flex:1;height:4px;background:rgba(255,255,255,.07);border-radius:3px;overflow:hidden}
+  .need{display:flex;align-items:center;gap:5px}
+  .need label{font-size:calc(10.5px * var(--ui));color:var(--faint);width:6.4ch}
+  .bar{flex:1;height:6px;background:rgba(255,255,255,.07);border-radius:3px;overflow:hidden}
   .bar i{display:block;height:100%;border-radius:3px;transition:width .3s}
-  .strain{color:#ff8b7a;font-size:12px;margin-bottom:8px}
+  .need em{font-style:normal;font-size:calc(9.5px * var(--ui));color:var(--faint);
+    width:3.4ch;text-align:right;font-variant-numeric:tabular-nums}
+  .strain{color:#ff8b7a;font-size:calc(12px * var(--ui));margin-bottom:8px}
   .genome{display:grid;grid-template-columns:repeat(6,1fr);gap:4px;margin:9px 0 6px}
   .locus{display:flex;flex-direction:column;align-items:center;gap:1px;
     background:rgba(255,255,255,.03);border-radius:6px;padding:4px 2px}
@@ -80,118 +142,248 @@
   .al.top{color:var(--ink)}
   .al.bot{color:#48525f}
   .al.bot.same{opacity:.32}
-  .warn{color:#e8b866;font-size:11.5px;margin-top:4px}
-  .line2{color:var(--faint);font-size:11.5px;margin-top:7px}
+  .warn{color:#e8b866;font-size:calc(11.5px * var(--ui));margin-top:4px}
+  .line2{color:var(--faint);font-size:calc(11.5px * var(--ui));margin-top:7px}
 
-  /* ---------- the page ---------- */
-  #pageWrap{position:fixed;inset:0;background:#04060ade;display:flex;align-items:center;
+  /* ============ overlays =============================================== */
+  .sheet{position:fixed;inset:0;background:#04060ade;display:flex;align-items:center;
     justify-content:center;backdrop-filter:blur(3px);z-index:20;padding:20px}
-  #page{width:min(560px,94vw);max-height:86vh;overflow:auto;
+  #page,#boxin{width:min(580px,94vw);max-height:86vh;overflow:auto;
     background:linear-gradient(#101520,#0a0e15);border:1px solid var(--edge);
     border-radius:14px;padding:28px 30px}
-  #page h2{font:600 27px/1.2 Georgia,serif;margin:0 0 4px}
-  #page .sub{color:var(--faint);font-size:12.5px;margin-bottom:18px}
+  #page h2,#boxin h2{font:600 27px/1.2 Georgia,serif;margin:0 0 4px}
+  #page .sub,#boxin .sub{color:var(--faint);font-size:12.5px;margin-bottom:18px}
   #page ol{list-style:none;padding:0;margin:0}
   #page li{display:flex;gap:14px;padding:9px 0;border-top:1px solid rgba(255,255,255,.05);
     font:300 16px/1.5 Georgia,serif;color:#cfd9e6}
   #page li span{color:var(--faint);font-size:12px;min-width:3ch;padding-top:4px;
     font-variant-numeric:tabular-nums}
   #page .foot{margin-top:20px;color:var(--faint);font-size:11px;letter-spacing:.14em}
-  #pageBtns{display:flex;gap:8px;margin-top:18px}
+  .btns{display:flex;gap:8px;margin-top:18px;flex-wrap:wrap}
 
-  /* ---------- help ---------- */
-  #help{position:fixed;inset:0;background:#04060ae8;z-index:30;display:flex;
-    align-items:center;justify-content:center;padding:20px}
-  #help .in{width:min(520px,94vw);font-size:14px}
-  #help h2{font:600 22px Georgia,serif;margin:0 0 14px}
-  #help dl{display:grid;grid-template-columns:auto 1fr;gap:7px 16px;margin:0}
-  #help dt{color:#9fb6d2;white-space:nowrap}
-  #help dd{margin:0;color:var(--dim)}
-  #help .note{margin-top:18px;color:var(--faint);font-size:12.5px;line-height:1.6}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:14px;
+    padding:11px 0;border-top:1px solid rgba(255,255,255,.05)}
+  .row .t{font-size:14px}
+  .row .h{color:var(--faint);font-size:11.5px;line-height:1.5;margin-top:2px;max-width:36ch}
+  .seg{display:flex;gap:4px;flex:none;flex-wrap:wrap;justify-content:flex-end}
+  .seg button{padding:4px 9px;font-size:12.5px}
+  #boxin h3{margin:22px 0 0;font:600 12px/1 ui-sans-serif,system-ui;letter-spacing:.16em;
+    text-transform:uppercase;color:var(--faint)}
+  .keys{display:grid;grid-template-columns:auto 1fr;gap:8px 16px;margin:12px 0 0;font-size:13px}
+  .keys dt{color:#9fb6d2;white-space:nowrap}
+  .keys dd{margin:0;color:var(--dim)}
+  .note{margin-top:18px;color:var(--faint);font-size:12.5px;line-height:1.65}
 
-  /* ---------- boot ---------- */
+  /* the one-shot nudge — never an instruction, only a thing that was noticed */
+  #nudge{position:fixed;left:50%;top:calc(54px + env(safe-area-inset-top));
+    transform:translateX(-50%);z-index:9;pointer-events:none;
+    background:rgba(10,13,19,.84);border:1px solid var(--edge);border-radius:9px;
+    padding:8px 15px;color:#c3cfdd;font:italic 300 14px/1.4 Georgia,serif;
+    max-width:min(42ch,90vw);text-align:center;opacity:0;transition:opacity .5s ease;
+    backdrop-filter:blur(6px)}
+  #nudge.up{opacity:1}
+
+  /* ============ boot =================================================== */
   #boot{position:fixed;inset:0;background:#06080c;z-index:40;display:flex;
     align-items:center;justify-content:center}
   .bootin{text-align:center}
-  .bootin h1{font:300 34px/1 Georgia,serif;letter-spacing:.3em;margin:0 0 12px}
+  .bootin h1{font:300 34px/1 Georgia,serif;letter-spacing:.3em;margin:0 0 12px;text-indent:.3em}
   .bootin p{color:var(--faint);font-size:13px;margin:0}
 
+  /* ============ 720 / 375 ============================================== */
   @media (max-width:720px){
-    #chronWrap{width:min(30ch,58vw);max-height:26vh}
-    #inspect{left:14px;right:14px;width:auto}
-    #rail{top:auto;bottom:calc(14px + 40vh)}
+    /* the rail lies down along the front edge, under the thumb */
+    #fascia{right:0;left:0;bottom:0;top:auto;transform:none;flex-direction:row;
+      justify-content:space-around;border-radius:0;border-width:1px 0 0;gap:4px;
+      padding:7px 8px calc(7px + env(safe-area-inset-bottom))}
+    .sw{flex-direction:row;gap:7px;width:auto;min-height:44px;padding:0 6px}
+    .sw .track{width:34px;height:20px}
+    .sw .knob{width:14px;height:14px;top:2px;left:2px}
+    .sw[aria-pressed="true"] .knob{transform:translateX(14px)}
+    .fdiv{display:none}
+    #curtain{width:74px;height:34px;writing-mode:horizontal-tb;direction:ltr}
+    #winWrap{flex-direction:row;gap:6px}
+    #speedChip{height:44px;min-width:50px}
+    /* the feed stops being a wall — newest line only, and it fades */
+    #chronWrap{left:8px;right:8px;width:auto;bottom:auto;
+      top:calc(46px + env(safe-area-inset-top));max-height:none}
+    #chron{max-height:4.4em;mask-image:none}
+    #chron .line:not(:last-child){display:none}
+    #inspect{left:8px;right:8px;width:auto;
+      bottom:calc(var(--fascia) + env(safe-area-inset-bottom));max-height:46vh;overflow:auto}
+    #strip{gap:9px;font-size:calc(13px * var(--ui))}
+    #page,#boxin{padding:22px 18px}
+    .txtsw{min-width:46px;padding:6px 8px}
   }
+  /* ⚠️ MEASURED, NOT GUESSED. At 375 the six fascia controls came to 391px of
+     content in a 375px bar, so "book" and "box" sat at right:392 and right:430
+     — off the screen, with no keyboard on a phone to reach them either. That is
+     the same failure the old top bar had, just moved to the bottom. Dropping the
+     two toggle captions (the switch itself already shows its state, and both
+     carry a title) takes the row to ~327px with room to spare. */
+  @media (max-width:430px){
+    #lidBtn .lab,#lamp .lab,#winWrap .lab{display:none}
+    #curtain{width:62px}
+    #fascia{gap:2px;padding-left:6px;padding-right:6px}
+  }
+  @media (max-width:360px){
+    #strip{flex-wrap:wrap}
+  }
+  @media (prefers-reduced-motion:reduce){
+    *{animation-duration:.001s!important;transition-duration:.001s!important}
+  }
+  body.still *{animation-duration:.001s!important;transition-duration:.001s!important}
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
 <div id="vig"></div>
 
-<div id="top">
+<!-- ============ the strip: what the ROOM is doing ===================== -->
+<div id="strip" class="hide">
   <div id="hud"></div>
+  <svg id="dayarc" width="46" height="15" viewBox="0 0 46 15" aria-hidden="true">
+    <path d="M3 13 A 20 20 0 0 1 43 13" fill="none" stroke="#2b3542" stroke-width="1.5"/>
+    <circle id="arcDot" cx="3" cy="13" r="2.5" fill="#f0d9ac"/>
+  </svg>
   <div id="weather"></div>
   <div class="grow"></div>
-  <div id="speed">
-    <button data-s="0">‖</button>
-    <button data-s="1" class="on">1×</button>
-    <button data-s="4">4×</button>
-    <button data-s="20">20×</button>
+</div>
+
+<!-- ============ the fascia =========================================== -->
+<div id="fascia" class="hide">
+  <button class="sw" id="lidBtn" aria-pressed="true" title="the plastic sheet (L)">
+    <span class="track"><span class="knob"></span></span><span class="lab">sheet</span>
+  </button>
+  <button class="sw" id="lamp" aria-pressed="false" title="the hanging bulb (K)">
+    <span class="track"><span class="knob"></span></span><span class="lab">bulb</span>
+  </button>
+  <div class="fdiv"></div>
+  <div id="winWrap">
+    <input id="curtain" type="range" min="0" max="100" value="75" aria-label="the window">
+    <span class="lab" style="color:var(--faint);font-size:9.5px;letter-spacing:.08em">window</span>
   </div>
-  <button id="pageBtn">the book</button>
-  <button id="helpBtn">?</button>
+  <div class="fdiv"></div>
+  <button id="speedChip" title="how fast the night runs (1 / 4 / 20 / P)">1×</button>
+  <button id="pageBtn" class="sw txtsw" title="the book (B)"><span class="lab">book</span></button>
+  <button id="boxBtn" class="sw txtsw" title="the box (Esc)"><span class="lab">box</span></button>
 </div>
 
-<div id="rail">
-  <div id="curtainWrap"><label for="curtain">window</label>
-    <input id="curtain" type="range" min="0" max="100" value="75"></div>
-  <button id="lamp">bulb off</button>
-  <button id="lidBtn">cover on</button>
-  <button id="mute">sound on</button>
-</div>
-
-<div id="chronWrap"><div id="chron"></div></div>
+<div id="chronWrap" class="hide"><div id="chron"></div></div>
+<div id="nudge"></div>
 
 <div id="inspect" class="hide">
   <h3>the one you're looking at <button id="closeInspect" style="padding:0 6px">×</button></h3>
   <div id="inspectBody"></div>
 </div>
 
-<div id="pageWrap" class="hide">
+<!-- ============ the book ============================================= -->
+<div id="pageWrap" class="sheet hide">
   <div id="page">
     <div id="pageBody"></div>
-    <div id="pageBtns">
+    <div class="btns">
       <button id="savePage">save it as a picture</button>
       <button id="closePage">close</button>
     </div>
   </div>
 </div>
 
-<div id="help" class="hide">
-  <div class="in">
-    <h2>DON'T TOUCH</h2>
-    <dl>
-      <dt>press and hold</dt><dd>warm them. your finger comforts, and your finger kills. it takes a few seconds to arrive and a few to leave.</dd>
+<!-- ============ the box ============================================== -->
+<div id="boxWrap" class="sheet hide">
+  <div id="boxin">
+    <h2>the box</h2>
+    <div class="sub">the shoebox the layout's spare parts live in</div>
+
+    <h3>seeing</h3>
+    <div class="row">
+      <div><div class="t">lantern colours</div>
+        <div class="h">each of them is a coloured light, and that is the whole interface.
+          if two of the colours look the same to you, change this.</div></div>
+      <div class="seg" id="setPalette">
+        <button data-v="off" class="on">as painted</button>
+        <button data-v="deutan">green &amp; red</button>
+        <button data-v="tritan">blue &amp; yellow</button>
+      </div>
+    </div>
+    <div class="row">
+      <div><div class="t">marks on the lights</div>
+        <div class="h">stamps a small shape on each light for what it wants, so colour is
+          never the only thing carrying it.</div></div>
+      <div class="seg" id="setGlyph">
+        <button data-v="0" class="on">off</button><button data-v="1">on</button>
+      </div>
+    </div>
+    <div class="row">
+      <div><div class="t">text size</div></div>
+      <div class="seg" id="setText">
+        <button data-v="1" class="on">100%</button><button data-v="1.15">115%</button>
+        <button data-v="1.3">130%</button><button data-v="1.5">150%</button>
+      </div>
+    </div>
+    <div class="row">
+      <div><div class="t">the miniature look</div>
+        <div class="h">the shallow focus that makes a photograph of a model read as small.</div></div>
+      <div class="seg" id="setPost">
+        <button data-v="1" class="on">on</button><button data-v="0">off</button>
+      </div>
+    </div>
+    <div class="row">
+      <div><div class="t">stillness</div>
+        <div class="h">stops the camera drifting and the panels sliding. the town carries on.</div></div>
+      <div class="seg" id="setMotion">
+        <button data-v="0" class="on">normal</button><button data-v="1">reduced</button>
+      </div>
+    </div>
+
+    <h3>hearing</h3>
+    <div class="row">
+      <div><div class="t">sound</div></div>
+      <div class="seg" id="setSound">
+        <button data-v="1" class="on">on</button><button data-v="0">off</button>
+      </div>
+    </div>
+
+    <h3>your hand</h3>
+    <dl class="keys">
+      <dt>rest a finger</dt><dd>hold still and the warmth opens out and gentles. keep moving and it stays a small hot point. the ground takes a few seconds to feel either one.</dd>
+      <dt>drag it</dt><dd>draw. the moving finger is the hot one, and it leaves a line.</dd>
       <dt>tap one of them</dt><dd>look at whoever you touched.</dd>
-      <dt>shift-drag / right-drag</dt><dd>lift the board off the sawhorses. water runs downhill. so do they.</dd>
-      <dt>drag off the table</dt><dd>walk around it. wheel to lean in.</dd>
-      <dt>hold space</dt><dd>breathe on the town. enough breath and it rains.</dd>
-      <dt>L</dt><dd>the plastic sheet. dad keeps it covered — under the plastic their rain comes back. leave it off and the open air drinks their pond.</dd>
-      <dt>T</dt><dd>tap the table. don't.</dd>
-      <dt>B</dt><dd>the book — what actually happened, in their handwriting.</dd>
-      <dt>1 · 4 · 20 · P</dt><dd>speed, and pause.</dd>
+      <dt>shift-drag &middot; right-drag</dt><dd>lift one edge of the board off the sawhorses. water runs downhill. so do they.</dd>
+      <dt>drag off the board</dt><dd>walk round the table. wheel to lean in.</dd>
+      <dt>hold space</dt><dd>breathe on it. enough breath and it rains.</dd>
+      <dt>L</dt><dd>the plastic sheet. under it, the water they lose comes back as rain. off, and the room drinks their pond.</dd>
+      <dt>K</dt><dd>the bulb over the table.</dd>
+      <dt>T</dt><dd>knock on the table. don't.</dd>
+      <dt>B &middot; Esc</dt><dd>the book &middot; this box.</dd>
+      <dt>1 &middot; 4 &middot; 20 &middot; P</dt><dd>how fast the night runs, and pause.</dd>
     </dl>
     <div class="note">
-      dad built this town on a sheet of plywood over ten years of weekends, and the one rule of
-      the house is that you don't touch it. nobody knows it woke up. they eat, they pair off,
-      they have children who look like both of them, and they bury their dead in the yard. the
-      colour of each light is what that one needs most; the brightness is how it's doing.
+      dad built this town on a sheet of plywood over ten years of weekends, and the one rule
+      of the house is that you don't touch it. nobody knows it woke up. they eat, they pair
+      off, they have children who look like both of them, and they bury their dead in the
+      yard. the colour of each light is what that one wants most; the brightness is how it
+      is doing.
       <br><br>
-      every mark you leave stays. there is no score, no objective and no way to lose.
-      nobody is going to tell you what you were. the graves will.
-      <br><br>
-      <b style="color:#8fb6dd">a DIRTY BOY DEVS game</b> · click anywhere to close
+      every mark you leave stays. there is no score, no objective and no way to lose. nobody
+      is ever going to tell you what you were. the graves will.
     </div>
+    <div class="btns"><button id="closeBox">close</button></div>
   </div>
+</div>
+
+<!-- ============ the title ============================================ -->
+<div id="title" class="hide">
+  <h1>DON'T TOUCH</h1>
+  <p class="sub" id="tsub">dad's town, under its sheet, in the dark at the bottom of the stairs.</p>
+  <button id="chain" title="the light over the table">
+    <span class="cord"></span><span class="bead"></span>
+    <span class="say" id="chainSay">pull the light on</span>
+  </button>
+  <div id="tmeta">
+    <button id="tBox">the box</button> &middot;
+    <button id="tNew">a new town</button>
+  </div>
+  <div id="tfoot">A DIRTY BOY DEVS GAME</div>
 </div>
 
 <div id="boot"><div class="bootin"><h1>DON'T TOUCH</h1><p>dad said. it's alive anyway</p></div></div>
