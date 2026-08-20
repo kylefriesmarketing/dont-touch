@@ -195,6 +195,13 @@ export class Sim {
       need: new Float64Array(K * NEEDS.length),
       hue: new Float64Array(K), bright: new Float64Array(K), pulse: new Float64Array(K),
       phase: new Float64Array(K), size: new Float64Array(K),
+      // ⚠️ DAD GLUED SOME OF THE FIGURES DOWN when he built the town. `glued`
+      // is a kin who cannot walk, ever. `tender` is the ONE kin currently
+      // coming to them — the corpse-claim pattern, because without a claim the
+      // whole colony drops everything to help and starves (measured: peak 86
+      // collapsed to 14 and everyone died). Both are typed arrays inside `k`,
+      // so they round-trip through toJSON/fromJSON for free.
+      glued: new Uint8Array(K), tender: new Int32Array(K),
     };
     this.names = [];           // nameId -> string
     this.free = [];            // free kin slots
@@ -316,6 +323,7 @@ export class Sim {
 
   _seedColony(n) {
     const rng = this.rng;
+    const born = [];
     for (let i = 0; i < n; i++) {
       let x = this.hearth.x, y = this.hearth.y;
       for (let tries = 0; tries < 12; tries++) {
@@ -327,9 +335,36 @@ export class Sim {
       const id = this._spawn(x, y, this._randGenome(rng), -1, -1, 1);
       if (id < 0) continue;
       this.k.stage[id] = rng() < 0.25 ? STAGE.HALF : STAGE.WHOLE;
-      this.k.age[id] = this.k.stage[id] === STAGE.HALF ? rr(rng, 12, 20) : rr(rng, 30, 70);
-      this._name(id, 'founder');
+      // ⚠️⚠️ FOUNDERS USED TO SPAWN ALREADY DEAD. Age was a flat 30-70 days
+      // regardless of the genome, but a `quick` span that is also marrow-
+      // homozygous lives 95 × 0.5 × 0.85 = 40 days — so a founder could be born
+      // aged 61 with a lifespan of 40 and die of old age during day zero.
+      // Caught because the glued founder on seed 'live' was buried before the
+      // town had finished being introduced. Cap the draw at half their own life;
+      // ordinary long-lived founders are unaffected.
+      const span = this.k.lifespan[id];
+      this.k.age[id] = this.k.stage[id] === STAGE.HALF
+        ? rr(rng, 12, 20)
+        : Math.max(C.HALF_DAYS + 1, Math.min(span * 0.5, rr(rng, 30, 70)));
+      born.push(id);
     }
+    // THE ONE WHO STAYS. Dad set the figures out and put a drop of glue under
+    // one of them. Only a PLACED figure can be glued — every kin born here is
+    // free, so when this one dies there is never another.
+    // ⚠️ Pick the LONGEST-LIVED founder and make them a young adult. Taking
+    // whoever came first gave the player a stranger who died around day 40 of
+    // plain old age (measured median across 12 seeds), which is not enough time
+    // to care that they cannot walk. This figure is the one dad never replaced.
+    let g = -1;
+    for (const id of born) {
+      if (this.k.stage[id] !== STAGE.WHOLE) continue;
+      if (g < 0 || this.k.lifespan[id] > this.k.lifespan[g]) g = id;
+    }
+    if (g >= 0) {
+      this.k.glued[g] = 1;
+      this.k.age[g] = Math.max(C.HALF_DAYS + 1, this.k.lifespan[g] * 0.22);
+    }
+    for (const id of born) this._name(id, id === g ? 'who has never once moved' : 'founder');
     this.log('open', `the town. ${this.count} of them, and nothing yet has a name for the sky.`);
   }
 
@@ -349,6 +384,7 @@ export class Sim {
     k.age[id] = 0; k.goal[id] = 0; k.goalT[id] = 0; k.hold[id] = 0; k.cool[id] = 0; k.strain[id] = 0;
     k.born[id] = this.day; k.mother[id] = mo; k.father[id] = fa;
     k.nameId[id] = -1; k.gen[id] = gen;
+    k.glued[id] = 0; k.tender[id] = -1;
     for (let j = 0; j < G; j++) k.genome[id * G + j] = genome[j];
     const span = SPAN_DAYS[expressed(genome, L.span)];
     const homo = marrowHomozygous(genome);
@@ -378,7 +414,10 @@ export class Sim {
     this.eventCounts.set(kind, c);
     // rarity ranking (§12.2): the rarer the kind, the higher the score
     const rarity = 1 / Math.sqrt(c);
-    this.chronicle.push({ day: this.day, kind, text, score: weight * rarity });
+    // ⚠️ `w` is the author's intent weight, kept SEPARATELY from `score`.
+    // `score` freezes rarity-at-the-time, which the sifter must be able to undo
+    // when it re-ranks an event against its own era. See page().
+    this.chronicle.push({ day: this.day, kind, text, w: weight, score: weight * rarity });
     if (this.chronicle.length > 4000) this.chronicle.splice(0, 1000);
   }
 
@@ -507,6 +546,11 @@ export class Sim {
   _kin() {
     const k = this.k, NN = NEEDS.length, dt = 1 / C.TICKS_PER_DAY;
     let alive = 0, sumB = 0;
+    // One cheap pass so _decide never does an O(n²) scan for a rare thing.
+    // Reused array, not reallocated — this runs every tick.
+    if (!this._gluedNow) this._gluedNow = [];
+    this._gluedNow.length = 0;
+    for (let id = 0; id < this.count; id++) if (k.alive[id] && k.glued[id]) this._gluedNow.push(id);
     for (let id = 0; id < this.count; id++) {
       if (!k.alive[id]) continue;
       alive++;
@@ -743,15 +787,42 @@ export class Sim {
     if (this.corpses.length && k.stage[id] >= STAGE.WHOLE && k.need[base + 2] > 0.55) {
       let best = null, bd = 1e9;
       for (const c of this.corpses) {
-        if (c.claim >= 0 && c.claim !== id && k.alive[c.claim]) continue;
+        // ⚠️ a claimer who wandered off still held the corpse forever, so nobody
+        // else could ever come for it. A claim only stands while they are on it.
+        if (c.claim >= 0 && c.claim !== id && k.alive[c.claim] && k.goal[c.claim] === 8) continue;
         const d = Math.abs(c.x - x) + Math.abs(c.y - y);
         if (d < bd) { bd = d; best = c; }
       }
       if (best) push(8, best.x, best.y, 1.35 * k.need[base + 2] / (1 + bd * 0.08));
     }
 
+    // tend: the one who stays cannot come to you, so somebody has to go.
+    // ⚠️⚠️ THIS IS THE BURIAL SPIRAL WEARING A DIFFERENT COAT. A compelling
+    // errand with no claim and no exit condition emptied the colony in testing:
+    // peak 86 fell to 14 and every single kin died, because tenders committed
+    // forever and stopped eating. The two fixes are the ones the corpse system
+    // already proved — ONE carer at a time (k.tender), and a satisfaction
+    // condition in _goalMet — plus the fed-only gate below. Do not remove any
+    // of the three. Measured good: mean 0.5 tenders, colony peak 94.
+    if (this._gluedNow.length && !k.glued[id] && k.stage[id] >= STAGE.WHOLE
+        && k.need[base + 2] > 0.45 && k.need[base + 1] > 0.45) {
+      for (let gi = 0; gi < this._gluedNow.length; gi++) {
+        const t = this._gluedNow[gi];
+        if (t === id) continue;
+        const cl = k.tender[t];
+        if (cl >= 0 && cl !== id && k.alive[cl] && k.goal[cl] === 9) continue;   // claimed
+        let worst = 1;
+        for (let n = 1; n < NN; n++) { const v = k.need[t * NN + n]; if (v < worst) worst = v; }
+        if (worst > 0.8) continue;                                              // they're seen to
+        const d = Math.abs(k.x[t] - x) + Math.abs(k.y[t] - y);
+        cand.push({ goal: 9, tx: k.x[t], ty: k.y[t], who: t, score: (1 - worst) * 2.5 / (1 + d * 0.06) });
+      }
+    }
+
     if (!cand.length) {
-      k.goal[id] = 0; k.tx[id] = x + rr(rng, -4, 4); k.ty[id] = y + rr(rng, -4, 4);
+      k.goal[id] = 0;
+      k.tx[id] = k.glued[id] ? x : x + rr(rng, -4, 4);
+      k.ty[id] = k.glued[id] ? y : y + rr(rng, -4, 4);
       k.hold[id] = 90; return;
     }
     // rank, then pick randomly from the top three (The Sims' trick, §6.1)
@@ -765,6 +836,10 @@ export class Sim {
     if (c.goal === 8) {                       // stake the claim so nobody else comes
       for (const co of this.corpses) if (co.x === c.tx && co.y === c.ty) { co.claim = id; break; }
     }
+    if (c.goal === 9) { k.goalT[id] = c.who; k.tender[c.who] = id; }
+    // the one who stays wants things like anyone else and can only ever have
+    // what is already underfoot — or what somebody brings, or what you tilt to them
+    if (k.glued[id]) { k.tx[id] = x; k.ty[id] = y; }
     // commitment: long enough to actually walk somewhere, short enough to change your mind
     const dist = Math.abs(c.tx - x) + Math.abs(c.ty - y);
     k.hold[id] = c.goal === 6 ? 120 : (60 + dist / C.SPEED * 1.4);
@@ -780,13 +855,30 @@ export class Sim {
       case 4: return k.need[b + 3] > 0.93;
       case 5: return k.need[b + 4] > 0.93;
       case 6: { const i = this.idx(k.x[id], k.y[id]); return this.water[i] < 0.05 && this.temp[i] < 38; }
-      case 8: return !this.corpses.some(c => c.claim === id);
+      // ⚠️ THE EMPTY CUP. The fed-only gate on errands is checked when the goal
+      // is CHOSEN, but an errand is a walk — a kin can set out well fed, cross
+      // the town, and arrive starving. Caught by test: 'a hungry kin does not
+      // run errands' failed on the tend goal. Both errands now release the
+      // moment the carer is themselves in trouble. You cannot pour from an
+      // empty cup, and a colony that forgets this is the burial spiral again.
+      case 8:
+        if (k.need[b + 2] < 0.35 || k.need[b + 1] < 0.35) return true;
+        return !this.corpses.some(c => c.claim === id);
+      case 9: {                               // ⚠️ without this they hold to expiry and starve
+        if (k.need[b + 2] < 0.35 || k.need[b + 1] < 0.35) return true;
+        const t = k.goal[id] === 9 ? (k.goalT[id] | 0) : -1;
+        if (t < 0 || !k.alive[t] || !k.glued[t]) return true;
+        let worst = 1;
+        for (let n = 1; n < NN; n++) { const v = k.need[t * NN + n]; if (v < worst) worst = v; }
+        return worst > 0.85;                  // they are seen to. go live your life.
+      }
       default: return false;
     }
   }
 
   _move(id) {
     const k = this.k;
+    if (k.glued[id]) return;                  // the one who stays. never moves.
     const dx = k.tx[id] - k.x[id], dy = k.ty[id] - k.y[id];
     const d = Math.sqrt(dx * dx + dy * dy);
     if (d < 0.35) return;
@@ -837,6 +929,23 @@ export class Sim {
       case 5: if (near) k.need[base + 4] = Math.min(1, k.need[base + 4] + 0.018); break;
       case 7: if (near) this._breed(id, k.goalT[id] | 0); break;
       case 8: if (near && this.corpses.length) this._carry(id); break;
+      case 9: {                               // sitting with the one who stays
+        const t = k.goalT[id] | 0;
+        if (near && k.alive[t] && k.glued[t]) {
+          // they bring what they have, and it costs them a little. Warmth is
+          // skipped on purpose: you cannot hand somebody a warm place to stand.
+          for (let n = 1; n < NN; n++) {
+            const give = Math.min(0.05, k.need[base + n] * 0.5);
+            k.need[t * NN + n] = Math.min(1, k.need[t * NN + n] + give);
+            k.need[base + n] = Math.max(0, k.need[base + n] - give * 0.5);
+          }
+          k.need[t * NN + 4] = Math.min(1, k.need[t * NN + 4] + 0.03);
+          if (this.day - (this._tendLog == null ? -99 : this._tendLog) > 6) {
+            this._tendLog = this.day;
+            this.log('tend', `${this.nameOf(id)} went and sat a while with ${this.nameOf(t)}.`, 1.5);
+          }
+        }
+      } break;
     }
     if (k.goal[id] !== 4) k.need[base + 3] = Math.max(0, k.need[base + 3] - 0.0002);
     // company from proximity, cheaply: being near your target counts
@@ -891,11 +1000,13 @@ export class Sim {
     this.free.push(id);
     this.stats.died++;
     if (k.stage[id] !== STAGE.EGG) {
-      this.corpses.push({ x: k.x[id], y: k.y[id], nameId: k.nameId[id], gen: k.gen[id], t: this.tick, cause, claim: -1 });
+      this.corpses.push({ x: k.x[id], y: k.y[id], nameId: k.nameId[id], gen: k.gen[id], t: this.tick, cause, claim: -1, glued: k.glued[id] ? 1 : 0 });
       if (this.corpses.length > 24) this.corpses.shift();
     }
     const how = { age: 'grew old', hunger: 'went hungry', thirst: 'went dry', heat: 'was in the warm place too long', cold: 'went cold', water: 'was in the low end when it filled' }[cause] || 'stopped';
-    if (named) this.log('death-named', `${nm} ${how}.`, 2.0);
+    // there is only ever one of these, and there will never be another
+    if (k.glued[id]) this.log('stillgone', `${nm} ${how}, in the one place ${nm} had ever been.`, 6.0);
+    else if (named) this.log('death-named', `${nm} ${how}.`, 2.0);
     else if (cause !== 'age') this.log('death', `one ${how}.`, 0.5);
   }
 
@@ -911,8 +1022,10 @@ export class Sim {
     }
     this.graves.push({ x: gx, y: gy, nameId: c.nameId, day: this.day, gen: c.gen });
     this.stats.buried++;
-    const carrier = this._name(id, `who carried the dead to the shelf`);
-    if (c.nameId >= 0) this.log('burial', `${carrier} carried ${this.names[c.nameId]} to the yard.`, 1.8);
+    const carrier = this._name(id, `who carried the dead to the yard`);
+    if (c.glued && c.nameId >= 0) {
+      this.log('stillcarried', `${carrier} carried ${this.names[c.nameId]} to the yard — the only journey ${this.names[c.nameId]} ever took.`, 7.0);
+    } else if (c.nameId >= 0) this.log('burial', `${carrier} carried ${this.names[c.nameId]} to the yard.`, 1.8);
   }
 
   _corpses() {
@@ -955,15 +1068,53 @@ export class Sim {
   setLamp(v) { this.lampOn = !!v; }
 
   // -- the page (bible §12.3) — max three reversals, one clause per line ------
+  //
+  // ⚠️⚠️ THE BOOK USED TO GO BLIND, and this is the game's whole promise (P2).
+  // `score` freezes rarity as 1/sqrt(count-so-far), so the FIRST death ever
+  // scores 1.0 and the hundredth scores 0.1. Measured on a real 240-day colony:
+  // every page still spanned days 0-62. A hundred and seventy-eight days of
+  // lived history could never appear, no matter what happened in them.
+  // Recency weighting does NOT fix this — the rarity gap is ~12x and swamps any
+  // honest lift (tested: identical page). STRATIFYING fixes it. A life gets a
+  // beginning, a middle and an end, and "remarkable" means remarkable FOR ITS
+  // OWN TIME — a second mutation on day 80 is news even though it is the
+  // thirty-seventh overall.
   page(fromDay = 0) {
+    const MAX = 7;
     const pool = this.chronicle.filter(e => e.day >= fromDay);
-    const perKind = {}; const out = [];
-    pool.slice().sort((a, b) => b.score - a.score).forEach(e => {
-      if (out.length >= 7) return;
-      perKind[e.kind] = (perKind[e.kind] || 0) + 1;
-      if (perKind[e.kind] > 2) return;          // no kind dominates the page
-      out.push(e);
-    });
+    if (!pool.length) return [];
+    const lo = pool[0].day, hi = Math.max(this.day, lo);
+    // a short run is one act; there is no middle of a life that just started
+    const ACTS = (hi - lo) < 6 ? 1 : 3;
+    const per = ACTS === 1 ? [MAX] : [3, 2, 2];
+    const width = (hi - lo + 1) / ACTS;
+
+    const out = [], used = new Set(), perKind = {};
+    const take = (list, quota) => {
+      let n = 0;
+      for (const e of list) {
+        if (n >= quota) break;
+        if (used.has(e)) continue;
+        if ((perKind[e.kind] || 0) >= 2) continue;   // no kind dominates the page
+        perKind[e.kind] = (perKind[e.kind] || 0) + 1;
+        out.push(e); used.add(e); n++;
+      }
+    };
+
+    for (let a = 0; a < ACTS; a++) {
+      const s0 = lo + width * a;
+      const s1 = a === ACTS - 1 ? hi + 1 : lo + width * (a + 1);
+      const band = pool.filter(e => e.day >= s0 && e.day < s1);
+      if (!band.length) continue;
+      const local = new Map();
+      for (const e of band) local.set(e.kind, (local.get(e.kind) || 0) + 1);
+      // rare FOR ITS OWN ACT. `w` is the intent weight; old saves predate it.
+      const rank = new Map(band.map(e => [e, (e.w != null ? e.w : e.score) / Math.sqrt(local.get(e.kind))]));
+      band.sort((x, y) => rank.get(y) - rank.get(x));
+      take(band, per[a]);
+    }
+    // a quiet act must not shorten the book — top it up from the whole run
+    if (out.length < MAX) take(pool.slice().sort((a, b) => b.score - a.score), MAX - out.length);
     out.sort((a, b) => a.day - b.day);
     return out;
   }

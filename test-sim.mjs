@@ -166,7 +166,7 @@ t('long drift does not corrupt the genome', () => {
 console.log('life');
 t('a seeded colony survives 200 days unattended', () => {
   const s = new Sim({ seed: 'live' });
-  run(s, 56);
+  run(s, 200);
   ok(s.alive > 0, 'colony died out');
   ok(s.stats.born > 0, 'nothing was born');
 });
@@ -181,7 +181,7 @@ t('population is neither a flatline nor a spike (M2 gate)', () => {
 t('the dead get buried and the graves accumulate', () => {
   const s = new Sim({ seed: 'live' });
   run(s, 73);
-  ok(s.stats.died > 0, 'nobody died in 260 days');
+  ok(s.stats.died > 0, 'nobody died in 73 days');
   ok(s.graves.length > 0, 'nobody was buried');
 });
 t('nothing ever leaves the jar', () => {
@@ -342,6 +342,48 @@ t('three runs produce three different stories (M6 gate)', () => {
   });
   ok(new Set(texts).size === 3, 'pages were identical');
 });
+// ⚠️ REGRESSION GUARD. The page used to freeze rarity at log time, so every book
+// ever written covered only the first sixty days — measured at day 240, the page
+// spanned days 0-62 and 178 days of lived history could not appear. If someone
+// "simplifies" page() back to a flat score sort, these three tests fail.
+t('a long life reaches the book (the page does not go blind)', () => {
+  const s = new Sim({ seed: 'page' });
+  run(s, 240);
+  const p = s.page();
+  const newest = Math.max(...p.map(e => e.day));
+  ok(newest > s.day * 0.4, `book is blind: newest line is day ${newest} of ${s.day}`);
+});
+t('the book has a beginning, a middle and an end', () => {
+  const s = new Sim({ seed: 'page' });
+  run(s, 240);
+  const acts = [0, 0, 0];
+  s.page().forEach(e => acts[Math.min(2, Math.floor(e.day / (s.day / 3)))]++);
+  ok(acts.every(a => a > 0), `all lines fell in one act: ${acts.join('/')}`);
+});
+t('page(fromDay) returns only that window', () => {
+  const s = new Sim({ seed: 'page' });
+  run(s, 200);
+  const mark = s.day;
+  run(s, 40);
+  const p = s.page(mark);
+  ok(p.length > 0, 'no lines in the window');
+  ok(p.every(e => e.day >= mark), 'leaked events from before the window');
+});
+t('a two-day-old colony still writes a page', () => {
+  const s = new Sim({ seed: 'young' });
+  run(s, 2);
+  const p = s.page();
+  ok(p.length > 0 && p.length <= 7, `young page length ${p.length}`);
+  ok(new Set(p).size === p.length, 'the page repeated an entry');
+});
+t('the page never repeats an entry', () => {
+  for (const seed of ['page', 'live', 'basement']) {
+    const s = new Sim({ seed });
+    run(s, 150);
+    const p = s.page();
+    ok(new Set(p).size === p.length, `${seed}: duplicate entries on the page`);
+  }
+});
 t('rare kinds outrank common ones', () => {
   const s = new Sim({ seed: 'rare' });
   run(s, 84);
@@ -353,6 +395,104 @@ t('rare kinds outrank common ones', () => {
   const last = s.chronicle.filter(e => e.kind === common).slice(-1)[0];
   const first = s.chronicle.filter(e => e.kind === common)[0];
   ok(last.score <= first.score, 'rarity score did not decay with repetition');
+});
+
+// --- the one who stays (dad glued a figure down) ---------------------------
+console.log('the one who stays');
+t('dad glued exactly one figure, and it is a named adult', () => {
+  for (const seed of ['a', 'b', 'c', 'live', 'basement']) {
+    const s = new Sim({ seed });
+    let n = 0, id = -1;
+    for (let i = 0; i < s.count; i++) if (s.k.glued[i]) { n++; id = i; }
+    eq(n, 1, `${seed}: glued count`);
+    ok(s.k.nameId[id] >= 0, `${seed}: the one who stays has no name`);
+    eq(s.k.stage[id], STAGE.WHOLE, `${seed}: not an adult`);
+  }
+});
+t('the one who stays NEVER moves', () => {
+  const s = new Sim({ seed: 'live' });
+  let g = -1; for (let i = 0; i < s.count; i++) if (s.k.glued[i]) g = i;
+  // ⚠️ kin slots are RECYCLED via s.free, so a dead glued kin's slot can be
+  // reused by a newborn that walks. Only measure while it is still the SAME kin.
+  const nid = s.k.nameId[g], x0 = s.k.x[g], y0 = s.k.y[g];
+  let drift = 0;
+  for (let i = 0; i < C.TICKS_PER_DAY * 60; i++) {
+    s.step();
+    if (s.k.alive[g] && s.k.glued[g] && s.k.nameId[g] === nid) {
+      drift = Math.max(drift, Math.abs(s.k.x[g] - x0) + Math.abs(s.k.y[g] - y0));
+    }
+  }
+  eq(drift, 0, 'the glued figure moved');
+});
+t('the glue never spreads to anyone born here', () => {
+  const s = new Sim({ seed: 'basement' });
+  let maxG = 0;
+  for (let d = 0; d < 90; d++) {
+    run(s, 1);
+    let g = 0; for (let id = 0; id < s.count; id++) if (s.k.alive[id] && s.k.glued[id]) g++;
+    maxG = Math.max(maxG, g);
+  }
+  ok(maxG <= 1, `${maxG} glued kin alive at once — a recycled slot leaked the flag`);
+});
+t('the town comes to tend them', () => {
+  const s = new Sim({ seed: 'live' });
+  let days = 0;
+  for (let d = 0; d < 60; d++) {
+    run(s, 1);
+    for (let id = 0; id < s.count; id++) if (s.k.alive[id] && s.k.goal[id] === 9) { days++; break; }
+  }
+  ok(days > 3, `nobody ever went to them (${days}/60 days had a tender)`);
+});
+t('ONE tender at a time (the burial-spiral claim)', () => {
+  const s = new Sim({ seed: 'live' });
+  let worst = 0;
+  for (let i = 0; i < C.TICKS_PER_DAY * 60; i++) {
+    s.step();
+    if (i % 97 !== 0) continue;
+    const per = new Map();
+    for (let id = 0; id < s.count; id++) {
+      if (!s.k.alive[id] || s.k.goal[id] !== 9) continue;
+      const tgt = s.k.goalT[id] | 0;
+      per.set(tgt, (per.get(tgt) || 0) + 1);
+    }
+    for (const v of per.values()) worst = Math.max(worst, v);
+  }
+  ok(worst <= 1, `${worst} kin tended one person at once — the spiral is back`);
+});
+t('a hungry kin does not run errands', () => {
+  const s = new Sim({ seed: 'live' });
+  for (let i = 0; i < C.TICKS_PER_DAY * 60; i++) {
+    s.step();
+    if (i % 89 !== 0) continue;
+    for (let id = 0; id < s.count; id++) {
+      if (!s.k.alive[id] || s.k.goal[id] !== 9) continue;
+      ok(s.k.need[id * NEEDS.length + 2] > 0.25, 'a starving kin went tending');
+    }
+  }
+});
+t('a town with someone to look after does not collapse', () => {
+  const s = new Sim({ seed: 'basement' });
+  run(s, 150);
+  ok(s.alive > 5, `collapsed to ${s.alive} — check the tend goal`);
+});
+t('glued state round-trips through a save', () => {
+  const s = new Sim({ seed: 'c' });
+  run(s, 25);
+  const grab = (x) => { const o = []; for (let i = 0; i < x.count; i++) if (x.k.glued[i]) o.push([i, x.k.x[i], x.k.y[i], x.k.nameId[i]]); return JSON.stringify(o); };
+  const before = grab(s);
+  const r = Sim.fromJSON(JSON.parse(JSON.stringify(s.toJSON())));
+  eq(grab(r), before, 'glued state did not survive the save');
+  eq(r.fingerprint(), s.fingerprint(), 'fingerprint changed across the save');
+});
+t('founders are never born already past their lifespan', () => {
+  for (let i = 0; i < 25; i++) {
+    const s = new Sim({ seed: 'fx' + i });
+    for (let id = 0; id < s.count; id++) {
+      if (!s.k.alive[id]) continue;
+      ok(s.k.age[id] < s.k.lifespan[id],
+        `founder aged ${s.k.age[id].toFixed(0)} with a lifespan of ${s.k.lifespan[id].toFixed(0)}`);
+    }
+  }
 });
 
 // --- soak ------------------------------------------------------------------
@@ -380,7 +520,7 @@ console.log('');
 {
   const s = new Sim({ seed: 'report' });
   run(s, 300);
-  console.log(`sample run (seed "report", 400 days):`);
+  console.log(`sample run (seed "report", 300 days):`);
   console.log(`  alive ${s.alive} · born ${s.stats.born} · died ${s.stats.died} · buried ${s.stats.buried} · peak ${s.stats.peak} · gen ${s.stats.generations}`);
   console.log(`  the page:`);
   s.page().forEach(e => console.log(`    day ${String(e.day).padStart(3)} · ${e.text}`));

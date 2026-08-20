@@ -234,10 +234,14 @@ export class View {
     }));
     this.jar.add(this.ground);
 
-    // the sculpted scenery shell — plaster over screen wire, painted dirt
+    // The sculpted scenery shell — plaster over screen wire, painted dirt.
+    // ⚠️ This was a straight cylinder and the whole layout read as A GREEN CAKE
+    // IN A TIN (captured, then fixed): a vertical wall around a disc is exactly
+    // what a jar looks like, which is the fiction we left behind. It flares out
+    // to meet the plywood now, the way a real embankment is built up off a board.
     const skirt = new THREE.Mesh(
-      new THREE.CylinderGeometry(GR * 0.916, GR * 0.916, EDGE_Y - BASE, 72, 1, true),
-      new THREE.MeshBasicMaterial({ color: 0x3a2f24, side: THREE.DoubleSide })
+      new THREE.CylinderGeometry(GR * 0.916, GR * 1.055, EDGE_Y - BASE, 72, 1, true),
+      new THREE.MeshBasicMaterial({ color: 0x6b5537, side: THREE.DoubleSide })
     );
     skirt.position.y = (BASE + EDGE_Y) / 2;
     this.jar.add(skirt);
@@ -248,6 +252,15 @@ export class View {
     );
     ring.rotation.x = -Math.PI / 2; ring.position.y = EDGE_Y - 0.001;
     this.jar.add(ring);
+
+    // where the embankment meets the board: a feathered apron of spilled
+    // ground foam, so the scenery ends in scatter instead of a hard rim
+    const apron = new THREE.Mesh(
+      new THREE.RingGeometry(GR * 1.03, GR * 1.20, 72),
+      new THREE.MeshBasicMaterial({ color: 0x4a3c26, transparent: true, opacity: 0.55, depthWrite: false })
+    );
+    apron.rotation.x = -Math.PI / 2; apron.position.y = BASE + 0.002;
+    this.jar.add(apron);
 
     const base = new THREE.Mesh(
       new THREE.CircleGeometry(GR * 0.915, 64),
@@ -532,6 +545,26 @@ export class View {
     this.lanterns.frustumCulled = false;
     this.jar.add(this.lanterns);
 
+    // DAD'S DROP OF GLUE — gone amber and hard, under exactly one figure.
+    // ⚠️ polygonOffset, NOT a raised y: the scenery's surface height varies, so
+    // a fixed offset either floats or sinks under the ground and depth-fails.
+    const gc = document.createElement('canvas'); gc.width = gc.height = 64;
+    const gg = gc.getContext('2d');
+    const grd = gg.createRadialGradient(32, 32, 2, 32, 32, 32);
+    grd.addColorStop(0, 'rgba(228,186,96,0.92)');
+    grd.addColorStop(0.55, 'rgba(198,150,62,0.55)');
+    grd.addColorStop(1, 'rgba(170,124,48,0)');
+    gg.fillStyle = grd; gg.fillRect(0, 0, 64, 64);
+    this.glue = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.062, 0.062),
+      new THREE.MeshBasicMaterial({
+        map: new THREE.CanvasTexture(gc), transparent: true, depthWrite: false,
+        polygonOffset: true, polygonOffsetFactor: -5, polygonOffsetUnits: -5,
+      }));
+    this.glue.rotation.x = -Math.PI / 2;
+    this.glue.visible = false;
+    this.jar.add(this.glue);
+
     this._m4 = new THREE.Matrix4();
     this._q = new THREE.Quaternion();
     this._v = new THREE.Vector3();
@@ -549,9 +582,22 @@ export class View {
     return [x, y, z];
   }
 
+  // the lantern is the entire UI (Invariant 7), so both the walking path and
+  // the one-who-stays path must light identically
+  _paintLantern(id, n, x, y, z, sz, grow, st) {
+    const s = this.sim, k = s.k;
+    const pulse = 0.72 + 0.28 * Math.sin(this.t * k.pulse[id] * 6.28);
+    const b = k.bright[id] * pulse;
+    this._col.setHSL(k.hue[id] / 360, st === STAGE.EGG ? 0.45 : 0.92, 0.22 + b * 0.34);
+    const o = n * 3;
+    this.lanternPos[o] = x; this.lanternPos[o + 1] = y + 0.024 * sz; this.lanternPos[o + 2] = z;
+    this.lanternCol[o] = this._col.r; this.lanternCol[o + 1] = this._col.g; this.lanternCol[o + 2] = this._col.b;
+    this.lanternSize[n] = (0.070 + b * 0.115) * grow * (0.80 + (1 - s.daylight) * 0.55);
+  }
+
   _paintKin() {
     const s = this.sim, k = s.k;
-    let n = 0;
+    let n = 0, glueSeen = false;
     for (let id = 0; id < s.count; id++) {
       if (!k.alive[id]) continue;
       const [x, y, z] = this.cellToLocal(k.x[id], k.y[id], 0.012);
@@ -565,6 +611,21 @@ export class View {
       const bob = moving ? Math.abs(Math.sin(ph)) : 0.5 + Math.sin(ph * 0.35) * 0.08;
       const sq = 1 + (moving ? Math.sin(ph * 2) * 0.16 : Math.sin(ph * 0.5) * 0.04);
 
+      // the one who stays never bobs and never turns — they are stuck fast,
+      // and the stillness is the tell before you ever open the inspector
+      if (k.glued[id]) {
+        this.glue.position.set(x, y - 0.010, z);
+        this.glue.visible = true; glueSeen = true;
+        this._v.set(x, y, z);
+        this._sc.set(sz, sz, sz);
+        this._q.setFromAxisAngle({ x: 0, y: 1, z: 0 }, k.phase[id] * 6.28);
+        this._m4.compose(this._v, this._q, this._sc);
+        this.bodies.setMatrixAt(n, this._m4);
+        this._paintLantern(id, n, x, y, z, sz, grow, st);
+        this.kinScreen[n] = id; n++;
+        continue;
+      }
+
       this._v.set(x, y + (moving ? bob * 0.006 : 0), z);
       this._sc.set(sz / sq, sz * sq, sz / sq);
       const face = Math.atan2(k.tx[id] - k.x[id], k.ty[id] - k.y[id]);
@@ -572,17 +633,11 @@ export class View {
       this._m4.compose(this._v, this._q, this._sc);
       this.bodies.setMatrixAt(n, this._m4);
 
-      // lantern
-      const pulse = 0.72 + 0.28 * Math.sin(this.t * k.pulse[id] * 6.28);
-      const b = k.bright[id] * pulse;
-      this._col.setHSL(k.hue[id] / 360, st === STAGE.EGG ? 0.45 : 0.92, 0.22 + b * 0.34);
-      const o = n * 3;
-      this.lanternPos[o] = x; this.lanternPos[o + 1] = y + 0.024 * sz; this.lanternPos[o + 2] = z;
-      this.lanternCol[o] = this._col.r; this.lanternCol[o + 1] = this._col.g; this.lanternCol[o + 2] = this._col.b;
-      this.lanternSize[n] = (0.070 + b * 0.115) * grow * (0.80 + (1 - s.daylight) * 0.55);
+      this._paintLantern(id, n, x, y, z, sz, grow, st);
       this.kinScreen[n] = id;
       n++;
     }
+    this.glue.visible = glueSeen;
     this.bodies.count = n;
     this.bodies.instanceMatrix.needsUpdate = true;
     this.lanterns.geometry.setDrawRange(0, n);
@@ -621,47 +676,33 @@ export class View {
 
   // -- the cover -------------------------------------------------------------
   _cover() {
-    // dad's plastic sheeting. Draped = the town is sealed and its rain comes
-    // back; pulled off (L) = the open basement air drinks the pond. This is
-    // the jar's lid wearing its new fiction — the sim boolean is unchanged.
-    const mat = new THREE.ShaderMaterial({
-      uniforms: { uTint: { value: new THREE.Color(0xcfe0ea) }, uAmt: { value: 0.55 } },
-      transparent: true, depthWrite: false, side: THREE.DoubleSide,
-      blending: THREE.AdditiveBlending,
-      vertexShader: `
-        varying vec3 vN; varying vec3 vV;
-        void main(){
-          vec4 wp = modelMatrix * vec4(position,1.0);
-          vN = normalize(mat3(modelMatrix) * normal);
-          vV = normalize(cameraPosition - wp.xyz);
-          gl_Position = projectionMatrix * viewMatrix * wp;
-        }`,
-      fragmentShader: `
-        uniform vec3 uTint; uniform float uAmt;
-        varying vec3 vN; varying vec3 vV;
-        void main(){
-          float f = 1.0 - abs(dot(normalize(vN), normalize(vV)));
-          float a = pow(f, 3.0) * uAmt + 0.016;
-          gl_FragColor = vec4(uTint * a, a);
-        }`,
-    });
-    this.cover = new THREE.Group();
-    const dome = new THREE.SphereGeometry(1, 30, 12, 0, Math.PI * 2, 0, Math.PI / 2);
-    // crinkle: plastic never drapes smooth
-    const dp = dome.attributes.position;
-    for (let i = 0; i < dp.count; i++) {
-      const wob = 1 + Math.sin(i * 12.9898) * 0.028 + Math.cos(i * 78.233) * 0.02;
-      dp.setXYZ(i, dp.getX(i) * wob, dp.getY(i), dp.getZ(i) * wob);
+    // Dad's plastic sheeting over the whole layout. Draped = the town is sealed
+    // and its rain comes back; pulled off (L) = the open basement air drinks the
+    // pond. The sim boolean is untouched — this is the jar's lid wearing its
+    // new fiction.
+    // ⚠️ This was an ADDITIVE hemisphere and it read as a floating ghost-wisp
+    // over the hill, not as plastic over a table (captured, then fixed).
+    // Additive light cannot look like a dusty translucent sheet. Normal
+    // blending, a real sag, and it has to cover the BOARD, not just the scenery.
+    const geo = new THREE.PlaneGeometry(TW * 1.04, TD * 1.10, 44, 26);
+    geo.rotateX(-Math.PI / 2);
+    const pos = geo.attributes.position;
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i), z = pos.getZ(i);
+      const u = x / (TW * 0.52), w = z / (TD * 0.55);          // -1..1 over the board
+      const r = Math.sqrt(u * u + w * w);
+      const tent = Math.max(0, 1 - r * 1.05) * 0.34;           // it tents over the scenery
+      const droop = Math.min(0, (0.86 - r)) * 1.15;            // and hangs off the edges
+      const crinkle = Math.sin(x * 8.3) * Math.cos(z * 10.9) * 0.014
+                    + Math.sin(x * 21.7 + z * 17.3) * 0.005;   // plastic never drapes smooth
+      pos.setY(i, tent + droop + crinkle);
     }
-    dome.computeVertexNormals();
-    const sheet = new THREE.Mesh(dome, mat);
-    sheet.scale.set(R * 1.16, 0.52, R * 1.16);
-    this.cover.add(sheet);
-    const hang = new THREE.Mesh(
-      new THREE.CylinderGeometry(R * 1.16, R * 1.24, 0.15, 30, 1, true), mat);
-    hang.position.y = -0.07;
-    this.cover.add(hang);
-    this.cover.position.y = EDGE_Y + 0.012;
+    geo.computeVertexNormals();
+    this.cover = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+      color: 0xd8e2ea, transparent: true, opacity: 0.15,
+      side: THREE.DoubleSide, depthWrite: false,
+    }));
+    this.cover.position.y = EDGE_Y + 0.03;
     this.jar.add(this.cover);
     this.coverT = this.sim.lid ? 1 : 0;
 
@@ -752,9 +793,11 @@ export class View {
     const want = s.lid ? 1 : 0;
     this.coverT += (want - this.coverT) * Math.min(1, dt * 3.4);
     const ct = this.coverT;
-    this.cover.position.set(ct * 1.72, EDGE_Y + 0.012 - ct * 0.17, ct * 0.34);
-    this.cover.rotation.z = -ct * 0.5;
-    this.cover.scale.set(1 - ct * 0.28, 1 - ct * 0.66, 1 - ct * 0.30);
+    // pulled off, the sheet slides clear of the board and crumples beside it —
+    // it does not vanish. Dad will notice it moved.
+    this.cover.position.set(ct * TW * 0.86, EDGE_Y + 0.03 - ct * 0.34, ct * 0.16);
+    this.cover.rotation.z = -ct * 0.40;
+    this.cover.scale.set(1 - ct * 0.42, 1 - ct * 0.60, 1 - ct * 0.10);
     this.fogMesh.material.opacity =
       Math.min(0.30, Math.max(0, s.humid - 5) * 0.018 + s.fog * 0.24) * (1 - ct * 0.5);
 

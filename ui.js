@@ -99,12 +99,18 @@ export class UI {
     const NN = NEEDS.length, base = id * NN;
     const nm = s.nameOf(id);
     const st = STAGE_NAME[k.stage[id]];
+    // ⚠️ an index past the end of GOALS renders 'standing' — keep this in step
+    // with the goal list in sim.js _decide (0 wander … 9 tend)
     const GOALS = ['wandering', 'looking for food', 'going to water', 'looking for a warm place',
-      'resting', 'looking for company', 'getting away', 'courting', 'carrying the dead'];
+      'resting', 'looking for company', 'getting away', 'courting', 'carrying the dead',
+      'going to the one who stays'];
 
+    const glued = !!k.glued[id];
     let h = `<div class="who"><span class="dot" style="background:${hueCss(k.hue[id], 55)}"></span>
       <b>${nm}</b><i>${st} · ${k.age[id].toFixed(0)} of ~${k.lifespan[id].toFixed(0)} days</i></div>`;
-    h += `<div class="doing">${GOALS[k.goal[id]] || 'standing'}</div>`;
+    // they still want everything anyone wants. they simply cannot go and get it.
+    h += `<div class="doing">${glued ? 'wants ' + (GOALS[k.goal[id]] || 'nothing').replace(/^(looking for|going to) /, '') + ' · cannot move' : (GOALS[k.goal[id]] || 'standing')}</div>`;
+    if (glued) h += `<div class="line2" style="color:#c79a3e">stuck fast to the world. whatever ${nm} needs, somebody has to bring it.</div>`;
 
     h += '<div class="needs">';
     for (let n = 0; n < NN; n++) {
@@ -138,11 +144,15 @@ export class UI {
   }
 
   // -- THE PAGE (§12.3) ------------------------------------------------------
-  showPage() {
+  showPage(fromDay = 0) {
     const s = this.sim;
-    const p = s.page();
+    const p = s.page(fromDay);
     const body = $('pageBody');
-    let h = `<h2>the book of the town</h2><div class="sub">day ${s.day} · ${s.alive || 0} alive · ${s.graves.length} in the yard</div><ol>`;
+    const title = fromDay > 0 ? 'while you were away' : 'the book of the town';
+    const sub = fromDay > 0
+      ? `${s.day - fromDay} days passed · ${s.alive || 0} alive · ${s.graves.length} in the yard`
+      : `day ${s.day} · ${s.alive || 0} alive · ${s.graves.length} in the yard`;
+    let h = `<h2>${title}</h2><div class="sub">${sub}</div><ol>`;
     p.forEach(e => { h += `<li><span>${e.day}</span>${e.text}</li>`; });
     h += '</ol>';
     h += `<div class="foot">a DIRTY BOY DEVS game</div>`;

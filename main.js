@@ -110,8 +110,11 @@ class App {
     let n = 0;
     while (n < target && performance.now() - t0 < 2500) { this.sim.step(); n++; }
     note.classList.add('hide');
+    // ⚠️ fromDay was computed and then dropped: the "while you were away" page
+    // showed the whole run's greatest hits, which after the sifter fix means
+    // mostly the founding. Pass it — this page is about the nights you missed.
     this.awayFrom = fromDay;
-    setTimeout(() => { this.ui.showPage(); }, 500);
+    setTimeout(() => { this.ui.showPage(fromDay); }, 500);
   }
 
   setSpeed(s) {
