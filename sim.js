@@ -70,7 +70,8 @@ export const C = {
   MOSS_GROW: 0.00024,    // per tick at ideal temp+moisture
   MOSS_IDEAL: 24.0,
   MOSS_BAND: 13.0,
-  MOSS_EAT: 0.34,        // moss consumed by one feeding
+  MOSS_EAT: 0.34,
+  MOSS_FEED: 2.4,       // how much need one unit of moss actually buys        // moss consumed by one feeding
 
   EVAP: 0.0000042,       // per tick — becomes suspended humidity, not lost water
   CLOUD: 11.0,            // suspended water that triggers condensation
@@ -1046,17 +1047,45 @@ export class Sim {
     // food: they look close by first and only range wide when they're actually
     // hungry. ⚠️ A fixed 9-cell window starves a clustered colony to death in a
     // jar that is 60% covered in moss — they overgraze home and never look up.
+    // ⚠⚠ LOOK UNDERFOOT BEFORE LOOKING FAR. This search used to be 18 random
+    // samples inside a box whose radius GREW with hunger — up to ±49 cells, which
+    // is the entire board. Eighteen darts thrown at 9,216 cells is a 0.2% sample,
+    // so a starving kin almost never found the moss it was standing on and set
+    // off across the layout toward whichever distant cell it happened to hit.
+    // The hungrier they got, the WORSE they searched. Measured consequence:
+    // hunger was 67-75% of every death in the game, on a board sitting at 291%
+    // moss cover, and the suite's own 'nobody starves standing in food' test was
+    // the thing that finally pinned it.
+    //
+    // An animal checks where it is first. The near scan is exhaustive and cheap
+    // (a 7x7 at S=1.5, ~49 reads, on a decide that runs every third tick), and
+    // the wide random search only runs when there is genuinely nothing here.
     const hunger = 1 - k.need[base + 2];
-    const R = (7 + hunger * hunger * 26) * S;
-    const near2 = 0.6 - hunger * 0.45;
     let bm = 0, bmx = x, bmy = y;
-    for (let s = 0; s < 18; s++) {
-      const px = x + rr(rng, -R, R), py = y + rr(rng, -R, R);
+    const NR = Math.max(1, Math.round(2.5 * S));
+    for (let dy = -NR; dy <= NR; dy++) for (let dx = -NR; dx <= NR; dx++) {
+      const px = x + dx, py = y + dy;
       const i = this.idx(px, py);
       if (this.water[i] > 0.05) continue;
-      const d = Math.abs(px - x) + Math.abs(py - y);
-      const v = this.moss[i] / (1 + d * near2 * 0.2 / S);
+      const d = Math.abs(dx) + Math.abs(dy);
+      const v = this.moss[i] / (1 + d * 0.09 / S);
       if (v > bm) { bm = v; bmx = px; bmy = py; }
+    }
+    // ⚠️ the wide search is a FALLBACK, not the default. It still consumes the
+    // same rng draws it always did, so the stream only shifts when the branch is
+    // actually skipped — and it is skipped precisely when they are standing in
+    // food, which is the case that was killing them.
+    if (bm < 0.22) {
+      const R = (7 + hunger * hunger * 26) * S;
+      const near2 = 0.6 - hunger * 0.45;
+      for (let q = 0; q < 18; q++) {
+        const px = x + rr(rng, -R, R), py = y + rr(rng, -R, R);
+        const i = this.idx(px, py);
+        if (this.water[i] > 0.05) continue;
+        const d = Math.abs(px - x) + Math.abs(py - y);
+        const v = this.moss[i] / (1 + d * near2 * 0.2 / S);
+        if (v > bm) { bm = v; bmx = px; bmy = py; }
+      }
     }
     push(1, bmx, bmy, deficit(2) * (0.3 + bm * 2.6));
 
@@ -1326,7 +1355,17 @@ export class Sim {
     switch (k.goal[id]) {
       case 1: if (near && this.moss[i] > 0.05) {
         const take = Math.min(this.moss[i], C.MOSS_EAT * 0.06);
-        this.moss[i] -= take; k.need[base + 2] = Math.min(1, k.need[base + 2] + take * 1.5);
+        // ⚠⚠ THIS MULTIPLIER WAS 1.5, AND AT 1.5 EATING WAS A NET LOSS. Standing on
+        // saturated moss gained +0.030600 per tick while hunger cost -0.030667 —
+        // they starved 0.02% faster than they could feed. That one number is why
+        // 75% of all deaths were hunger on a board at 291% moss cover, why the
+        // population boom-busted against a ceiling of ~94 instead of compounding,
+        // and therefore why the settlement ladder stalled at day 400 with three
+        // quarters of the board still empty scenery. The whole second half of the
+        // game was missing because of a rounding-width margin in one line.
+        // At 2.4 a meal takes about 55 ticks and leaves a surplus;  is still
+        // capped by what is in the cell, so they still graze it out and move on.
+        this.moss[i] -= take; k.need[base + 2] = Math.min(1, k.need[base + 2] + take * C.MOSS_FEED);
       } break;
       case 11: {                              // eating something dad dropped
         let gf = null, bd = 1e9;
