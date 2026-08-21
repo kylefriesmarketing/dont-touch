@@ -81,6 +81,8 @@ export class View {
     this.titleDim = 0;          // 0 = the room as it is, 1 = dark at the bottom of the stairs
     this.titleTo = 0;           // eased toward; the light comes on, it does not snap
     this.reachId = -1; this.reachF = 0;   // who your hand is closing on, and how far
+    this.center = new THREE.Vector3();    // what the camera is actually looking at
+    this.centerTo = new THREE.Vector3();
     this.heldCell = null;                 // where a lifted kin is being carried
     this._foc = new THREE.Vector3();
     this.focusY = 0.47;
@@ -151,9 +153,13 @@ export class View {
     const fl = 0.30 + d * 0.70;
     this.fasciaMat.color.setRGB(0.10 * fl, 0.14 * fl, 0.11 * fl);
     // the room's light rises and falls with the day
-    this.hemi.intensity = 0.22 + d * 0.62;
-    this.key.intensity = 0.30 + d * 1.05;
-    this.fill.intensity = 0.12 + d * 0.34;
+    // ⚠️ FLOORS RAISED. Measured on a real start with the bulb on and the
+    // curtain at 0.75, daylight is only 0.22 — which put the key light at 0.41
+    // and the whole layout read as a dark green smudge. The floors are what a
+    // basement bulb does; `d` is still what decides day from night.
+    this.hemi.intensity = 0.40 + d * 0.62;
+    this.key.intensity = 0.62 + d * 1.05;
+    this.fill.intensity = 0.22 + d * 0.34;
     this.key.color.setRGB(1, 0.92 - d * 0.02, 0.78 + d * 0.04);
     // the title screen: the room before anybody came downstairs. View-only, and
     // applied last so it scales whatever the day had already decided.
@@ -1323,6 +1329,17 @@ export class View {
   // and letting go before it closes costs nothing.
   setReach(id, f) { this.reachId = id; this.reachF = f; }
 
+  // point the camera at where they actually live
+  lookAtTown() {
+    const s = this.sim, k = s.k;
+    let cx = 0, cy = 0, n = 0;
+    for (let i = 0; i < s.count; i++) if (k.alive[i]) { cx += k.x[i]; cy += k.y[i]; n++; }
+    if (!n) return;
+    cx /= n; cy /= n;
+    const N = s.N;
+    this.centerTo.set((cx / (N - 1) - 0.5) * GR * 2, 0.06, (cy / (N - 1) - 0.5) * GR * 2);
+  }
+
   // — what dad dropped. One group of small crumbs; a gift shrinks as it is
   // eaten, so the board shows how much of it is left without a number anywhere.
   _giftView() {
@@ -1440,12 +1457,21 @@ export class View {
     // ⚠️ the elevation floor is load-bearing: it is the only thing keeping the
     // horizon — and therefore whatever is beyond the board — out of frame.
     o.el = Math.max(EL_MIN, Math.min(EL_MAX, o.el));
+    // ⚠️ the eye and the target move TOGETHER. Shifting only lookAt swings the
+    // camera round and skews the board instead of panning across it.
+    // ⚠️ RE-AIMED ON A SLOW CADENCE, not once at startup. A town migrates — it
+    // follows the moss, the water and whatever you warmed — so a target fixed at
+    // entry drifts off it within days and you are back to watching empty board.
+    // Slow on purpose: this is the LOOK target, not the orbit, so the player
+    // still owns the camera and this only keeps the crowd in frame.
+    if ((this._aimT = (this._aimT || 0) + dt) > 2) { this._aimT = 0; this.lookAtTown(); }
+    this.center.lerp(this.centerTo, Math.min(1, dt * 0.8));
     this.camera.position.set(
-      Math.sin(o.az) * cy * o.dist,
+      this.center.x + Math.sin(o.az) * cy * o.dist,
       sy * o.dist + 0.10,
-      Math.cos(o.az) * cy * o.dist
+      this.center.z + Math.cos(o.az) * cy * o.dist
     );
-    this.camera.lookAt(0, 0.06, 0);
+    this.camera.lookAt(this.center.x, 0.06, this.center.z);
 
     // — THE REACH RING. Drawn from the same disc as the hand, so the player is
     // never looking at two different vocabularies for what their finger is doing.

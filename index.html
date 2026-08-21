@@ -99,6 +99,35 @@
     padding:0;font-size:calc(13px * var(--ui))}
   .fdiv{width:28px;height:1px;background:var(--edge)}
 
+  /* ============ THE HAND — what your hand can do, on screen ============ *
+     ⚠️ This is a mode selector, and the design notes argued hard against one:
+     a strip of pickable tools turns a hand into a toolbar. They were right in
+     principle and wrong in practice. Shipped without it, every power in the
+     game was an undiscoverable gesture, two of them were locked behind a switch
+     nobody had a reason to touch, and the actual verdict from playing it was
+     "there are no powers or way to interact". A power the player cannot find
+     is not a power. The gestures ALL still work exactly as they did — this
+     names them, and lets you pick one instead of having to know it. */
+  #hand{position:fixed;left:50%;transform:translateX(-50%);
+    bottom:calc(14px + env(safe-area-inset-bottom));z-index:8;
+    display:flex;gap:6px;padding:7px;border-radius:14px;
+    background:var(--panel);border:1px solid var(--edge);backdrop-filter:blur(9px)}
+  .hb{display:flex;flex-direction:column;align-items:center;gap:3px;
+    width:66px;padding:7px 4px 6px;border-radius:10px;border:1px solid transparent;
+    background:none;cursor:pointer;line-height:1}
+  .hb:hover{background:rgba(255,255,255,.06)}
+  .hb .g{font-size:19px;line-height:1;filter:saturate(.85)}
+  .hb .n{font-size:calc(10.5px * var(--ui));color:var(--faint);letter-spacing:.02em}
+  .hb[aria-pressed="true"]{background:rgba(216,164,92,.15);border-color:rgba(216,164,92,.45)}
+  .hb[aria-pressed="true"] .n{color:#e6d3ae}
+  .hb[aria-pressed="true"] .g{filter:none}
+  #handSay{position:fixed;left:50%;transform:translateX(-50%);
+    bottom:calc(92px + env(safe-area-inset-bottom));z-index:8;pointer-events:none;
+    color:#9fb0c4;font:italic 300 13px/1.4 Georgia,serif;text-align:center;
+    max-width:min(46ch,92vw);opacity:0;transition:opacity .3s ease;
+    text-shadow:0 2px 10px #04060a}
+  #handSay.up{opacity:1}
+
   /* ============ the feed =============================================== */
   #chronWrap{position:fixed;left:14px;bottom:calc(14px + env(safe-area-inset-bottom));
     width:min(38ch,42vw);max-height:32vh;display:flex;flex-direction:column;gap:6px;
@@ -271,6 +300,29 @@
 
 <div id="chronWrap" class="hide"><div id="chron"></div></div>
 <div id="nudge"></div>
+
+<!-- ============ the hand ============================================= -->
+<div id="handSay"></div>
+<div id="hand" class="hide">
+  <button class="hb" data-p="rest" aria-pressed="true"
+    data-say="rest a finger on them. it takes a few seconds to arrive, and it warms the ground without cooking it. hold still and it opens wider."
+    ><span class="g">🤚</span><span class="n">rest</span></button>
+  <button class="hb" data-p="press" aria-pressed="false"
+    data-say="bear down. a small hot point, well past anything alive can stand. the ground remembers it."
+    ><span class="g">👇</span><span class="n">press</span></button>
+  <button class="hb" data-p="breathe" aria-pressed="false"
+    data-say="breathe on them. hold it long enough and the air gives it back as rain."
+    ><span class="g">🌫</span><span class="n">breathe</span></button>
+  <button class="hb" data-p="tilt" aria-pressed="false"
+    data-say="lift one edge of the board off the sawhorses. the water runs downhill. so do they."
+    ><span class="g">⤢</span><span class="n">tilt</span></button>
+  <button class="hb" data-p="crumb" aria-pressed="false"
+    data-say="drop a crumb. at their size it is a boulder of food — the only thing in their world that is a thing rather than weather, and the first thing that runs out."
+    ><span class="g">🍞</span><span class="n">crumb</span></button>
+  <button class="hb" data-p="lift" aria-pressed="false"
+    data-say="pick one of them up. let go over the board and they are set down again. let go anywhere else and they do not come back, and there is no body to bury."
+    ><span class="g">✥</span><span class="n">lift</span></button>
+</div>
 
 <div id="inspect" class="hide">
   <h3>the one you're looking at <button id="closeInspect" style="padding:0 6px">×</button></h3>

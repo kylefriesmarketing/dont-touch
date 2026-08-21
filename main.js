@@ -80,6 +80,10 @@ class App {
     this.sfx = new Sfx();
     this.gest = new Gesture();
     this.touch = null;      // the live contact: {cx, cy, e} — e is 0 hot … 1 resting
+    // ⚠️ WHAT THE HAND IS CURRENTLY DOING. The gestures still all work, but a
+    // gesture nobody can see is not a feature — shipped without this, the honest
+    // verdict on playing it was "there are no powers or way to interact".
+    this.armed = 'rest';
   }
 
   async boot() {
@@ -174,7 +178,11 @@ class App {
     // whole board sitting at 14% light for the rest of the session, which
     // reads as a broken renderer rather than as a screen that forgot to lift.
     this.view.titleTo = 0;
-    for (const id of ['strip', 'fascia', 'chronWrap']) document.getElementById(id).classList.remove('hide');
+    for (const id of ['strip', 'fascia', 'chronWrap', 'hand']) document.getElementById(id).classList.remove('hide');
+    // ⚠️ LOOK AT THE TOWN, NOT AT THE MIDDLE OF THE PLYWOOD. Measured on a real
+    // start, the founders sit 35 cells from board centre — so the camera opened
+    // on empty scenery with the whole colony off in a corner.
+    this.view.lookAtTown();
     this.sfx.start();
     // Pulling the chain turns the bulb on — that is what the chain IS, and it
     // is the player's own hand doing it, so this one really is world state.
@@ -233,6 +241,20 @@ class App {
     this.sfx.start();
   }
 
+  // Picking a power is allowed to change the world, because two of them cannot
+  // physically happen through a sheet of plastic. Doing it FOR the player (and
+  // saying so) teaches what the sheet is for; refusing them, which is what
+  // shipped, just looks broken.
+  arm(p) {
+    this.armed = p;
+    if ((p === 'crumb' || p === 'lift') && this.sim.lid) {
+      this.sim.setLid(false);
+      this.ui.sync();
+      this.ui.nudge('the sheet is off. the room drinks their pond while it is.', 'sheetoff');
+    }
+    this.ui.armUI(p);
+  }
+
   // -- input ---------------------------------------------------------------
   bindInput(canvas) {
     const s = this.sim, v = this.view;
@@ -250,13 +272,21 @@ class App {
       canvas.setPointerCapture(e.pointerId);
       down = true; moved = 0; sx = e.clientX; sy = e.clientY;
       const [nx, ny] = norm(e);
-      const tilting = e.button === 2 || e.shiftKey;
+      const tilting = e.button === 2 || e.shiftKey || this.armed === 'tilt';
       if (tilting) { mode = 'tilt'; this.tilt0 = { x: s.tilt.x, y: s.tilt.y }; return; }
+
+      if (this.armed === 'breathe') { mode = 'breathe'; this.breathing = true; return; }
+
+      if (this.armed === 'crumb') {
+        const h = v.pickGround(nx, ny);
+        if (h && s.give(h.cell[0], h.cell[1])) { this.sfx.birth(); v.flinch(h.cell[0], h.cell[1]); }
+        mode = null; down = false; return;
+      }
       // — THE REACH. With the sheet OFF, a press that lands on a KIN is not a
       // press on the ground: hold it and you are holding a person. It is gated on
       // the sheet because your arm has to be inside their sky to do it, and the
       // sheet being off is charged for in drought and cold the whole time.
-      if (!s.lid && !s.held) {
+      if ((this.armed === 'lift' || !s.lid) && !s.held) {
         const who = v.pickKin(nx, ny);
         if (who >= 0 && s.k.alive[who] && s.k.stage[who] !== STAGE.EGG) {
           mode = 'reach';
@@ -271,7 +301,14 @@ class App {
         // ⚠️ a fresh contact starts HOT. Landing on a town is a shock; staying
         // still is what turns it into warmth. Do not start this at rest — the
         // player would never feel the difference the holding makes.
-        this.touch = { cx: hit.cell[0], cy: hit.cell[1], e: 0, px: e.clientX, py: e.clientY };
+        // ⚠️ WITH A POWER ARMED, THE CURVE IS NO LONGER A SECRET. 'rest' drives e
+        // to 1 (wide, 40°) and 'press' pins it at 0 (small, 150°) no matter how
+        // the hand moves, so the kind half and the cruel half are two buttons
+        // rather than a timing skill nobody was told about. The still-vs-moving
+        // crossfade still runs when neither is armed.
+        this.touch = { cx: hit.cell[0], cy: hit.cell[1],
+          e: this.armed === 'rest' ? 0.55 : 0, px: e.clientX, py: e.clientY,
+          lock: this.armed === 'rest' ? 1 : this.armed === 'press' ? 0 : null };
         this._pushHand();
         this.sfx.touch();
         v.flinch(hit.cell[0], hit.cell[1]);
@@ -381,6 +418,7 @@ class App {
           }
         }
       }
+      if (mode === 'breathe') this.breathing = false;
       if (mode === 'tilt') s.setTilt(0, 0);     // the jar rights itself
       mode = null;
     };
@@ -476,8 +514,8 @@ class App {
     if (!t) return;
     const moving = (t.moveT || 0) > 0;
     t.moveT = Math.max(0, (t.moveT || 0) - dt);
-    const to = moving ? 0 : 1;
-    const rate = moving ? HAND.warm : HAND.cool;
+    const to = t.lock != null ? t.lock : (moving ? 0 : 1);
+    const rate = t.lock != null ? 3.2 : (moving ? HAND.warm : HAND.cool);
     t.e += (to - t.e) * Math.min(1, rate * dt);
     const r = C.HAND_RADIUS * (HAND.hotR + (HAND.restR - HAND.hotR) * t.e);
     const heat = HAND.hotHeat + (HAND.restHeat - HAND.hotHeat) * t.e;

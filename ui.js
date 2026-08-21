@@ -80,6 +80,18 @@ export class UI {
     $('savePage').addEventListener('click', () => this.exportPage());
     $('closeInspect').addEventListener('click', () => this.select(-1));
 
+    // --- the hand -----------------------------------------------------------
+    $('hand').addEventListener('click', (e) => {
+      const b = e.target.closest('.hb'); if (!b) return;
+      this.app.arm(b.dataset.p);
+    });
+    // hovering one says what it does, without the game ever telling you to do it
+    $('hand').addEventListener('pointerover', (e) => {
+      const b = e.target.closest('.hb'); if (!b) return;
+      const say = $('handSay'); say.textContent = b.dataset.say; say.classList.add('up');
+    });
+    $('hand').addEventListener('pointerout', () => $('handSay').classList.remove('up'));
+
     // --- the box ------------------------------------------------------------
     const seg = (id, key, after) => {
       const box = $(id); if (!box) return;
@@ -94,6 +106,17 @@ export class UI {
     seg('setPost', 'post'); seg('setMotion', 'motion'); seg('setSound', 'sound');
     $('boxWrap').addEventListener('click', (e) => { if (e.target.id === 'boxWrap') this.showBox(false); });
     $('pageWrap').addEventListener('click', (e) => { if (e.target.id === 'pageWrap') $('pageWrap').classList.add('hide'); });
+  }
+
+  // reflect the armed power, and leave its description up for a moment so a
+  // click reads as an explanation rather than a mode change with no feedback
+  armUI(p) {
+    for (const b of document.querySelectorAll('#hand .hb')) {
+      const on = b.dataset.p === p;
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      if (on) { const say = $('handSay'); say.textContent = b.dataset.say; say.classList.add('up');
+        clearTimeout(this._sayT); this._sayT = setTimeout(() => say.classList.remove('up'), 4200); }
+    }
   }
 
   showBox(on) { $('boxWrap').classList.toggle('hide', !on); }
