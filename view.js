@@ -84,6 +84,7 @@ export class View {
     this._cover();
     this._dust();
     this._handDisc();
+    this._nightLife();
     this._giftView();
 
     // the miniature look. Falls back to a plain render where WebGL2 is not
@@ -1601,6 +1602,100 @@ export class View {
       (0.055 + 0.020 * e), 0.55 + 0.35 * (1 - e), 0.52 + 0.16 * (1 - e));
   }
 
+  // —— WINDOWS AND RAIN —————————————————————————————————
+  // The Anno/SimCity 'the town is alive' read is buildings that LIGHT UP at
+  // dusk. One InstancedMesh of tiny warm quads, anchored to finished dwellings,
+  // opacity driven by night — the bloom pass turns them into lit windows for
+  // free. Rebuilt only when the works set changes; +1 draw call total.
+  _nightLife() {
+    this.windowIM = new THREE.InstancedMesh(
+      new THREE.PlaneGeometry(0.0074, 0.0092),
+      new THREE.MeshBasicMaterial({
+        color: 0xffca7a, transparent: true, opacity: 0,
+        blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+      }), 160);
+    this.windowIM.count = 0;
+    this.windowIM.frustumCulled = false;
+    this.jar.add(this.windowIM);
+    this._winSig = '';
+
+    // RAIN. s.rainLeft was invisible — the sky event with no sky. Slanted
+    // additive line segments inside the jar group, so tilting the board slants
+    // the rain WITH it (physically wrong, visually right: the rain is theirs).
+    const RN = 320;
+    this._rainN = RN;
+    const rg = new THREE.BufferGeometry();
+    this._rainPos = new Float32Array(RN * 2 * 3);
+    rg.setAttribute('position', new THREE.BufferAttribute(this._rainPos, 3));
+    rg.setDrawRange(0, 0);
+    this.rain = new THREE.LineSegments(rg, new THREE.LineBasicMaterial({
+      color: 0x9db8cc, transparent: true, opacity: 0.15,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    }));
+    this.rain.frustumCulled = false;
+    this.jar.add(this.rain);
+    this._rainSeed = [];
+    for (let i = 0; i < RN; i++) this._rainSeed.push([Math.random(), Math.random(), Math.random()]);
+  }
+
+  _paintNightLife(dt) {
+    const s = this.sim;
+    // -- windows: rebuild anchors only when the finished-dwelling set changes
+    let sig = '';
+    for (const [o] of this.workViews) if (o.kind >= 3 && o.prog >= 0.98) sig += o.x + ',' + o.y + ',' + o.kind + ';';
+    if (sig !== this._winSig) {
+      this._winSig = sig;
+      const m4 = new THREE.Matrix4(), v3 = new THREE.Vector3(), q = new THREE.Quaternion(),
+            sc = new THREE.Vector3(1, 1, 1), e = new THREE.Euler();
+      let n = 0;
+      for (const [o, g] of this.workViews) {
+        if (o.kind < 3 || o.prog < 0.98 || n >= 158) continue;
+        // ⚠️ OUTSIDE the deepest wall, or the quad sits inside the box and the
+        // depth test hides it — 7 windows rendered invisible on the first pass
+        // because a house body can be 0.062 deep and the quad sat at z 0.023.
+        const spots = o.kind === 3 ? [[0, 0.014, 0.036]]
+          : o.kind === 4 ? [[-0.014, 0.019, 0.038], [0.014, 0.019, 0.038]]
+          : [[-0.030, 0.027, 0.048], [0, 0.027, 0.048], [0.030, 0.027, 0.048]];
+        for (const [lx, ly, lz] of spots) {
+          // group-local offset through the group's own yaw, or windows float
+          // off the corners of every rotated building
+          v3.set(lx, ly, lz).applyAxisAngle({ x: 0, y: 1, z: 0 }, g.rotation.y);
+          v3.add(g.position);
+          e.set(0, g.rotation.y, 0); q.setFromEuler(e);
+          m4.compose(v3, q, sc);
+          this.windowIM.setMatrixAt(n++, m4);
+        }
+      }
+      this.windowIM.count = n;
+      this.windowIM.instanceMatrix.needsUpdate = true;
+    }
+    // dusk brings them up; the lamp being on does not put them out — a lit
+    // window is the household's own light, not the room's
+    const nightF = 1 - s.daylight;
+    this.windowIM.material.opacity = Math.max(0, nightF - 0.35) * 1.15;
+
+    // -- rain
+    const raining = s.rainLeft > 0;
+    if (raining) {
+      const RN = this._rainN, pos = this._rainPos;
+      const H = 0.55, slX = 0.05, len = 0.045;
+      for (let i = 0; i < RN; i++) {
+        const [ax, az, aph] = this._rainSeed[i];
+        const f = ((this.t * (0.9 + aph * 0.5) + aph * 7) % 1);
+        const x = (ax - 0.5) * GR * 2 + f * slX;
+        const z = (az - 0.5) * GR * 2;
+        const y = EDGE_Y + H * (1 - f);
+        const o = i * 6;
+        pos[o] = x; pos[o + 1] = y; pos[o + 2] = z;
+        pos[o + 3] = x - slX * 0.12; pos[o + 4] = y + len; pos[o + 5] = z;
+      }
+      this.rain.geometry.setDrawRange(0, RN * 2);
+      this.rain.geometry.attributes.position.needsUpdate = true;
+    } else {
+      this.rain.geometry.setDrawRange(0, 0);
+    }
+  }
+
   // -- dust in the light -----------------------------------------------------
   _dust() {
     const n = 260;
@@ -1716,6 +1811,7 @@ export class View {
 
     this._paintWorks();
     if (this._giftMeshes) this._paintGifts();
+    this._paintNightLife(dt);
 
     // the sheet slides off the board and slumps beside the track
     // ⚠⚠ THE COVER WAS DRAWN BACKWARDS TOO. ct === 1 slides the sheet OFF the
