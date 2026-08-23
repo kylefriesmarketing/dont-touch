@@ -79,6 +79,11 @@ const COMPOSITE_FRAG = `
     col *= 1.0 - smoothstep(0.55, 1.25, r) * uVignette;
 
     gl_FragColor = vec4(col, 1.0);
+    // ⚠️ the renderer only tone-maps when drawing to the CANVAS, and the
+    // scene lands in a render target — so the composite must apply the same
+    // curve the no-post path gets from renderer.toneMapping, or toggling the
+    // miniature look would change the game's entire colour grade.
+    #include <tonemapping_fragment>
     // ⚠️⚠️ THE WHOLE FRAME COMES OUT MUD WITHOUT THIS. three only applies the
     // output colour-space conversion when it renders to the CANVAS — render
     // into a target and the buffer holds LINEAR values. Compositing those

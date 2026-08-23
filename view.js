@@ -42,6 +42,18 @@ export class View {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
     this.renderer.setClearColor(0x0a0c10, 1);
     this.renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+    // ⚠️ THERE WAS NO TONE MAPPING AT ALL — renderer.toneMapping was the
+    // default NoToneMapping, so additive glows clipped straight to white and
+    // the whole frame sat in linear flatness. Neutral (Khronos PBR) over ACES
+    // on purpose: ACES desaturates painted-toy brights (measured on the Age of
+    // Toys Godot port — same material world), Neutral rolls highlights while
+    // keeping the flock and the figure paint at their actual colours.
+    // ⚠️ With the post chain ON this line does nothing by itself — three only
+    // tone-maps when drawing to the CANVAS, and the scene renders into an RT.
+    // The composite shader in post.js carries the matching include; change one
+    // and you must change the other or the two paths stop agreeing.
+    this.renderer.toneMapping = THREE.NeutralToneMapping;
+    this.renderer.toneMappingExposure = 1.22;
     // ⚠️ NOTHING CAST A SHADOW, which is the single loudest "this is a toy
     // render" tell — every tree, house and figure was pasted onto the ground
     // rather than standing on it. The board is small and the light is one lamp,
@@ -137,6 +149,17 @@ export class View {
     this.scene.add(this.key);
     this.scene.add(this.key.target);
     // a low cold counter-light so the far slopes read instead of going solid
+    // THE BULB. At night the room used to go uniformly dim — physically wrong
+    // (the fiction is one hanging bulb over the table) and visually dead flat.
+    // A warm spot from above centre gives night a pool of light with real
+    // falloff, and it swings faintly because a basement bulb on a cord does.
+    // No shadow casting — the key light already owns the one shadow map.
+    this.bulb = new THREE.SpotLight(0xffd9a0, 0.0, 7.5, 0.62, 0.55, 1.1);
+    this.bulb.position.set(0, 3.1, 0);
+    this.bulb.target.position.set(0, 0, 0);
+    this.scene.add(this.bulb);
+    this.scene.add(this.bulb.target);
+
     this.fill = new THREE.DirectionalLight(0xc8dcf5, 0.30);
     this.fill.position.set(-1.4, 0.75, -1.1);
     this.scene.add(this.fill);
@@ -163,9 +186,17 @@ export class View {
     this.key.color.setRGB(1, 0.92 - d * 0.02, 0.78 + d * 0.04);
     // the title screen: the room before anybody came downstairs. View-only, and
     // applied last so it scales whatever the day had already decided.
+    // the bulb takes over as the day goes: zero at noon, the main light at
+    // night — but only when the lamp is actually on. Its faint swing is the
+    // same cord the shadows already answer to.
+    const nightF = 1 - d;
+    this.bulb.intensity = s.lampOn ? nightF * nightF * 3.4 : 0;
+    this.bulb.position.x = Math.sin(this.t * 0.43) * 0.10;
+    this.bulb.position.z = Math.cos(this.t * 0.31) * 0.08;
     if (this.titleDim > 0.001) {
       const q = 1 - this.titleDim * 0.86;
       this.hemi.intensity *= q; this.key.intensity *= q; this.fill.intensity *= q;
+      this.bulb.intensity *= q;
     }
     // the lamp swings a little across the day so shadows are not painted on
     const ang = 0.55 + s.dayFrac * 1.9;
@@ -1001,16 +1032,69 @@ export class View {
   // -- the kin ---------------------------------------------------------------
   _kin() {
     const CAP = this.sim.k.alive.length;
-    // body: one low-poly blob, instanced, silhouette-dark. One draw call.
-    const body = new THREE.IcosahedronGeometry(0.0125, 1);
-    body.scale(1.05, 1.3, 0.86);
-    this.bodies = new THREE.InstancedMesh(body, new THREE.MeshStandardMaterial({ color: 0x1b1f2a, roughness: 0.55 }), CAP);
+    // —— THE LITTLE ALIEN PEOPLE ———————————————————————————
+    // Kyle: 'i dont like the little lantern guys - i want it to be more like
+    // little alien people.' The dark blob + big glow is gone. The figure is a
+    // lathe profile — pear body, pinched neck, OVERSIZED head (the alien read
+    // at any distance is head-to-body ratio, nothing else survives 4mm) — plus
+    // a dark layer of two big eyes and an antenna stalk, plus the old lantern
+    // SHRUNK to a glowing antenna tip. The interface did not die, it moved:
+    //   body PAINT  = the hue (worst need blended over bloodline, as before)
+    //   POSTURE     = wellbeing — a failing kin droops forward and sags
+    //   the TIP     = the lantern's remnant, small, still hue + brightness
+    // Four draw calls for the whole colony (body, features, tips, glue), and
+    // pickKin still reads lanternPos so the reach and the inspector survive.
+    //
+    // ⚠️ ONE LATHE, NO MERGING LIBRARY. BufferGeometryUtils is an examples
+    // module and is NOT in the vendored core — the body+head is a single lathe
+    // profile, and the feature layer is hand-merged from non-indexed primitives
+    // below. Do not reach for mergeBufferGeometries; it does not exist here.
+    const prof = [
+      [0.0000, 0.0000], [0.0085, 0.0010], [0.0105, 0.0062], [0.0078, 0.0130],
+      [0.0046, 0.0160],                                     // the neck pinch
+      [0.0088, 0.0205], [0.0102, 0.0252], [0.0062, 0.0300], // the big head
+      [0.0000, 0.0328],
+    ].map(([r, y]) => new THREE.Vector2(r, y));
+    const body = new THREE.LatheGeometry(prof, 10);
+    // painted-toy material; per-instance colour carries the hue
+    this.bodies = new THREE.InstancedMesh(body,
+      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.62, metalness: 0.02 }), CAP);
     this.bodies.castShadow = true;
     this.bodies.receiveShadow = true;
     this.bodies.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.bodies.count = 0;
     this.bodies.frustumCulled = false;
+    // force the instanceColor attribute into existence before first render
+    this._col = new THREE.Color(1, 1, 1);
+    for (let i = 0; i < CAP; i++) this.bodies.setColorAt(i, this._col);
+    this.bodies.instanceColor.setUsage(THREE.DynamicDrawUsage);
     this.jar.add(this.bodies);
+
+    // the dark features: two big eyes + the antenna stalk, one draw call.
+    // Hand-merged: everything to non-indexed, concatenate position+normal.
+    const parts = [];
+    const put = (geo, x, y, z) => { geo.translate(x, y, z); parts.push(geo.toNonIndexed()); };
+    put(new THREE.SphereGeometry(0.0030, 7, 5), -0.0044, 0.0246, 0.0082);   // left eye
+    put(new THREE.SphereGeometry(0.0030, 7, 5),  0.0044, 0.0246, 0.0082);   // right eye
+    put(new THREE.CylinderGeometry(0.0005, 0.0009, 0.0105, 4), 0, 0.0370, 0); // antenna
+    let vTot = 0;
+    for (const g0 of parts) vTot += g0.attributes.position.count;
+    const fpos = new Float32Array(vTot * 3), fnor = new Float32Array(vTot * 3);
+    let off = 0;
+    for (const g0 of parts) {
+      fpos.set(g0.attributes.position.array, off * 3);
+      fnor.set(g0.attributes.normal.array, off * 3);
+      off += g0.attributes.position.count;
+    }
+    const feat = new THREE.BufferGeometry();
+    feat.setAttribute('position', new THREE.BufferAttribute(fpos, 3));
+    feat.setAttribute('normal', new THREE.BufferAttribute(fnor, 3));
+    this.features = new THREE.InstancedMesh(feat,
+      new THREE.MeshStandardMaterial({ color: 0x12161d, roughness: 0.35 }), CAP);
+    this.features.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.features.count = 0;
+    this.features.frustumCulled = false;
+    this.jar.add(this.features);
 
     // the lantern: additive points. This is the entire UI. (§4.2)
     const spr = document.createElement('canvas'); spr.width = spr.height = 64;
@@ -1074,10 +1158,10 @@ export class View {
     this.jar.add(this.glue);
 
     this._m4 = new THREE.Matrix4();
+    this._e = new THREE.Euler();
     this._q = new THREE.Quaternion();
     this._v = new THREE.Vector3();
     this._sc = new THREE.Vector3();
-    this._col = new THREE.Color();
     this.kinScreen = [];   // for picking
   }
 
@@ -1106,15 +1190,18 @@ export class View {
     const s = this.sim, k = s.k;
     const pulse = 0.72 + 0.28 * Math.sin((this.t * k.pulse[id] + (this.phase ? this.phase[id] : k.phase[id])) * 6.28);
     const b = k.bright[id] * pulse;
+    // ⚠️ the glow is the ANTENNA TIP now, not a lantern swallowing the figure.
+    // It sits at the top of the stalk and is ~40% of its old size — the body
+    // paint and the droop carry the rest of what the big glow used to say.
     // ⚠️ the palette remap happens HERE and nowhere else. k.hue is written by
     // sim code and round-trips through the save and the fingerprint, so a
     // colourblind palette must never touch it — two players on one seed have to
     // agree about their town even when they see it differently.
     this._col.setHSL(hueOf(k.hue[id]) / 360, st === STAGE.EGG ? 0.45 : 0.92, 0.22 + b * 0.34);
     const o = n * 3;
-    this.lanternPos[o] = x; this.lanternPos[o + 1] = y + 0.024 * sz; this.lanternPos[o + 2] = z;
+    this.lanternPos[o] = x; this.lanternPos[o + 1] = y + 0.0425 * sz; this.lanternPos[o + 2] = z;
     this.lanternCol[o] = this._col.r; this.lanternCol[o + 1] = this._col.g; this.lanternCol[o + 2] = this._col.b;
-    this.lanternSize[n] = (0.070 + b * 0.115) * grow * (0.80 + (1 - s.daylight) * 0.55);
+    this.lanternSize[n] = (0.028 + b * 0.048) * grow * (0.85 + (1 - s.daylight) * 0.50);
   }
 
   _paintKin() {
@@ -1133,6 +1220,21 @@ export class View {
       const bob = moving ? Math.abs(Math.sin(ph)) : 0.5 + Math.sin(ph * 0.35) * 0.08;
       const sq = 1 + (moving ? Math.sin(ph * 2) * 0.16 : Math.sin(ph * 0.5) * 0.04);
 
+      // body paint: the same hue the lantern used to carry, worn as PAINT.
+      // Saturation drops and the whole figure dims as wellbeing falls, so the
+      // colony still reads at a glance — a struggling quarter of town goes
+      // grey-dim while the healthy stay vivid. Palette-remapped like the tip.
+      const wb = k.bright[id];
+      this._col.setHSL(hueOf(k.hue[id]) / 360,
+        st === STAGE.EGG ? 0.10 : 0.30 + wb * 0.34,
+        st === STAGE.EGG ? 0.62 : 0.26 + wb * 0.26);
+      this.bodies.setColorAt(n, this._col);
+
+      // posture: a failing kin DROOPS — pitched forward, sagging. This is the
+      // distance read that replaces the dimming lantern, and it costs a pitch
+      // term in the same quaternion the yaw already used.
+      const droop = st === STAGE.EGG ? 0 : Math.max(0, 0.42 - wb) * 1.1;
+
       // the one who stays never bobs and never turns — they are stuck fast,
       // and the stillness is the tell before you ever open the inspector
       if (k.glued[id]) {
@@ -1140,20 +1242,44 @@ export class View {
         this.glue.visible = true; glueSeen = true;
         this._v.set(x, y, z);
         this._sc.set(sz, sz, sz);
-        this._q.setFromAxisAngle({ x: 0, y: 1, z: 0 }, k.phase[id] * 6.28);
+        this._e.set(droop, k.phase[id] * 6.28, 0, 'YXZ');
+        this._q.setFromEuler(this._e);
         this._m4.compose(this._v, this._q, this._sc);
         this.bodies.setMatrixAt(n, this._m4);
+        this.features.setMatrixAt(n, this._m4);
         this._paintLantern(id, n, x, y, z, sz, grow, st);
         this.kinScreen[n] = id; n++;
         continue;
       }
 
-      this._v.set(x, y + (moving ? bob * 0.006 : 0), z);
+      // ⚠️ somebody in the air rides at the hand, and the BODY has to go with
+      // the tip — before this only the glow lifted and the figure stayed on the
+      // ground, which read as the hand stealing a soul instead of a person.
+      let hy = 0;
+      if (this.sim.held && this.sim.held.id === id) {
+        const c = this.heldCell;
+        if (c) { const N = this.sim.N;
+          x = (c[0] / (N - 1) - 0.5) * GR * 2;
+          z = (c[1] / (N - 1) - 0.5) * GR * 2; }
+        hy = 0.16 + Math.sin(this.t * 2.1) * 0.006;
+      }
+
+      this._v.set(x, y + hy + (moving ? bob * 0.006 : 0), z);
       this._sc.set(sz / sq, sz * sq, sz / sq);
       const face = Math.atan2(k.tx[id] - k.x[id], k.ty[id] - k.y[id]);
-      this._q.setFromAxisAngle({ x: 0, y: 1, z: 0 }, face);
+      // a moving kin leans INTO the walk a little; a failing one sags the same
+      // way, further — one axis, two readings, both honest
+      const lean = droop + (moving ? 0.14 + Math.sin(ph * 2) * 0.05 : 0);
+      this._e.set(lean, face, 0, 'YXZ');
+      this._q.setFromEuler(this._e);
       this._m4.compose(this._v, this._q, this._sc);
       this.bodies.setMatrixAt(n, this._m4);
+      // eggs are eggs — no eyes, no antenna. Scale the feature layer away.
+      if (st === STAGE.EGG) {
+        this._sc.set(0.0001, 0.0001, 0.0001);
+        this._m4.compose(this._v, this._q, this._sc);
+      }
+      this.features.setMatrixAt(n, this._m4);
 
       this._paintLantern(id, n, x, y, z, sz, grow, st);
       this.kinScreen[n] = id;
@@ -1161,7 +1287,10 @@ export class View {
     }
     this.glue.visible = glueSeen;
     this.bodies.count = n;
+    this.features.count = n;
     this.bodies.instanceMatrix.needsUpdate = true;
+    this.features.instanceMatrix.needsUpdate = true;
+    if (this.bodies.instanceColor) this.bodies.instanceColor.needsUpdate = true;
     this.lanterns.geometry.setDrawRange(0, n);
     this.lanterns.geometry.attributes.position.needsUpdate = true;
     this.lanterns.geometry.attributes.color.needsUpdate = true;
@@ -1229,7 +1358,7 @@ export class View {
     // only shows at glancing angles, on creases, and as a sheen. Fresnel does
     // exactly that, and the sheet stays a real object you can see is there.
     this.cover = new THREE.Mesh(geo, new THREE.ShaderMaterial({
-      uniforms: { uTint: { value: new THREE.Color(0xdCEAF4) }, uAmt: { value: 0.62 } },
+      uniforms: { uTint: { value: new THREE.Color(0xdCEAF4) }, uAmt: { value: 0.30 } },
       transparent: true, depthWrite: false, side: THREE.DoubleSide,
       vertexShader: `
         varying vec3 vN; varying vec3 vV;
@@ -1244,7 +1373,7 @@ export class View {
         varying vec3 vN; varying vec3 vV;
         void main() {
           float fres = 1.0 - abs(dot(normalize(vN), normalize(vV)));
-          float a = pow(fres, 2.6) * uAmt + 0.012;
+          float a = pow(fres, 3.4) * uAmt + 0.010;
           gl_FragColor = vec4(uTint * a, a);
         }`,
     }));
@@ -1538,7 +1667,7 @@ export class View {
       // read as weather ARRIVING in the last stretch before rain, not as a
       // permanent veil. Late ramp, hard cap, and cooler so it tints rather
       // than bleaches.
-      Math.min(0.075, Math.max(0, s.humid / (S * S) - 8.5) * 0.020 + s.fog * 0.16) * (1 - ct * 0.5);
+      Math.min(0.042, Math.max(0, s.humid / (S * S) - 9.5) * 0.011 + s.fog * 0.16) * (1 - ct * 0.5);
 
     // dust drifts through the shaft
     const dp = this.dust.geometry.attributes.position;
