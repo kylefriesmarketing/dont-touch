@@ -840,13 +840,19 @@ export class View {
     }
     */
 
-    // bottle-brush trees
+    // bottle-brush trees — INSTANCED. The old build made every tree a Group of
+    // 2-5 meshes, each its own draw call, doubled again by the shadow pass:
+    // ~800 draw calls for 130 trees, the scene's runaway cost. Now: record the
+    // same trees into arrays, then build THREE InstancedMeshes (cones, balls,
+    // trunks) — 3 draws + 3 shadow draws for the whole forest.
+    // ⚠⚠ THE rnd() CALL ORDER IS THE INVARIANT. Placement is seeded from the
+    // world seed so the same colony wakes on the same table; every rnd() the
+    // old code made must still be made, in the same sequence, even where its
+    // value now lands in an instance attribute instead of a mesh. Reorder one
+    // call and every board in every save grows a different forest.
     const trunkM = new THREE.MeshStandardMaterial({ color: 0x2a1c10, roughness: 1 });
-    // the reference's range: deep conifer through to acid lime
     const greens = [0x1b4526, 0x245a30, 0x2f6b34, 0x4a8b31, 0x6aa63a, 0x3d7a45];
-    // ⚠️ TREES COME IN COPSES. Evenly scattered trees read as a texture; the
-    // reference has clumps with open ground between them, and the clumping is
-    // what makes the open ground mean anything.
+    const cones = [], balls = [], trunks = [];   // {x,y,cy,ry,sx,sy,sz,color}
     let trees = 0, tries2 = 0;
     while (trees < 130 && tries2++ < 900) {
       const ax = (3 + rnd() * (N - 6)) | 0, ay = (3 + rnd() * (N - 6)) | 0;
@@ -856,41 +862,59 @@ export class View {
       const x = Math.round(ax + (rnd() - 0.5) * 7 * S), y = Math.round(ay + (rnd() - 0.5) * 7 * S);
       if (x < 2 || y < 2 || x > N - 3 || y > N - 3) continue;
       if (!ok(x, y, 0.05, 1.8 * S)) continue;
-      // ⚠️ ONE CONE IS A PARTY HAT. A bottle-brush tree is layered skirts of
-      // needles on a visible trunk, and it has to be tall enough to matter
-      // beside a 4mm figure — the old 0.040 cones read as scrub.
       const th = 0.052 + rnd() * 0.070;
-      const tree = new THREE.Group();
       const kind = rnd();
-      const needle = new THREE.MeshStandardMaterial({ color: greens[(rnd() * greens.length) | 0], roughness: 0.93 });
+      const color = greens[(rnd() * greens.length) | 0];
       if (kind < 0.45) {                              // conifer: stacked skirts
         const tiers = 3 + ((rnd() * 2) | 0);
         for (let t = 0; t < tiers; t++) {
           const f2 = t / tiers;
-          const cone = new THREE.Mesh(
-            new THREE.ConeGeometry(th * (0.38 - f2 * 0.20), th * (0.52 - f2 * 0.16), 7), needle);
-          cone.position.y = 0.010 + th * (0.16 + f2 * 0.62);
-          cone.rotation.y = rnd() * 6.283;
-          tree.add(cone);
+          const ry = rnd() * 6.283;                   // was cone.rotation.y
+          cones.push({ x, y, cy: 0.010 + th * (0.16 + f2 * 0.62), ry,
+            sx: th * (0.38 - f2 * 0.20), sy: th * (0.52 - f2 * 0.16), color });
         }
       } else if (kind < 0.80) {                       // the lime ball-tree
-        const b3 = new THREE.Mesh(new THREE.IcosahedronGeometry(th * 0.34, 1), needle);
-        b3.position.y = 0.012 + th * 0.42;
-        b3.scale.set(1, 0.86 + rnd() * 0.3, 1);
-        tree.add(b3);
+        const wob = 0.86 + rnd() * 0.3;               // was b3.scale.y
+        balls.push({ x, y, cy: 0.012 + th * 0.42, ry: 0,
+          sx: th * 0.34, sy: th * 0.34 * wob, sz: th * 0.34, color });
       } else {                                        // a broad low lollipop
-        const b3 = new THREE.Mesh(new THREE.IcosahedronGeometry(th * 0.40, 1), needle);
-        b3.position.y = 0.010 + th * 0.30;
-        b3.scale.set(1.15, 0.52, 1.15);
-        tree.add(b3);
+        balls.push({ x, y, cy: 0.010 + th * 0.30, ry: 0,
+          sx: th * 0.40 * 1.15, sy: th * 0.40 * 0.52, sz: th * 0.40 * 1.15, color });
       }
-      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.0032, 0.0052, 0.020, 5), trunkM);
-      trunk.position.y = 0.009; tree.add(trunk);
-      tree.traverse(o2 => { o2.castShadow = true; o2.receiveShadow = true; });
-      put(tree, x, y);
+      trunks.push({ x, y, cy: 0.009, ry: 0, sx: 1, sy: 1, sz: 1, color: 0 });
+      rnd();                                          // was put()'s group yaw
       trees++;
       }
     }
+
+    // build the three meshes from the records
+    const mkIM = (geo, mat, list, tinted) => {
+      if (!list.length) return null;
+      const im = new THREE.InstancedMesh(geo, mat, list.length);
+      const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), v3 = new THREE.Vector3(),
+            sc = new THREE.Vector3(), col = new THREE.Color(), e = new THREE.Euler();
+      for (let i = 0; i < list.length; i++) {
+        const t = list[i];
+        const [wx, wy, wz] = this.cellToLocal(t.x, t.y, 0);
+        v3.set(wx, wy + t.cy, wz);
+        e.set(0, t.ry, 0); q.setFromEuler(e);
+        sc.set(t.sx, t.sy, t.sz !== undefined ? t.sz : t.sx);
+        m4.compose(v3, q, sc);
+        im.setMatrixAt(i, m4);
+        if (tinted) im.setColorAt(i, col.setHex(t.color));
+      }
+      im.castShadow = true; im.receiveShadow = true;
+      im.instanceMatrix.needsUpdate = true;
+      if (im.instanceColor) im.instanceColor.needsUpdate = true;
+      this.jar.add(im);
+      return im;
+    };
+    // unit geometries; per-instance scale carries the shape
+    const needleM = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.93 });
+    const ballM = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.93 });
+    mkIM(new THREE.ConeGeometry(1, 1, 7), needleM, cones, true);
+    mkIM(new THREE.IcosahedronGeometry(1, 1), ballM, balls, true);
+    mkIM(new THREE.CylinderGeometry(0.0032, 0.0052, 0.020, 5), trunkM, trunks, false);
   }
 
   _paintGround() {
@@ -1247,7 +1271,12 @@ export class View {
     let n = 0, glueSeen = false;
     for (let id = 0; id < s.count; id++) {
       if (!k.alive[id]) continue;
-      const [x, y, z] = this.cellToLocal(k.x[id], k.y[id], 0.012);
+      // ⚠️ let, NOT const: the held branch below reassigns x/z to the hand's
+      // cell. As a const this was a strict-mode TypeError the first time a kin
+      // was carried over the board — the exact moment of the game's biggest
+      // power, crashing the frame loop. Caught by the graphics review, not by
+      // any test, because every headless test runs without a view.
+      let [x, y, z] = this.cellToLocal(k.x[id], k.y[id], 0.012);
       const st = k.stage[id];
       const grow = st === STAGE.EGG ? 0.62 : st === STAGE.NIB ? 0.7 : st === STAGE.HALF ? 0.86 : 1;
       const sz = k.size[id] * grow;
