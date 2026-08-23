@@ -1287,6 +1287,9 @@ export class Sim {
     switch (k.goal[id]) {
       case 1: return k.need[b + 2] > 0.93;
       case 11: return k.need[b + 2] > 0.93 || !this.gifts.length;
+      // arrived where they were called to. Nothing else releases it — that is
+      // what makes a call something you watch happen rather than a suggestion.
+      case 12: return Math.abs(k.tx[id] - k.x[id]) + Math.abs(k.ty[id] - k.y[id]) < 1.6 * S;
       case 2: return k.need[b + 1] > 0.93;
       case 3: return k.need[b + 0] > 0.93;
       case 4: return k.need[b + 3] > 0.93;
@@ -1546,7 +1549,7 @@ export class Sim {
       this.corpses.push({ x: k.x[id], y: k.y[id], nameId: k.nameId[id], gen: k.gen[id], t: this.tick, cause, claim: -1, glued: k.glued[id] ? 1 : 0 });
       if (this.corpses.length > 24) this.corpses.shift();
     }
-    const how = { age: 'grew old', hunger: 'went hungry', thirst: 'went dry', heat: 'was in the warm place too long', cold: 'went cold', water: 'was in the low end when it filled', taken: 'did not come back' }[cause] || 'stopped';
+    const how = { age: 'grew old', hunger: 'went hungry', thirst: 'went dry', heat: 'was in the warm place too long', cold: 'went cold', water: 'was in the low end when it filled', taken: 'did not come back', smitten: 'was struck where they stood' }[cause] || 'stopped';
     // there is only ever one of these, and there will never be another
     if (k.glued[id]) this.log('stillgone', `${nm} ${how}, in the one place ${nm} had ever been.`, 6.0);
     else if (named) this.log('death-named', `${nm} ${how}.`, 2.0);
@@ -1698,6 +1701,126 @@ export class Sim {
   // e.pressure: that works on the developer's stylus and nowhere else.
   //
   // The hand stays TRANSIENT — never saved, never fingerprinted, as before.
+  // —— POWER OVER PEOPLE ——————————————————————————————
+  //
+  // Everything above this line is weather and ground: you warm a place, you wet
+  // it, you tip it, you leave food on it. These five reach past the world and
+  // take hold of the person. They are cheap because the systems were already
+  // here — commitment (k.hold), the flee goal, the death path, the witnesses,
+  // and dad's glued figure — and every one of them writes into the record.
+
+  // CALL. The whole town drops what it is doing and comes to a spot. Kind if
+  // you call them to water in a drought; a massacre if you call them into the
+  // low end before it rains. The power does not know which you meant.
+  call(x, y) {
+    const k = this.k, R = 26 * S;
+    let n = 0;
+    for (let id = 0; id < this.count; id++) {
+      if (!k.alive[id] || k.stage[id] === STAGE.EGG || k.glued[id]) continue;
+      if (this.held && this.held.id === id) continue;
+      const dx = k.x[id] - x, dy = k.y[id] - y;
+      if (dx * dx + dy * dy > R * R) continue;
+      k.goal[id] = 12; k.tx[id] = x; k.ty[id] = y;
+      // ⚠️ a LONG commitment, or _decide takes them back off it within a second
+      // and the whole power reads as nothing happening. An emergency still
+      // overrides it — a called kin standing in fire still runs.
+      k.hold[id] = 1400;
+      n++;
+    }
+    if (n) this.log('called', `something wanted them in one place, and ${n === 1 ? 'one of them went' : 'all ' + n + ' of them went'}.`, 5.6);
+    return n;
+  }
+
+  // MEND. Every need full, the death clock wiped. The one unambiguously good
+  // thing in the game, and the only place a positive memory is written without
+  // asking their body first — because there is nothing to interpret.
+  mend(id) {
+    const k = this.k, NN = NEEDS.length;
+    if (!k.alive[id] || k.stage[id] === STAGE.EGG) return false;
+    const wasFailing = k.strain[id] > 0.02;
+    for (let n = 0; n < NN; n++) k.need[id * NN + n] = 1;
+    k.strain[id] = 0;
+    k.memV[id] = Math.min(3, k.memV[id] + 1.4);
+    k.memX[id] = k.x[id]; k.memY[id] = k.y[id];
+    this._placeFelt(k.x[id], k.y[id], 1.0, k.nameId[id]);
+    const nm = this._name(id, 'who was mended');
+    this.log('mended', wasFailing
+      ? `${nm} was going, and then was not going.`
+      : `${nm} wanted for nothing at all, once.`, 6.0);
+    return true;
+  }
+
+  // SMITE. They stop where they stand, and there IS a body — unlike a taking,
+  // this one gets carried and buried, so the town gets to hold a funeral for
+  // somebody the sky killed in front of them.
+  smite(id) {
+    const k = this.k;
+    if (!k.alive[id] || k.stage[id] === STAGE.EGG) return false;
+    this._witness(id, -1.4, 0.45);
+    this._placeFelt(k.x[id], k.y[id], -1.6, k.nameId[id]);
+    this._die(id, 'smitten');
+    return true;
+  }
+
+  // STILL. Dad glued one figure to the board; this is that, in your hands. They
+  // keep wanting everything anyone wants and can never go and get it, so the
+  // town has to come to them — which is the entire 'one who stays' system,
+  // already built, already tested, and reached here in eight lines.
+  still(id) {
+    const k = this.k;
+    if (!k.alive[id] || k.glued[id] || k.stage[id] === STAGE.EGG) return false;
+    k.glued[id] = 1; k.tender[id] = -1;
+    k.tx[id] = k.x[id]; k.ty[id] = k.y[id];
+    this._witness(id, -0.7, 0.2);
+    const nm = this._name(id, 'who was fixed to the world');
+    this.log('stilled', `${nm} will not be moving again. whatever ${nm} needs now, somebody else has to bring it.`, 7.0);
+    return true;
+  }
+
+  // TERROR. Not damage — the certainty that the place is wrong. Goal 6 is the
+  // flee goal and it already exists, so this only has to point them away.
+  terror(x, y) {
+    const k = this.k, NN = NEEDS.length, R = 20 * S;
+    let n = 0;
+    for (let id = 0; id < this.count; id++) {
+      if (!k.alive[id] || k.stage[id] === STAGE.EGG || k.glued[id]) continue;
+      const dx = k.x[id] - x, dy = k.y[id] - y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 > R * R) continue;
+      const d = Math.sqrt(d2) || 1;
+      k.need[id * NN + 5] = Math.max(0, k.need[id * NN + 5] - 0.55);
+      k.goal[id] = 6;
+      k.tx[id] = Math.max(1, Math.min(this.N - 2, k.x[id] + (dx / d) * 16 * S));
+      k.ty[id] = Math.max(1, Math.min(this.N - 2, k.y[id] + (dy / d) * 16 * S));
+      k.hold[id] = 200; k.pulse[id] = 2.8;
+      n++;
+    }
+    if (n) this.log('terror', `something was wrong with that place, and ${n === 1 ? 'one of them' : n + ' of them'} would not stay.`, 5.0);
+    return n;
+  }
+
+  // shared by every act done TO somebody in front of everybody else. The sign
+  // comes from each watcher's own comfort band, exactly as the ordinary
+  // hand-memory does, so one act writes two different meanings into two lines.
+  _witness(id, weight, fright) {
+    const k = this.k, R = 14 * S;
+    let seen = 0;
+    for (let w = 0; w < this.count; w++) {
+      if (!k.alive[w] || w === id || k.stage[w] === STAGE.EGG) continue;
+      const dx = k.x[w] - k.x[id], dy = k.y[w] - k.y[id];
+      if (dx * dx + dy * dy > R * R) continue;
+      const g = k.genome.subarray(w * LOCI.length * 2, (w + 1) * LOCI.length * 2);
+      const band = HIDE_BAND[expressed(g, L.hide)];
+      const T = this.temp[this.idx(k.x[w], k.y[w])];
+      const good = (T >= band[0] && T <= band[1]);
+      k.saw[w] = Math.max(-3, Math.min(3, k.saw[w] + (good ? weight * 0.55 : weight)));
+      k.need[w * NEEDS.length + 5] = Math.max(0, k.need[w * NEEDS.length + 5] - fright);
+      k.pulse[w] = 2.6; k.hold[w] = 0;
+      seen++;
+    }
+    return seen;
+  }
+
   // —— THE CRUMB ——————————————————————————————————————
   //
   // ⚠⚠ THE "FEEDING THEM RUINS THEM" THEORY WAS TESTED AND IS FALSE. The design
@@ -1764,22 +1887,8 @@ export class Sim {
     // line the room happens to suit and terror into one it does not, in the same
     // tick, and those two lines then interbreed. Nothing here decides what the
     // player did; their bodies do.
-    const R = 14 * S;
-    let seen = 0;
-    for (let w = 0; w < this.count; w++) {
-      if (!k.alive[w] || w === id || k.stage[w] === STAGE.EGG) continue;
-      const dx = k.x[w] - k.x[id], dy = k.y[w] - k.y[id];
-      if (dx * dx + dy * dy > R * R) continue;
-      const g = k.genome.subarray(w * LOCI.length * 2, (w + 1) * LOCI.length * 2);
-      const band = HIDE_BAND[expressed(g, L.hide)];
-      const T = this.temp[this.idx(k.x[w], k.y[w])];
-      const good = (T >= band[0] && T <= band[1]);
-      k.saw[w] += good ? 0.8 : -1.0;
-      k.saw[w] = Math.max(-3, Math.min(3, k.saw[w]));
-      k.need[w * NEEDS.length + 5] = Math.max(0, k.need[w * NEEDS.length + 5] - 0.30);
-      k.pulse[w] = 2.6; k.hold[w] = 0;
-      seen++;
-    }
+    // the same witnessing every public act uses now
+    const seen = this._witness(id, -1.0, 0.30);
     this._lifted = { x: k.x[id], y: k.y[id], seen };
     this._placeFelt(k.x[id], k.y[id], -1.4, k.nameId[id]);
     this.log('lifted', seen > 0

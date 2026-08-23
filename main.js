@@ -247,7 +247,7 @@ class App {
   // shipped, just looks broken.
   arm(p) {
     this.armed = p;
-    if ((p === 'crumb' || p === 'lift') && this.sim.lid) {
+    if (['crumb', 'lift', 'call', 'mend', 'strike', 'still', 'dread'].includes(p) && this.sim.lid) {
       this.sim.setLid(false);
       this.ui.sync();
       this.ui.nudge('the sheet is off. the room drinks their pond while it is.', 'sheetoff');
@@ -282,15 +282,29 @@ class App {
         if (h && s.give(h.cell[0], h.cell[1])) { this.sfx.birth(); v.flinch(h.cell[0], h.cell[1]); }
         mode = null; down = false; return;
       }
+      if (this.armed === 'call' || this.armed === 'dread') {
+        const h = v.pickGround(nx, ny);
+        if (h) {
+          const nHit = this.armed === 'call' ? s.call(h.cell[0], h.cell[1]) : s.terror(h.cell[0], h.cell[1]);
+          if (nHit) { this.sfx.touch(); v.flinch(h.cell[0], h.cell[1]); }
+        }
+        mode = null; down = false; return;
+      }
       // — THE REACH. With the sheet OFF, a press that lands on a KIN is not a
       // press on the ground: hold it and you are holding a person. It is gated on
       // the sheet because your arm has to be inside their sky to do it, and the
       // sheet being off is charged for in drought and cold the whole time.
-      if ((this.armed === 'lift' || !s.lid) && !s.held) {
+      const KIN_POWERS = { lift: 900, strike: 900, still: 750, mend: 450 };
+      const kp = KIN_POWERS[this.armed] ? this.armed : (!s.lid ? 'lift' : null);
+      if (kp && !s.held) {
         const who = v.pickKin(nx, ny);
         if (who >= 0 && s.k.alive[who] && s.k.stage[who] !== STAGE.EGG) {
           mode = 'reach';
-          this.reach = { id: who, t: 0 };
+          // ⚠️ mend is quicker than the harms ON PURPOSE (450 vs 900ms): help
+          // should be easy and the irreversible acts should take long enough
+          // to change your mind. Every one of them still shows the closing
+          // ring, so nothing lands without warning.
+          this.reach = { id: who, t: 0, power: kp, ms: KIN_POWERS[kp] };
           return;
         }
       }
@@ -502,11 +516,18 @@ class App {
     // the reach builds in real seconds, and the board shows it building
     if (this.reach && !this.sim.held) {
       this.reach.t += dt * 1000;
-      const f = Math.min(1, this.reach.t / HAND.reachMs);
-      if (this.view.setReach) this.view.setReach(this.reach.id, f);
+      const f = Math.min(1, this.reach.t / (this.reach.ms || HAND.reachMs));
+      if (this.view.setReach) this.view.setReach(this.reach.id, f, this.reach.power || 'lift');
       if (f >= 1) {
-        this.sim.lift(this.reach.id);
-        this.sfx.mutate();
+        const id = this.reach.id, p = this.reach.power || 'lift';
+        if (p === 'lift') { this.sim.lift(id); this.sfx.mutate(); }
+        else {
+          if (p === 'mend') { this.sim.mend(id); this.sfx.birth(); }
+          else if (p === 'strike') { this.sim.smite(id); this.sfx.death(); }
+          else if (p === 'still') { this.sim.still(id); this.sfx.lid(); }
+          this.reach = null;
+          if (this.view.setReach) this.view.setReach(-1, 0);
+        }
       }
     } else if (this.view.setReach && !this.sim.held) this.view.setReach(-1, 0);
     if (this.sim.held && this.view.setHeldAt) this.view.setHeldAt(this.heldCell);

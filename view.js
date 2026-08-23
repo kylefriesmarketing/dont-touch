@@ -986,6 +986,34 @@ export class View {
   }
 
   // -- the water -------------------------------------------------------------
+  // A tiny procedural cubemap of the basement — dark walls, one warm bulb —
+  // so glossy surfaces have something to reflect from EVERY angle. Without an
+  // environment, a bird's-eye camera almost never lines up with the one lamp,
+  // so a roughness-0.16 pond still rendered matte. Resin-pour water on a real
+  // layout is glossy precisely because the whole room is in it.
+  _envCube() {
+    const faces = [];
+    for (let f = 0; f < 6; f++) {
+      const c = document.createElement('canvas'); c.width = c.height = 32;
+      const g = c.getContext('2d');
+      const grd = g.createLinearGradient(0, 0, 0, 32);
+      grd.addColorStop(0, '#2a2d33'); grd.addColorStop(1, '#0c0e12');
+      g.fillStyle = grd; g.fillRect(0, 0, 32, 32);
+      if (f === 2) {   // +Y: the ceiling, and the bulb hanging from it
+        const r = g.createRadialGradient(16, 16, 1, 16, 16, 13);
+        r.addColorStop(0, 'rgba(255,222,168,1)');
+        r.addColorStop(0.35, 'rgba(216,164,92,0.55)');
+        r.addColorStop(1, 'rgba(216,164,92,0)');
+        g.fillStyle = r; g.fillRect(0, 0, 32, 32);
+      }
+      faces.push(c);
+    }
+    const cube = new THREE.CubeTexture(faces);
+    cube.colorSpace = THREE.SRGBColorSpace;
+    cube.needsUpdate = true;
+    return cube;
+  }
+
   _water() {
     const N = this.sim.N;
     const geo = new THREE.PlaneGeometry(GR * 2, GR * 2, N - 1, N - 1);
@@ -999,9 +1027,14 @@ export class View {
     // ⚠️ alphaTest on a rippling 64x64 plane cut triangles in and out and
     // hatched the pond with diagonal stripes. Plain transparency, and a low
     // roughness so the water actually catches the lamp.
+    // resin, not paint: near-zero roughness plus the basement cubemap. The
+    // envMap stays PER-MATERIAL on purpose — setting scene.environment would
+    // gloss the flock and the plaster too, and a model lawn is dead matte.
+    if (!this.envCube) this.envCube = this._envCube();
     this.water = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
       map: this.waterTex, transparent: true, depthWrite: false,
-      roughness: 0.16, metalness: 0.06,
+      roughness: 0.06, metalness: 0.0,
+      envMap: this.envCube, envMapIntensity: 0.85,
     }));
     this.jar.add(this.water);
   }
@@ -1020,9 +1053,14 @@ export class View {
       const a = w <= 0.006 ? 0 : Math.min(0.93, (w - 0.006) * 9);
       const dark = Math.min(1, w * 5.5);
       const deep = dark * dark;
-      d[o] = (104 - deep * 74) | 0;
-      d[o + 1] = (152 - deep * 92) | 0;
-      d[o + 2] = (176 - deep * 66) | 0;
+      let cr = 104 - deep * 74, cg = 152 - deep * 92, cb = 176 - deep * 66;
+      // the MENISCUS: where a resin pour meets the flock it pulls a pale line.
+      // One band at the shallow rim sells the whole 'this was poured' read.
+      if (w > 0.006 && w < 0.017) {
+        const m = 1 - (w - 0.006) / 0.011;
+        cr += m * 96; cg += m * 84; cb += m * 58;
+      }
+      d[o] = cr | 0; d[o + 1] = cg | 0; d[o + 2] = cb | 0;
       d[o + 3] = (a * 255) | 0;
     }
     pos.needsUpdate = true;
@@ -1456,7 +1494,7 @@ export class View {
   // confirm dialog, so the whole of the player's protection is that they can
   // SEE it coming: the ring tightens onto one figure and goes red over 900ms,
   // and letting go before it closes costs nothing.
-  setReach(id, f) { this.reachId = id; this.reachF = f; }
+  setReach(id, f, power) { this.reachId = id; this.reachF = f; this.reachPower = power || 'lift'; }
 
   // point the camera at where they actually live
   lookAtTown() {
@@ -1612,9 +1650,14 @@ export class View {
       const r = 9 * S * (1 - f * 0.72) + 1.4 * S;      // tightening onto them
       this.setHandDisc(s.k.x[id], s.k.y[id], r, 0);
       this._handWant = 1;
-      // amber -> red as it closes. Every other use of this disc is warm; this
-      // is the one time it is a warning.
-      this.handDisc.material.color.setHSL(0.055 * (1 - f), 0.62 + 0.34 * f, 0.50 + 0.12 * f);
+      // the ring wears the power's colour, so what is about to happen is legible
+      // before it happens: green mends, red strikes, grey-amber stills, and the
+      // lift keeps its amber-to-red warning.
+      const P = this.reachPower;
+      if (P === 'mend') this.handDisc.material.color.setHSL(0.38, 0.55, 0.52 + f * 0.12);
+      else if (P === 'strike') this.handDisc.material.color.setHSL(0.995, 0.72 + f * 0.2, 0.44 + f * 0.10);
+      else if (P === 'still') this.handDisc.material.color.setHSL(0.10, 0.35, 0.45 + f * 0.10);
+      else this.handDisc.material.color.setHSL(0.055 * (1 - f), 0.62 + 0.34 * f, 0.50 + 0.12 * f);
     }
 
     if (this.handDisc) {

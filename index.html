@@ -110,8 +110,20 @@
      names them, and lets you pick one instead of having to know it. */
   #hand{position:fixed;left:50%;transform:translateX(-50%);
     bottom:calc(14px + env(safe-area-inset-bottom));z-index:8;
-    display:flex;gap:6px;padding:7px;border-radius:14px;
+    display:flex;gap:6px;padding:7px;border-radius:14px;flex-wrap:wrap;
+    justify-content:center;max-width:min(96vw,860px);
     background:var(--panel);border:1px solid var(--edge);backdrop-filter:blur(9px)}
+  /* eleven fingers have to fit a phone: tighter chips, two rows.
+     ⚠️ left:50% + shrink-to-fit only offers HALF the viewport to an absolutely
+     positioned box, so the strip collapsed to 188px and stacked four rows tall.
+     Pin both edges instead and let the row width be the phone's. */
+  @media (max-width:720px){
+    #hand{gap:3px;padding:5px;left:8px;right:8px;transform:none;max-width:none;
+      bottom:calc(var(--fascia) + 8px + env(safe-area-inset-bottom))}
+    .hb{width:52px;padding:5px 2px 4px}
+    .hb .g{font-size:16px}
+    .hb .n{font-size:calc(9.5px * var(--ui))}
+  }
   .hb{display:flex;flex-direction:column;align-items:center;gap:3px;
     width:66px;padding:7px 4px 6px;border-radius:10px;border:1px solid transparent;
     background:none;cursor:pointer;line-height:1}
@@ -319,6 +331,21 @@
   <button class="hb" data-p="crumb" aria-pressed="false"
     data-say="drop a crumb. at their size it is a boulder of food — the only thing in their world that is a thing rather than weather, and the first thing that runs out."
     ><span class="g">🍞</span><span class="n">crumb</span></button>
+  <button class="hb" data-p="call" aria-pressed="false"
+    data-say="touch the board and every one of them near it drops what they are doing and comes. kind if you call them to water. a massacre if you call them into the low end before rain. the hand does not know which you meant."
+    ><span class="g">✽</span><span class="n">call</span></button>
+  <button class="hb" data-p="mend" aria-pressed="false"
+    data-say="hold on one of them and every need fills, and whatever was killing them stops. the only unambiguously good thing a hand can do here."
+    ><span class="g">❤</span><span class="n">mend</span></button>
+  <button class="hb" data-p="strike" aria-pressed="false"
+    data-say="hold on one of them and they stop where they stand. there is a body. the others will carry it to the yard and stand around the stone, and every one of them near enough to watch will remember."
+    ><span class="g">⚡</span><span class="n">strike</span></button>
+  <button class="hb" data-p="still" aria-pressed="false"
+    data-say="hold on one of them and they are fixed to the board the way dad glued one down. they keep wanting everything anyone wants, and can never go and get it. the town has to come to them."
+    ><span class="g">⦿</span><span class="n">still</span></button>
+  <button class="hb" data-p="dread" aria-pressed="false"
+    data-say="touch the board and everything near it knows, all at once, that the place is wrong. they will not stay. the ground there empties, and the paths grow back over it."
+    ><span class="g">〰</span><span class="n">dread</span></button>
   <button class="hb" data-p="lift" aria-pressed="false"
     data-say="pick one of them up. let go over the board and they are set down again. let go anywhere else and they do not come back, and there is no body to bury."
     ><span class="g">✥</span><span class="n">lift</span></button>
