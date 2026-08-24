@@ -468,6 +468,7 @@ export class View {
     const chimney = (x, z, h, w) => {
       const c = new THREE.Mesh(new THREE.BoxGeometry(w, h, w), M.stone);
       c.position.set(x, h / 2, z);
+      c.userData.chimney = h;      // the smoke system harvests these by tag
       return c;
     };
 
@@ -1619,6 +1620,36 @@ export class View {
     this.jar.add(this.windowIM);
     this._winSig = '';
 
+    // CHIMNEY SMOKE. Houses and the hall have had chimneys since the pitched-
+    // roof pass and they have never smoked. One Points system; anchors are
+    // harvested from the tagged chimney meshes whenever the works set changes.
+    // ⚠️ opacity ceiling is deliberate: the haze dome was MEASURED costing
+    // 55% of the board's saturation as a careless veil — additive smoke over
+    // twenty houses must never become the same mistake. 0.09 per puff, hard.
+    const SM = 200;
+    this._smokeN = SM;
+    const sg2 = new THREE.BufferGeometry();
+    this._smokePos = new Float32Array(SM * 3);
+    sg2.setAttribute('position', new THREE.BufferAttribute(this._smokePos, 3));
+    sg2.setDrawRange(0, 0);
+    const smokeTex = (() => {
+      const c = document.createElement('canvas'); c.width = c.height = 32;
+      const g = c.getContext('2d');
+      const r = g.createRadialGradient(16, 16, 1, 16, 16, 15);
+      r.addColorStop(0, 'rgba(210,214,220,0.9)'); r.addColorStop(1, 'rgba(210,214,220,0)');
+      g.fillStyle = r; g.fillRect(0, 0, 32, 32);
+      return new THREE.CanvasTexture(c);
+    })();
+    this.smoke = new THREE.Points(sg2, new THREE.PointsMaterial({
+      size: 0.02, map: smokeTex, transparent: true, opacity: 0.09,
+      depthWrite: false, sizeAttenuation: true,
+    }));
+    this.smoke.frustumCulled = false;
+    this.jar.add(this.smoke);
+    this._stacks = [];               // world-space chimney tops
+    this._smokeSeed = [];
+    for (let i = 0; i < SM; i++) this._smokeSeed.push(Math.random());
+
     // RAIN. s.rainLeft was invisible — the sky event with no sky. Slanted
     // additive line segments inside the jar group, so tilting the board slants
     // the rain WITH it (physically wrong, visually right: the rain is theirs).
@@ -1668,7 +1699,38 @@ export class View {
       }
       this.windowIM.count = n;
       this.windowIM.instanceMatrix.needsUpdate = true;
+      // re-harvest the chimney tops from the tagged meshes — group-local
+      // position through the group's yaw, exactly like the window quads
+      this._stacks.length = 0;
+      const wv = new THREE.Vector3();
+      for (const [o, g] of this.workViews) {
+        if (o.kind < 4 || o.prog < 0.98) continue;
+        g.traverse(m => {
+          if (!m.userData.chimney) return;
+          wv.copy(m.position); wv.y += m.userData.chimney / 2;
+          wv.applyAxisAngle({ x: 0, y: 1, z: 0 }, g.rotation.y);
+          wv.add(g.position);
+          this._stacks.push([wv.x, wv.y, wv.z]);
+        });
+      }
     }
+    // smoke rises from every stack: per-puff loop of rise + drift + regrow
+    if (this._stacks.length) {
+      const perStack = Math.max(3, Math.min(8, (this._smokeN / this._stacks.length) | 0));
+      const total = Math.min(this._smokeN, perStack * this._stacks.length);
+      const pos = this._smokePos;
+      for (let i = 0; i < total; i++) {
+        const st = this._stacks[(i / perStack) | 0];
+        const ph = this._smokeSeed[i];
+        const f = ((this.t * 0.055 * (0.7 + ph * 0.6) + ph) % 1);
+        const o = i * 3;
+        pos[o] = st[0] + Math.sin((this.t * 0.4 + ph * 9)) * 0.004 * f + f * 0.010;
+        pos[o + 1] = st[1] + f * 0.055;
+        pos[o + 2] = st[2] + Math.cos((this.t * 0.33 + ph * 7)) * 0.004 * f;
+      }
+      this.smoke.geometry.setDrawRange(0, total);
+      this.smoke.geometry.attributes.position.needsUpdate = true;
+    } else this.smoke.geometry.setDrawRange(0, 0);
     // dusk brings them up; the lamp being on does not put them out — a lit
     // window is the household's own light, not the room's
     const nightF = 1 - s.daylight;
