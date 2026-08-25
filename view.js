@@ -113,9 +113,19 @@ export class View {
   // shadow rather than a void edge. `daylight` still drives the light — it is
   // just no longer attached to a window you can see.
   _room() {
+    // the dark under the table falls away from the board instead of being one
+    // flat sheet — shadow, not a room reveal: the gradient stays dark enough
+    // that 'you are never outside the layout' holds.
+    const rc = document.createElement('canvas'); rc.width = rc.height = 256;
+    const rg = rc.getContext('2d');
+    const grd = rg.createRadialGradient(128, 128, 10, 128, 128, 128);
+    grd.addColorStop(0, '#101319');
+    grd.addColorStop(0.35, '#0a0d12');
+    grd.addColorStop(1, '#04050a');
+    rg.fillStyle = grd; rg.fillRect(0, 0, 256, 256);
     const dark = new THREE.Mesh(
       new THREE.PlaneGeometry(60, 60),
-      new THREE.MeshBasicMaterial({ color: 0x07080b })
+      new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(rc), color: 0xffffff })
     );
     dark.rotation.x = -Math.PI / 2;
     dark.position.y = BASE - 0.02;
@@ -173,9 +183,11 @@ export class View {
     // layout never floats on flat black at a shallow angle.
     const d = s.daylight;
     const amb = 0.05 + d * 0.20;
-    this.floorMat.color.setRGB(amb * 0.36, amb * 0.36, amb * 0.44);
+    this.floorMat.color.setRGB(0.5 + amb * 0.5, 0.5 + amb * 0.5, 0.55 + amb * 0.5);
     const fl = 0.30 + d * 0.70;
-    this.fasciaMat.color.setRGB(0.10 * fl, 0.14 * fl, 0.11 * fl);
+    // with the painted texture in place this is only the day dimmer — a
+    // neutral scale, or the map's own greens go muddy
+    this.fasciaMat.color.setRGB(0.55 + 0.45 * fl, 0.55 + 0.45 * fl, 0.55 + 0.45 * fl);
     // the room's light rises and falls with the day
     // ⚠️ FLOORS RAISED. Measured on a real start with the bulb on and the
     // curtain at 0.75, daylight is only 0.22 — which put the key light at 0.41
@@ -358,7 +370,27 @@ export class View {
     }
 
     // the fascia — the painted board edge the scenery is built out to
-    this.fasciaMat = new THREE.MeshStandardMaterial({ color: 0x24301f, roughness: 0.8 });
+    // brushed dark-green paint over plywood — dad painted this edge by hand,
+    // and a flat colour box reads as UI, not wood. One 256x64 canvas, dragged
+    // strokes with the grain, wear at the top edge where hands catch it.
+    const fc = document.createElement('canvas'); fc.width = 256; fc.height = 64;
+    const fg = fc.getContext('2d');
+    fg.fillStyle = '#243020'; fg.fillRect(0, 0, 256, 64);
+    for (let i = 0; i < 90; i++) {
+      const y0 = Math.random() * 64, ln = 30 + Math.random() * 120;
+      fg.strokeStyle = Math.random() < 0.5 ? 'rgba(18,26,15,0.35)' : 'rgba(52,66,44,0.30)';
+      fg.lineWidth = 0.6 + Math.random() * 1.6;
+      fg.beginPath(); fg.moveTo(Math.random() * 256, y0);
+      fg.lineTo(Math.random() * 256 + ln, y0 + (Math.random() - 0.5) * 3); fg.stroke();
+    }
+    // worn top edge: the plywood showing through where the paint has gone
+    for (let i = 0; i < 26; i++) {
+      fg.fillStyle = 'rgba(122,96,58,' + (0.10 + Math.random() * 0.25) + ')';
+      fg.fillRect(Math.random() * 256, Math.random() * 5, 3 + Math.random() * 14, 1.5 + Math.random() * 2.5);
+    }
+    const fasciaTex = new THREE.CanvasTexture(fc);
+    fasciaTex.wrapS = THREE.RepeatWrapping;
+    this.fasciaMat = new THREE.MeshStandardMaterial({ map: fasciaTex, color: 0xffffff, roughness: 0.8 });
     const lip = EDGE_Y - BASE;
     for (const [sx, sz, w, dd] of [
       [0, -BOARD, BOARD * 2 + 0.03, 0.03], [0, BOARD, BOARD * 2 + 0.03, 0.03],
@@ -1106,23 +1138,96 @@ export class View {
     //   body PAINT  = the hue (worst need blended over bloodline, as before)
     //   POSTURE     = wellbeing — a failing kin droops forward and sags
     //   the TIP     = the lantern's remnant, small, still hue + brightness
-    // Four draw calls for the whole colony (body, features, tips, glue), and
-    // pickKin still reads lanternPos so the reach and the inspector survive.
+    // Five draw calls for the whole colony (body, features, tips, burden,
+    // glue) — five is the ceiling forever — and pickKin still reads lanternPos
+    // so the reach and the inspector survive.
     //
-    // ⚠️ ONE LATHE, NO MERGING LIBRARY. BufferGeometryUtils is an examples
-    // module and is NOT in the vendored core — the body+head is a single lathe
-    // profile, and the feature layer is hand-merged from non-indexed primitives
+    // ⚠️ NO MERGING LIBRARY. BufferGeometryUtils is an examples module and is
+    // NOT in the vendored core — the body (lathe + legs + arms + eye whites)
+    // and the feature layer are both hand-merged from non-indexed primitives
     // below. Do not reach for mergeBufferGeometries; it does not exist here.
+    //
+    // ⚠️ THE FRAME MOVED, NOT THE FIGURE. Legs demanded the lathe base lift to
+    // local y=0.008 while _paintKin's yOff dropped 0.012 -> 0.004 — the two
+    // cancel exactly, so every part of the old figure stands at the world
+    // height it always did and the legs simply fill the gap it used to float
+    // across. Every head feature (eye whites here, pupils/mouth/antenna in the
+    // dark layer, the 0.0505 tip constant in _paintLantern) carries the same
+    // +0.008; change one and you must change them all or the face slides off
+    // the head.
     const prof = [
       [0.0000, 0.0000], [0.0085, 0.0010], [0.0105, 0.0062], [0.0078, 0.0130],
       [0.0046, 0.0160],                                     // the neck pinch
       [0.0088, 0.0205], [0.0102, 0.0252], [0.0062, 0.0300], // the big head
       [0.0000, 0.0328],
     ].map(([r, y]) => new THREE.Vector2(r, y));
-    const body = new THREE.LatheGeometry(prof, 10);
-    // painted-toy material; per-instance colour carries the hue
-    this.bodies = new THREE.InstancedMesh(body,
-      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.62, metalness: 0.02 }), CAP);
+    const lathe = new THREE.LatheGeometry(prof, 10);
+
+    // hand-merge the body with a per-vertex aTint channel: 1.0 on the eye
+    // whites (near-white no matter what the paint says), a baked belly patch
+    // on the front of the pear, 0 everywhere else. Tints are computed in each
+    // part's OWN local space before the translate, so the belly band reads
+    // off the lathe's own y — bake after translating and the band lands on
+    // the shins.
+    const bparts = [];   // { g: non-indexed geometry, t: per-vertex aTint }
+    const addBody = (geo, tint, x, y, z) => {
+      const g0 = geo.toNonIndexed();
+      const nv0 = g0.attributes.position.count;
+      const ta = new Float32Array(nv0);
+      if (typeof tint === 'function') {
+        const p0 = g0.attributes.position;
+        for (let i = 0; i < nv0; i++) ta[i] = tint(p0.getX(i), p0.getY(i), p0.getZ(i));
+      } else if (tint) ta.fill(tint);
+      g0.translate(x, y, z);
+      bparts.push({ g: g0, t: ta });
+    };
+    // torso + head, lifted onto the legs; a lighter patch on the belly front
+    const maxR = 0.0105;
+    addBody(lathe, (px, py, pz) =>
+      (py > 0.004 && py < 0.016) ? Math.max(0, pz / maxR) * 0.35 : 0, 0, 0.008, 0);
+    // two stub legs reaching down so the feet actually meet the flock
+    addBody(new THREE.CylinderGeometry(0.0016, 0.0020, 0.0100, 6), 0, -0.0045, 0.005, 0);
+    addBody(new THREE.CylinderGeometry(0.0016, 0.0020, 0.0100, 6), 0,  0.0045, 0.005, 0);
+    // arm nubs at the shoulder
+    addBody(new THREE.SphereGeometry(0.0022, 6, 4), 0, -0.0085, 0.020, 0);
+    addBody(new THREE.SphereGeometry(0.0022, 6, 4), 0,  0.0085, 0.020, 0);
+    // eye WHITES — moved out of the dark layer so they render near-white and
+    // the pupils in the feature layer sit proud of them
+    addBody(new THREE.SphereGeometry(0.0034, 7, 5), 1.0, -0.0044, 0.0326, 0.0082);
+    addBody(new THREE.SphereGeometry(0.0034, 7, 5), 1.0,  0.0044, 0.0326, 0.0082);
+    let bTot = 0;
+    for (const bp of bparts) bTot += bp.g.attributes.position.count;
+    const bpos = new Float32Array(bTot * 3), bnor = new Float32Array(bTot * 3);
+    const btint = new Float32Array(bTot);
+    let boff = 0;
+    for (const bp of bparts) {
+      bpos.set(bp.g.attributes.position.array, boff * 3);
+      bnor.set(bp.g.attributes.normal.array, boff * 3);
+      btint.set(bp.t, boff);
+      boff += bp.g.attributes.position.count;
+    }
+    const body = new THREE.BufferGeometry();
+    body.setAttribute('position', new THREE.BufferAttribute(bpos, 3));
+    body.setAttribute('normal', new THREE.BufferAttribute(bnor, 3));
+    body.setAttribute('aTint', new THREE.BufferAttribute(btint, 1));
+
+    // painted-toy material; per-instance colour carries the hue.
+    // ⚠️ aTint injection point matters: with InstancedMesh + setColorAt, three
+    // folds vertexColor·instanceColor into diffuseColor inside color_fragment,
+    // so the mix must come AFTER that include — it lerps the FINAL instance-
+    // tinted colour toward off-white, which is what keeps the eye whites white
+    // over any paint. (Same onBeforeCompile pattern as the lantern points.)
+    const bodyMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.62, metalness: 0.02 });
+    bodyMat.onBeforeCompile = (sh2) => {
+      sh2.vertexShader = sh2.vertexShader
+        .replace('#include <common>', '#include <common>\nattribute float aTint;\nvarying float vTint;')
+        .replace('#include <color_vertex>', '#include <color_vertex>\n  vTint = aTint;');
+      sh2.fragmentShader = sh2.fragmentShader
+        .replace('#include <common>', '#include <common>\nvarying float vTint;')
+        .replace('#include <color_fragment>',
+          '#include <color_fragment>\n  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.93,0.94,0.90), vTint);');
+    };
+    this.bodies = new THREE.InstancedMesh(body, bodyMat, CAP);
     this.bodies.castShadow = true;
     this.bodies.receiveShadow = true;
     this.bodies.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -1134,13 +1239,18 @@ export class View {
     this.bodies.instanceColor.setUsage(THREE.DynamicDrawUsage);
     this.jar.add(this.bodies);
 
-    // the dark features: two big eyes + the antenna stalk, one draw call.
-    // Hand-merged: everything to non-indexed, concatenate position+normal.
+    // the dark features: PUPILS proud of the whites, a mouth dash, and the
+    // antenna stalk (unchanged in shape — it just rides the same +0.008 the
+    // head did). One draw call. Hand-merged: everything to non-indexed,
+    // concatenate position+normal. The big dark eyes of the first figure
+    // became the eye WHITES in the body mesh above; only what must never take
+    // the paint stays in this layer.
     const parts = [];
     const put = (geo, x, y, z) => { geo.translate(x, y, z); parts.push(geo.toNonIndexed()); };
-    put(new THREE.SphereGeometry(0.0030, 7, 5), -0.0044, 0.0246, 0.0082);   // left eye
-    put(new THREE.SphereGeometry(0.0030, 7, 5),  0.0044, 0.0246, 0.0082);   // right eye
-    put(new THREE.CylinderGeometry(0.0005, 0.0009, 0.0105, 4), 0, 0.0370, 0); // antenna
+    put(new THREE.SphereGeometry(0.0016, 6, 4), -0.0044, 0.0326, 0.0102);   // left pupil
+    put(new THREE.SphereGeometry(0.0016, 6, 4),  0.0044, 0.0326, 0.0102);   // right pupil
+    put(new THREE.BoxGeometry(0.0022, 0.0008, 0.0006), 0, 0.0275, 0.0098);  // the mouth dash
+    put(new THREE.CylinderGeometry(0.0005, 0.0009, 0.0105, 4), 0, 0.0450, 0); // antenna
     let vTot = 0;
     for (const g0 of parts) vTot += g0.attributes.position.count;
     const fpos = new Float32Array(vTot * 3), fnor = new Float32Array(vTot * 3);
@@ -1159,6 +1269,23 @@ export class View {
     this.features.count = 0;
     this.features.frustumCulled = false;
     this.jar.add(this.features);
+
+    // THE BURDEN — what a kin is carrying, held against the chest: bone-pale
+    // when they carry their dead home (goal 8), raw timber when they walk to
+    // a build (goal 10). The chest offset is baked into the geometry, so each
+    // instance takes the SAME matrix as its body and is hidden by the same
+    // scale-away trick the eggs use — InstancedMesh has no per-instance
+    // visibility. This is the fifth and FINAL colony draw call.
+    const burdenGeo = new THREE.BoxGeometry(0.006, 0.005, 0.004);
+    burdenGeo.translate(0, 0.014, 0.0105);
+    this.burden = new THREE.InstancedMesh(burdenGeo,
+      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9 }), CAP);
+    this.burden.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.burden.count = 0;
+    this.burden.frustumCulled = false;
+    for (let i = 0; i < CAP; i++) this.burden.setColorAt(i, this._col);
+    this.burden.instanceColor.setUsage(THREE.DynamicDrawUsage);
+    this.jar.add(this.burden);
 
     // the lantern: additive points. This is the entire UI. (§4.2)
     const spr = document.createElement('canvas'); spr.width = spr.height = 64;
@@ -1222,10 +1349,14 @@ export class View {
     this.jar.add(this.glue);
 
     this._m4 = new THREE.Matrix4();
+    this._m4b = new THREE.Matrix4();     // the burden's hidden matrix — never clobbers _m4
     this._e = new THREE.Euler();
     this._q = new THREE.Quaternion();
     this._v = new THREE.Vector3();
     this._sc = new THREE.Vector3();
+    this._boneC = new THREE.Color(0xcfc9bd);      // the dead, wrapped
+    this._timberC = new THREE.Color(0x8a6b42);    // raw building timber
+    this._rimeC = new THREE.Color(0.72, 0.70, 0.66);  // the bone-grey of stage rime
     this.kinScreen = [];   // for picking
   }
 
@@ -1263,13 +1394,19 @@ export class View {
     // agree about their town even when they see it differently.
     this._col.setHSL(hueOf(k.hue[id]) / 360, st === STAGE.EGG ? 0.45 : 0.92, 0.22 + b * 0.34);
     const o = n * 3;
-    this.lanternPos[o] = x; this.lanternPos[o + 1] = y + 0.0425 * sz; this.lanternPos[o + 2] = z;
+    // ⚠️ 0.0505 is the antenna TOP in the legged frame (stalk centre 0.0450 +
+    // half its 0.0105 height). It was 0.0425 when the lathe base sat at local
+    // zero; the +0.008 body lift and the yOff drop in _paintKin cancel, so the
+    // glow stays at the same world height it always had. lanternPos still
+    // means "the antenna tip" — pickKin depends on that meaning.
+    this.lanternPos[o] = x; this.lanternPos[o + 1] = y + 0.0505 * sz; this.lanternPos[o + 2] = z;
     this.lanternCol[o] = this._col.r; this.lanternCol[o + 1] = this._col.g; this.lanternCol[o + 2] = this._col.b;
     this.lanternSize[n] = (0.028 + b * 0.048) * grow * (0.85 + (1 - s.daylight) * 0.50);
   }
 
   _paintKin() {
     const s = this.sim, k = s.k;
+    const G2 = LOCI.length * 2;
     let n = 0, glueSeen = false;
     for (let id = 0; id < s.count; id++) {
       if (!k.alive[id]) continue;
@@ -1278,10 +1415,22 @@ export class View {
       // was carried over the board — the exact moment of the game's biggest
       // power, crashing the frame loop. Caught by the graphics review, not by
       // any test, because every headless test runs without a view.
-      let [x, y, z] = this.cellToLocal(k.x[id], k.y[id], 0.012);
+      // ⚠️ yOff was 0.012 back when the lathe base WAS the bottom of the
+      // figure and it floated on that offset. The legs now own local 0..0.010
+      // and the body starts at 0.008, so 0.004 plants the feet on the flock —
+      // the small remainder covers the gap between the coarse cell height used
+      // here and the smoothed display terrain.
+      let [x, y, z] = this.cellToLocal(k.x[id], k.y[id], 0.004);
       const st = k.stage[id];
       const grow = st === STAGE.EGG ? 0.62 : st === STAGE.NIB ? 0.7 : st === STAGE.HALF ? 0.86 : 1;
       const sz = k.size[id] * grow;
+
+      // BLOODLINE SILHOUETTES: the two marrow allele bytes set the body WIDTH
+      // (x/z only — height belongs to age and stage). Children share alleles
+      // with their parents, so families share shapes across the whole board.
+      const gO = id * G2;
+      const m0 = k.genome[gO + L.marrow * 2], m1 = k.genome[gO + L.marrow * 2 + 1];
+      const wf = 0.92 + ((m0 * 3 + m1) % 16) / 16 * 0.15;
 
       // gait: a squash-and-stretch bob. View-only, so Math.sin is fine here.
       const ph = this.t * (2.2 + k.pulse[id] * 0.5) + (this.phase ? this.phase[id] : k.phase[id]) * 6.28;
@@ -1289,14 +1438,25 @@ export class View {
       const bob = moving ? Math.abs(Math.sin(ph)) : 0.5 + Math.sin(ph * 0.35) * 0.08;
       const sq = 1 + (moving ? Math.sin(ph * 2) * 0.16 : Math.sin(ph * 0.5) * 0.04);
 
+      // GAIT AS HEALTH: a bright kin bounces, a failing one barely lifts its
+      // feet, and stage rime stiffens everything. ⚠️ AMPLITUDE ONLY, never
+      // frequency — the phase term above is shared clockwork, and scaling the
+      // rate would make the whole colony's phase jump every time somebody's
+      // day went badly.
+      const wb = k.bright[id];
+      let amp = 0.7 + wb * 0.5;
+      if (st === STAGE.RIME) amp *= 0.6;
+
       // body paint: the same hue the lantern used to carry, worn as PAINT.
       // Saturation drops and the whole figure dims as wellbeing falls, so the
       // colony still reads at a glance — a struggling quarter of town goes
       // grey-dim while the healthy stay vivid. Palette-remapped like the tip.
-      const wb = k.bright[id];
       this._col.setHSL(hueOf(k.hue[id]) / 360,
         st === STAGE.EGG ? 0.10 : 0.30 + wb * 0.34,
         st === STAGE.EGG ? 0.62 : 0.26 + wb * 0.26);
+      // rime: the paint itself goes a third of the way to bone — the last
+      // stage reads at a glance even when the figure is standing still
+      if (st === STAGE.RIME) this._col.lerp(this._rimeC, 0.35);
       this.bodies.setColorAt(n, this._col);
 
       // posture: a failing kin DROOPS — pitched forward, sagging. This is the
@@ -1307,15 +1467,20 @@ export class View {
       // the one who stays never bobs and never turns — they are stuck fast,
       // and the stillness is the tell before you ever open the inspector
       if (k.glued[id]) {
-        this.glue.position.set(x, y - 0.010, z);
+        // ⚠️ -0.002, not -0.010: y carries the new smaller yOff, and the decal
+        // must land where it always did — surface + 0.002, riding polygonOffset
+        this.glue.position.set(x, y - 0.002, z);
         this.glue.visible = true; glueSeen = true;
         this._v.set(x, y, z);
-        this._sc.set(sz, sz, sz);
+        // the family width still shows — being glued changes what they can DO,
+        // not what bloodline they are
+        this._sc.set(sz * wf, sz, sz * wf);
         this._e.set(droop, k.phase[id] * 6.28, 0, 'YXZ');
         this._q.setFromEuler(this._e);
         this._m4.compose(this._v, this._q, this._sc);
         this.bodies.setMatrixAt(n, this._m4);
         this.features.setMatrixAt(n, this._m4);
+        this._paintBurden(id, n);
         this._paintLantern(id, n, x, y, z, sz, grow, st);
         this.kinScreen[n] = id; n++;
         continue;
@@ -1324,8 +1489,9 @@ export class View {
       // ⚠️ somebody in the air rides at the hand, and the BODY has to go with
       // the tip — before this only the glow lifted and the figure stayed on the
       // ground, which read as the hand stealing a soul instead of a person.
-      let hy = 0;
+      let hy = 0, held = false;
       if (this.sim.held && this.sim.held.id === id) {
+        held = true;
         const c = this.heldCell;
         if (c) { const N = this.sim.N;
           x = (c[0] / (N - 1) - 0.5) * GR * 2;
@@ -1333,16 +1499,36 @@ export class View {
         hy = 0.16 + Math.sin(this.t * 2.1) * 0.006;
       }
 
-      this._v.set(x, y + hy + (moving ? bob * 0.006 : 0), z);
-      this._sc.set(sz / sq, sz * sq, sz / sq);
-      const face = Math.atan2(k.tx[id] - k.x[id], k.ty[id] - k.y[id]);
+      // temper posture: the dominance ladder, inlined from expressed() — a
+      // subarray per kin per frame is garbage-collector bait at 60fps. The
+      // temper alleles are [placid, curious, fearful, cruel], lowest index
+      // wins. Eggs have no posture; they are eggs.
+      const tmin = Math.min(k.genome[gO + L.temper * 2], k.genome[gO + L.temper * 2 + 1]);
+      let tPitch = 0, tY = 1;
+      if (st !== STAGE.EGG) {
+        if (tmin === 1) tPitch = 0.06;                       // curious leans in
+        else if (tmin === 2) { tPitch = 0.10; tY = 0.96; }   // fearful hunches
+        else if (tmin === 3) tPitch = -0.05;                 // cruel struts, chest out
+      }
+
+      this._v.set(x, y + hy + (moving ? bob * 0.006 * amp : 0), z);
+      this._sc.set((sz / sq) * wf, sz * sq * tY, (sz / sq) * wf);
+      // held: they slowly turn in the hand — being looked at from every side
+      let face = held ? this.t * 0.6
+        : Math.atan2(k.tx[id] - k.x[id], k.ty[id] - k.y[id]);
+      // the shiver: a kin at the bottom of its wellbeing cannot hold still.
+      // Jitter, not gait — this one may run off this.t directly.
+      if (wb < 0.25 && st !== STAGE.EGG) face += Math.sin(this.t * 31 + id) * 0.03;
       // a moving kin leans INTO the walk a little; a failing one sags the same
       // way, further — one axis, two readings, both honest
-      const lean = droop + (moving ? 0.14 + Math.sin(ph * 2) * 0.05 : 0);
-      this._e.set(lean, face, 0, 'YXZ');
+      const lean = tPitch + droop + (moving ? 0.14 + Math.sin(ph * 2) * 0.05 : 0);
+      // the waddle: a roll around the walk axis, health-scaled like the bob
+      const roll = moving ? Math.sin(ph) * 0.09 * amp : 0;
+      this._e.set(lean, face, roll, 'YXZ');
       this._q.setFromEuler(this._e);
       this._m4.compose(this._v, this._q, this._sc);
       this.bodies.setMatrixAt(n, this._m4);
+      this._paintBurden(id, n);
       // eggs are eggs — no eyes, no antenna. Scale the feature layer away.
       if (st === STAGE.EGG) {
         this._sc.set(0.0001, 0.0001, 0.0001);
@@ -1357,14 +1543,38 @@ export class View {
     this.glue.visible = glueSeen;
     this.bodies.count = n;
     this.features.count = n;
+    this.burden.count = n;
     this.bodies.instanceMatrix.needsUpdate = true;
     this.features.instanceMatrix.needsUpdate = true;
+    this.burden.instanceMatrix.needsUpdate = true;
     if (this.bodies.instanceColor) this.bodies.instanceColor.needsUpdate = true;
+    if (this.burden.instanceColor) this.burden.instanceColor.needsUpdate = true;
     this.lanterns.geometry.setDrawRange(0, n);
     this.lanterns.geometry.attributes.position.needsUpdate = true;
     this.lanterns.geometry.attributes.color.needsUpdate = true;
     this.lanterns.geometry.attributes.psize.needsUpdate = true;
     this.kinCount = n;
+  }
+
+  // THE BURDEN, per instance — visible only while the kin is actually
+  // carrying: the dead home (goal 8, bone-pale) or timber to a build
+  // (goal 10, raw wood). The chest offset is baked into the geometry, so the
+  // visible branch reuses this._m4 exactly as the body composed it.
+  // ⚠️ call this right after bodies.setMatrixAt and BEFORE the egg trick
+  // recomposes _m4 for the features — and the hidden branch writes _m4b, not
+  // _m4, because the features still need the body's matrix afterwards.
+  _paintBurden(id, n) {
+    const g = this.sim.k.goal[id];
+    if (g === 8 || g === 10) {
+      this.burden.setMatrixAt(n, this._m4);
+      this.burden.setColorAt(n, g === 8 ? this._boneC : this._timberC);
+    } else {
+      // the egg scale trick: InstancedMesh has no per-instance visibility,
+      // so scale it away instead
+      this._sc.set(0.0001, 0.0001, 0.0001);
+      this._m4b.compose(this._v, this._q, this._sc);
+      this.burden.setMatrixAt(n, this._m4b);
+    }
   }
 
   // -- the graves ------------------------------------------------------------

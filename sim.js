@@ -204,22 +204,26 @@ function vnoise(x, y, s) {
 //
 // ⚠️ A discovery is not culture until somebody who never met the discoverer
 // does it anyway. That is the whole of §7 and it is what `k.born` is for.
+// ⚠⚠ APPEND-ONLY. A rung's INDEX is save format twice over: k.knows is a
+// bitmask over these indices, and every work on every board stores o.kind by
+// index. Insert a rung in the middle and every save's heads and buildings
+// silently become the wrong things. New rungs go at the END, always.
 export const WORKS = [
   // --- what you work out when you have nothing ---------------------------
-  { key: 'store', name: 'the store', need: 2, pressure: 0.40, effort: 320, radius: 7.0, cap: 3, per: 14,
+  { key: 'store', name: 'the store', need: 2, pressure: 0.40, effort: 320, radius: 7.0, cap: 12, per: 14,
     made: 'piled food where it would keep', pre: 0, near: 0 },
-  { key: 'windbreak', name: 'the windbreak', need: 0, pressure: 0.38, effort: 380, radius: 6.0, cap: 3, per: 16,
+  { key: 'windbreak', name: 'the windbreak', need: 0, pressure: 0.38, effort: 380, radius: 6.0, cap: 10, per: 16,
     made: 'heaped a wall against the cold', pre: 0, near: 0 },
-  { key: 'channel', name: 'the channel', need: 1, pressure: 0.38, effort: 420, radius: 6.0, cap: 2, per: 22,
+  { key: 'channel', name: 'the channel', need: 1, pressure: 0.38, effort: 420, radius: 6.0, cap: 8, per: 22,
     made: 'scraped a channel from the water', pre: 0, near: 0 },
   // --- and then you work out that you could LIVE somewhere ----------------
   // `pre` is a mask of practices that must already be known. This is the whole
   // progression and the player never sees a tree of it.
-  { key: 'hut', name: 'the first hut', need: 3, pressure: 0.34, effort: 900, radius: 5.0, cap: 8, per: 7,
+  { key: 'hut', name: 'the first hut', need: 3, pressure: 0.34, effort: 900, radius: 5.0, cap: 40, per: 7,
     made: 'made a place to be out of the weather', pre: 0b111, preN: 2, near: 1 },
-  { key: 'house', name: 'a house', need: 3, pressure: 0.30, effort: 1600, radius: 5.0, cap: 20, per: 9,
+  { key: 'house', name: 'a house', need: 3, pressure: 0.30, effort: 1600, radius: 5.0, cap: 48, per: 9,
     made: 'built something meant to outlast them', pre: 0b1000, preN: 1, near: 1 },
-  { key: 'hall', name: 'the hall', need: 4, pressure: 0.30, effort: 2600, radius: 9.0, cap: 1, per: 40,
+  { key: 'hall', name: 'the hall', need: 4, pressure: 0.30, effort: 2600, radius: 9.0, cap: 4, per: 40,
     made: 'raised a roof big enough for all of them', pre: 0b10000, preN: 1, near: 1 },
 ];
 export const WORK_AT = {}; WORKS.forEach((w, i) => WORK_AT[w.key] = i);
@@ -275,7 +279,11 @@ export class Sim {
       // so they round-trip through toJSON/fromJSON for free.
       glued: new Uint8Array(K), tender: new Int32Array(K),
       // which practices this one carries in its head — a bitmask over WORKS
-      knows: new Uint8Array(K),
+      // ⚠️ Uint16, and APPEND-ONLY: each bit is a WORKS index, so WORKS indices
+      // are SAVE FORMAT — reordering the ladder corrupts every kin's head in
+      // every existing save. New rungs go on the END. 16 bits = 16 rungs max;
+      // the planned ladder needs 11.
+      knows: new Uint16Array(K),
       // ⚠️ WHAT THEY REMEMBER OF THE HAND. memV is SIGNED and the sign is
       // decided by their OWN comfort band, never by a rule about what the
       // player did — so a single press writes gratitude into one bloodline and
@@ -288,6 +296,12 @@ export class Sim {
       // picked up and carried out of the world does not. That exemption is one
       // skipped line and it is the whole of §9.3.
       saw: new Float32Array(K),
+      // ⚠️ WHERE THEY LIVE. home is a WORK ID (splice-safe), NOT an index —
+      // and -1 is 'nowhere'. ⚠️ 0 is a VALID work id, so a legacy save that
+      // lacks these arrays must be filled with -1 in fromJSON or every restored
+      // kin silently claims work 0 as home. homeTier is the kind of the
+      // dwelling claimed (hut 3 / house 4), for the promotion ladder later.
+      home: new Int32Array(K).fill(-1), homeTier: new Uint8Array(K),
     };
     this.names = [];           // nameId -> string
     this.free = [];            // free kin slots
@@ -301,7 +315,13 @@ export class Sim {
     // mechanical: frequency x magnitude x distinct kin. Never a judgement.
     this.placeMem = {};        // coarse cell -> {v, ids:[nameId], n}
     this.placeNames = {};      // coarse cell -> a word in their own language
-    this.works = [];           // what stands on the board {kind,x,y,prog,by,day,stock}
+    this.works = [];           // what stands on the board {id,kind,x,y,prog,by,day,stock}
+    // ⚠️ WORK IDS ARE FOREVER. Everything that is about to reference a work —
+    // a kin's home, a trade's post — must survive the splice when some OTHER
+    // work decays out of the array, so array indices are useless as references.
+    // workSeq lives on `this`, which means it does NOT round-trip for free:
+    // it is hand-written into toJSON and restored in fromJSON, like `narr`.
+    this.workSeq = 0;
     this.prac = WORKS.map(() => ({ invented: -1, inventor: -1, inventorGone: -1,
                                    lost: -1, tradition: -1, reinvented: 0, tries: 0 }));
     this.graves = [];          // {x,y,nameId,day,gen}
@@ -524,6 +544,10 @@ export class Sim {
     k.born[id] = this.day; k.mother[id] = mo; k.father[id] = fa;
     k.nameId[id] = -1; k.gen[id] = gen;
     k.glued[id] = 0; k.tender[id] = -1; k.knows[id] = 0;
+    // a child is born INTO the household. Beds gate adult CLAIMS, not births —
+    // the leaving-home moment happens at the HALF->WHOLE transition instead.
+    k.home[id] = mo >= 0 ? k.home[mo] : -1;
+    k.homeTier[id] = mo >= 0 ? k.homeTier[mo] : 0;
     k.memX[id] = -1; k.memY[id] = -1; k.memV[id] = 0;
     for (let j = 0; j < G; j++) k.genome[id * G + j] = genome[j];
     const span = SPAN_DAYS[expressed(genome, L.span)];
@@ -586,6 +610,23 @@ export class Sim {
       this._fluids(F);
       this._growth(F);
       if (this.gifts.length) this._gifts();
+    }
+    // ⚠⚠ DUSK IS SOMETHING EVERYBODY NOTICES. Traced: at nightfall most kin
+    // were mid-errand with commitment holds of 200-770 ticks, so they did not
+    // even RE-DECIDE until deep night — and a kin 25 cells from home needs
+    // ~600 ticks of walking against a ~300-tick night, so they never made it.
+    // No pull strength can beat arithmetic. Instead, once per evening as the
+    // light fails, every open commitment shortens to at most 90 ticks: the
+    // errand finishes or is dropped, the re-decide happens while there is
+    // still night to walk in, and the near-enough go home. The far ones camp
+    // where they are, which is honest. Deterministic — no draws, one sweep.
+    if (this.daylight < 0.35 && this._duskSweep !== this.day) {
+      this._duskSweep = this.day;
+      const kk = this.k;
+      for (let id = 0; id < this.count; id++) {
+        if (!kk.alive[id]) continue;
+        if (kk.hold[id] > 90) kk.hold[id] = 90;
+      }
     }
     this._kin();
     // culture runs at 1 Hz, not 15 (bible §20)
@@ -737,7 +778,19 @@ export class Sim {
           if (this._hatches % 7 === 1) this.log('hatch', `something hatched near the ${this.placeName(i)}.`, 0.55);
         }
       } else if (k.stage[id] === STAGE.NIB && k.age[id] > C.NIB_DAYS) k.stage[id] = STAGE.HALF;
-      else if (k.stage[id] === STAGE.HALF && k.age[id] > C.HALF_DAYS) k.stage[id] = STAGE.WHOLE;
+      else if (k.stage[id] === STAGE.HALF && k.age[id] > C.HALF_DAYS) {
+        k.stage[id] = STAGE.WHOLE;
+        // grown: they keep their childhood bed only if the household has room.
+        // Beds count ADULTS, so this is the leaving-home moment — the claim
+        // pass will find them somewhere, or they sleep out like everyone did
+        // before there were roofs.
+        if (k.home[id] >= 0) {
+          const h = this.workById(k.home[id]);
+          const beds = h && (h.kind === 3 ? 3 : h.kind === 4 ? 6 : 0);
+          if (!h || (h.occ || 0) >= beds) { k.home[id] = -1; k.homeTier[id] = 0; }
+          else h.occ = (h.occ || 0) + 1;
+        }
+      }
       else if (k.stage[id] === STAGE.WHOLE && k.age[id] > k.lifespan[id] * 0.85) {
         k.stage[id] = STAGE.RIME;
         this._name(id, `who grew old`);
@@ -776,6 +829,15 @@ export class Sim {
         const R2 = WORKS[o.kind].radius * S;
         if (dx * dx + dy * dy > R2 * R2) continue;
         if (o.kind === WORK_AT.windbreak) shelter = 1;
+        else if (o.kind === 3 || o.kind === 4) {
+          // a roof shelters its own fully; a stranger in somebody's doorway
+          // during a heat press gets most of it, and that is a story
+          shelter = Math.max(shelter, k.home[id] === o.id ? 1 : 0.55);
+          if (k.home[id] === o.id) {
+            k.need[base + 5] = Math.min(1, k.need[base + 5] + 0.0008);       // safe under your own roof
+            if (this.daylight < 0.15) k.need[base + 4] = Math.min(1, k.need[base + 4] + 0.0010); // the household, asleep together
+          }
+        }
         else if (o.kind === WORK_AT.store && o.stock > 0.02 && k.need[base + 2] < 0.55) {
           const give = Math.min(o.stock, 0.010);
           o.stock -= give; k.need[base + 2] = Math.min(1, k.need[base + 2] + give * 1.6);
@@ -834,7 +896,28 @@ export class Sim {
       // thrash in place and starve twenty cells from the pond. ⚠️ do not remove.
       k.hold[id] -= 1;
       const band2 = HIDE_BAND[expressed(g, L.hide)];
-      const emergency = this.temp[i] > band2[3] - 4 || this.water[i] > 0.07;
+      // ⚠⚠ STARVING WAS NOT AN EMERGENCY. This gate is what lets a kin ABANDON a
+      // committed errand mid-walk, and it only ever watched heat and flood — so a
+      // kin that went critical while building or courting kept walking until its
+      // commitment hold ran out, which can be hundreds of ticks. That is the real
+      // reason for the suite's oldest open failure, 'nobody starves standing in
+      // food': they were not blind to the moss, they were BUSY. The survival
+      // filter in _decide could never help, because _decide was never reached.
+      //
+      // ⚠️ The commitment itself stays exactly as it is — 're-deciding every tick
+      // makes them thrash in place and starve twenty cells from the pond' is the
+      // older, harder-won lesson. This only adds a way OUT of a commitment when
+      // the body is actually failing.
+      // ⚠️ AND IT ONLY BREAKS A *LONG ERRAND*. The first version made hunger a
+      // standing emergency — which re-decides EVERY tick (emergency also skips
+      // the %3 throttle below) and walked straight into the oldest warning in
+      // this function: 'Re-deciding every tick makes them thrash in place and
+      // starve twenty cells from the pond.' Measured: two healthy seeds that
+      // reach 300 days went EXTINCT. Once they have turned toward food the
+      // emergency is over and ordinary commitment carries them there.
+      const starving = (k.need[base + 2] < 0.15 || k.need[base + 1] < 0.15) &&
+        (k.goal[id] === 7 || k.goal[id] === 10 || k.goal[id] === 13 || k.goal[id] === 14);
+      const emergency = this.temp[i] > band2[3] - 4 || this.water[i] > 0.07 || starving;
       const satisfied = this._goalMet(id);
       if (k.hold[id] <= 0 || satisfied || (emergency && k.goal[id] !== 6)) {
         if ((this.tick + id) % 3 === 0 || k.hold[id] <= -30 || emergency) this._decide(id, g);
@@ -875,7 +958,16 @@ export class Sim {
       const relearning = pr.invented >= 0 && pr.lost >= 0;   // the knowledge is gone
       // a town builds what it has hands for. Fourteen houses for twenty people
       // is not a settlement, it is a labour trap that empties the larder.
-      const room = Math.max(1, Math.min(W.cap, Math.ceil(this.alive / (W.per || 10))));
+      // ⚠⚠ THE 37-STRUCTURE CEILING DIED HERE. The old caps totalled 37
+      // buildings maximum EVER — 0.4% of a 9,216-cell board — which is why the
+      // town's coverage stalled at 17.6% at day 1000 no matter what. Caps are
+      // sanity ceilings now, ROOM scales with hands, and the cap reliever is
+      // the game's own signature system: once a practice is TRADITION —
+      // institutionalised knowledge — the town builds DENSER (per x0.6). The
+      // existing 3-cell spacing check makes LAND the real limit, so the board
+      // fills as a town, not as a carpet.
+      const perEff = (W.per || 10) * (pr.tradition >= 0 ? 0.6 : 1);
+      const room = Math.max(1, Math.min(W.cap, Math.ceil(this.alive / perEff)));
       if (unfinished || (mine >= room && !relearning)) continue;
 
       // you cannot think of a thing until you know the things it is made of
@@ -897,7 +989,8 @@ export class Sim {
         if (!k.alive[id] || k.stage[id] !== STAGE.WHOLE || k.glued[id]) continue;
         const want = 1 - k.need[id * NN + W.need];
         if (want < W.pressure) continue;
-        // material: the ground has to have something to work with
+    
+    // material: the ground has to have something to work with
         const i = this.idx(k.x[id], k.y[id]);
         const material = wi === WORK_AT.channel
           ? (this.water[i] < 0.02 ? this.moist[i] : 0)     // dry ground beside water
@@ -942,7 +1035,7 @@ export class Sim {
       // KNOWLEDGE, not another pile — somebody looked at a thing nobody
       // understood any more and understood it
       if (mine < W.cap) {
-        this.works.push({ kind: wi, x: wx, y: wy, prog: 0, by: k.nameId[best], day, stock: 0 });
+        this.works.push({ id: this.workSeq++, kind: wi, x: wx, y: wy, prog: 0, by: k.nameId[best], day, stock: 0 });
       }
 
       const nm = this._name(best, `who first made ${W.name}`);
@@ -961,23 +1054,88 @@ export class Sim {
 
     }
 
+    // ---- HOMES: the census and the claims (1 Hz, like everything cultural).
+    // Nobody is ever assigned a house. A kin without one takes the nearest
+    // standing hut or house with a free bed — an argmax over distance with
+    // ties broken by lower work id, so it is deterministic and §18 stays
+    // intact: the town does this to itself.
+    const BEDS = { 3: 3, 4: 6 };
+    for (const o of this.works) o.occ = 0;
+    for (let id = 0; id < this.count; id++) {
+      if (!k.alive[id] || k.home[id] < 0) continue;
+      const h = this.workById(k.home[id]);
+      // the house fell, or was never real: the claim dissolves
+      if (!h || h.prog < 0.5 || BEDS[h.kind] == null) { k.home[id] = -1; k.homeTier[id] = 0; continue; }
+      if (k.stage[id] >= STAGE.WHOLE) h.occ = (h.occ || 0) + 1;   // adults hold beds; children ride along
+    }
+    for (let id = 0; id < this.count; id++) {
+      if (!k.alive[id] || k.home[id] >= 0 || k.glued[id]) continue;
+      if (k.stage[id] < STAGE.WHOLE) continue;
+      let best = null, bd = 1e9;
+      for (const o of this.works) {
+        if (BEDS[o.kind] == null || o.prog < WORK_DONE) continue;
+        if ((o.occ || 0) >= BEDS[o.kind]) continue;
+        const d = Math.abs(o.x - k.x[id]) + Math.abs(o.y - k.y[id]);
+        if (d < bd - 1e-9 || (Math.abs(d - bd) < 1e-9 && best && o.id < best.id)) { bd = d; best = o; }
+      }
+      if (!best) continue;
+      k.home[id] = best.id; k.homeTier[id] = best.kind; best.occ = (best.occ || 0) + 1;
+      const nm = this.nameOf(id);
+      if (!this.eventCounts.get('home')) {
+        this.log('home', `nobody had lived anywhere before. ${nm} took ${WORKS[best.kind].name} by the ${this.placeName(this.idx(best.x, best.y))} for their own.`, 4.5);
+      } else if (!best.claimed) {
+        this.log('home', `${nm} took ${WORKS[best.kind].name} by the ${this.placeName(this.idx(best.x, best.y))} for their own.`, 0.9);
+      }
+      best.claimed = 1;
+    }
+
     // ---- works age, and a finished one feeds or shelters whoever is near
+    // ⚠⚠ THE FALL USED TO BE UNREACHABLE. `if (prog < WORK_DONE) continue`
+    // sat ABOVE the decay line, so the first decay tick pulled a work under
+    // 0.98 and the loop then skipped it forever — every building in the game
+    // froze at 0.9799 and 'went back to the ground' had NEVER fired in a
+    // shipped build. The contract now: SERVICE gates on standing; DECAY runs
+    // on anything that was ever finished, standing or slipping. Construction
+    // sites (never finished) do not rot — a town abandons those at whatever
+    // height it walked away from, which is its own story. A LIVING town still
+    // keeps its works up: _workFor offers anything under WORK_DONE to builders,
+    // so a slipping roof gets hands on it long before 0.50 — the fall is for
+    // the dead, the empty and the forgotten.
     for (let n = this.works.length - 1; n >= 0; n--) {
       const o = this.works[n], W = WORKS[o.kind];
-      if (o.prog < WORK_DONE) continue;
-      if (o.done == null) o.done = day;               // it stands. leave it alone a while.
-      if (o.kind === WORK_AT.store) {
-        // the store fills from the ground under it and empties into the hungry
-        const i = this.idx(o.x, o.y);
-        const take = Math.min(this.moss[i], 0.004);
-        this.moss[i] -= take; o.stock = Math.min(1, o.stock + take);
+      if (o.prog >= WORK_DONE) {
+        if (o.done == null) o.done = day;             // it stands. leave it alone a while.
+        if (o.kind === WORK_AT.store) {
+          // the store fills from the ground under it and empties into the hungry
+          const i = this.idx(o.x, o.y);
+          const take = Math.min(this.moss[i], 0.004);
+          this.moss[i] -= take; o.stock = Math.min(1, o.stock + take);
+        }
       }
-      if (day - o.done > 12) o.prog -= 0.00006;    // nothing keeps itself, eventually
-      if (o.prog < 0.50) {
-        this.works.splice(n, 1);
-        this.log('fell', `${W.name} went back to the ground.`, 2.6);
+      if (o.done != null) {
+        if (day - o.done > 12) o.prog -= 0.00006;     // nothing keeps itself, eventually
+        if (o.prog < 0.50) {
+          this.works.splice(n, 1);
+          // ⚠️ THE ONE CLEANUP FUNNEL. Everything that references a work by id
+          // gets cleared here and only here — a second cleanup site is how two
+          // systems end up disagreeing about whether somebody still lives in a
+          // house that no longer exists.
+          for (let q = 0; q < this.count; q++) {
+            if (k.home[q] === o.id) { k.home[q] = -1; k.homeTier[q] = 0; }
+          }
+          this.log('fell', `${W.name} went back to the ground.`, 2.6);
+        }
       }
     }
+  }
+
+  // ⚠️ a linear scan, NOT a Map cache. A cache would have to be rebuilt in
+  // fromJSON and invalidated at every splice, and a stale cache here is a
+  // wrong-home bug that only shows days after a save load. works stays small
+  // (tens), so the scan is nothing.
+  workById(id) {
+    for (const o of this.works) if (o.id === id) return o;
+    return null;
   }
 
   // has anybody who knew this practice died? the tradition clock starts there
@@ -1172,6 +1330,23 @@ export class Sim {
     }
 
     // mate
+    // home at dusk: the whole town walks toward its own lit windows at
+    // nightfall. Zero rng — the score is daylight and tiredness, nothing else.
+    if (k.home[id] >= 0) {
+      const h = this.workById(k.home[id]);
+      if (h) {
+        // ⚠⚠ TRACED, NOT TUNED: three kin followed through a full night chose
+        // warmth, food and water over 'rest at home' every re-decide — their
+        // rest stays high all night, so a rest-only pull NEVER wins. Night is
+        // COLD, and home IS the warm place (the shelter branch warms its own),
+        // so the pull rides the warmth deficit too. And it stands aside when
+        // they are hungry or dry — bed must never outrank the empty cup.
+        if (k.need[base + 2] > 0.32 && k.need[base + 1] > 0.32) {
+          const nightPull = (1 - this.daylight) * (0.95 + deficit(3) * 2.2 + deficit(0) * 2.6);
+          if (nightPull > 0.25) push(4, h.x, h.y, nightPull);
+        }
+      }
+    }
     const mean = (() => { let m = 0; for (let n = 0; n < NN; n++) m += k.need[base + n]; return m / NN; })();
     if (!k.glued[id] && k.stage[id] === STAGE.WHOLE && k.cool[id] <= 0 && mean > C.BREED_MIN && k.sex[id] === 0) {
       let mx = x, my = y, mi = -1, bv = 0;
@@ -1182,7 +1357,11 @@ export class Sim {
         const v = 1 / (1 + d * 0.1 / S);
         if (v > bv) { bv = v; mx = k.x[o]; my = k.y[o]; mi = o; }
       }
-      if (mi >= 0) { push(7, mx, my, (mean - C.BREED_MIN) * 5.2); k.goalT[id] = mi; }
+      // a housed pair courts more readily — a door to close is most of a family.
+      // The multiplier is on the SCORE, never on an rng draw, so the stream is
+      // untouched and two clients agree.
+      const settledBoost = (k.home[id] >= 0 && k.home[mi >= 0 ? mi : id] >= 0) ? 1.35 : 1;
+      if (mi >= 0) { push(7, mx, my, (mean - C.BREED_MIN) * 5.2 * settledBoost); k.goalT[id] = mi; }
     }
 
     // bury: someone has to — but only ONE someone per body.
@@ -1262,6 +1441,24 @@ export class Sim {
       k.hold[id] = 90; return;
     }
     // rank, then pick randomly from the top three (The Sims' trick, §6.1)
+    // ⚠⚠ THE SURVIVAL OVERRIDE. Found by test: a starving kin chose goal 10
+    // (building) over eating and died with its tools out. The empty-cup rule
+    // existed for the tend and carry errands, but nothing stopped a LONG
+    // DISCRETIONARY errand outranking food once the nearby moss was grazed thin
+    // and the food score was distance-damped into the floor.
+    //
+    // ⚠️ MEASURED TWICE. The first version whitelisted eat/drink/flee below
+    // 0.25 — and it gutted the weave: 14.2% of adult-days sit under 0.25 on a
+    // struggling town, building is only 1.2% of adult-days to begin with, and
+    // locking those days out meant works never finished, 'stands' never fired,
+    // and practices never spread past their inventor (two culture tests went
+    // red). A hungry town must still be able to BUILD ITS WAY OUT — that is the
+    // whole engine. So this blacklists only the long, deferrable errands, at a
+    // threshold that means genuinely critical rather than merely hungry.
+    if (k.need[base + 2] < 0.15 || k.need[base + 1] < 0.15) {
+      const pool = cand.filter(c2 => c2.goal !== 7 && c2.goal !== 10 && c2.goal !== 13 && c2.goal !== 14);
+      if (pool.length) { cand.length = 0; for (const c2 of pool) cand.push(c2); }
+    }
     cand.sort((a, b) => b.score - a.score);
     const c = cand[ri(rng, Math.min(3, cand.length))];
     const cc = (this.N - 1) / 2, lim2 = (this.N - 1) * 0.43;
@@ -1292,7 +1489,24 @@ export class Sim {
       case 12: return Math.abs(k.tx[id] - k.x[id]) + Math.abs(k.ty[id] - k.y[id]) < 1.6 * S;
       case 2: return k.need[b + 1] > 0.93;
       case 3: return k.need[b + 0] > 0.93;
-      case 4: return k.need[b + 3] > 0.93;
+      case 4: {
+        // ⚠️ rest fills in ~30 ticks and the night is 300+, so a kin who walked
+        // home at dusk was rested and GONE by midnight — measured: 2 of 18 housed
+        // kin were home at night, and raising the dusk pull made it WORSE. The
+        // fix is not a stronger pull, it is that sleep lasts the night: at home,
+        // in the dark, rest does not release. Emergencies still override in the
+        // decide gate, and the hungry never chose bed in the first place.
+        // ⚠️ AND THE LOCK RELEASES THE HUNGRY. The first version held anyone at
+        // home all night regardless — a starving kin slept until morning, which
+        // is the burial spiral wearing pyjamas (caught by the empty-cup gate
+        // test choosing goal 4 over food). Bed keeps nobody who needs the pond.
+        if (this.daylight < 0.15 && k.home[id] >= 0 &&
+            k.need[b + 2] > 0.32 && k.need[b + 1] > 0.32) {
+          const h = this.workById(k.home[id]);
+          if (h && Math.abs(h.x - k.x[id]) + Math.abs(h.y - k.y[id]) < WORKS[h.kind].radius * S) return false;
+        }
+        return k.need[b + 3] > 0.93;
+      }
       case 5: return k.need[b + 4] > 0.93;
       case 6: { const i = this.idx(k.x[id], k.y[id]); return this.water[i] < 0.05 && this.temp[i] < 38; }
       // ⚠️ THE EMPTY CUP. The fed-only gate on errands is checked when the goal
@@ -1402,7 +1616,16 @@ export class Sim {
         if (wet > 0.004) k.need[base + 1] = Math.min(1, k.need[base + 1] + 0.022);
       } break;
       case 3: break; // standing in the warm place is its own reward (handled by comfort)
-      case 4: k.need[base + 3] = Math.min(1, k.need[base + 3] + 0.014); break;
+      case 4: {
+        // resting under your own roof is real sleep; a hollow in the moss is not
+        let rr2 = 0.014;
+        if (k.home[id] >= 0) {
+          const h = this.workById(k.home[id]);
+          if (h && Math.abs(h.x - k.x[id]) + Math.abs(h.y - k.y[id]) < WORKS[h.kind].radius * S) rr2 = 0.022;
+        }
+        k.need[base + 3] = Math.min(1, k.need[base + 3] + rr2);
+        break;
+      }
       case 5: if (near) {
         k.need[base + 4] = Math.min(1, k.need[base + 4] + 0.018);
         // and while they are sitting together, they talk about how things are done
@@ -1507,7 +1730,10 @@ export class Sim {
     const n = bro[0] + ri(rng, bro[1] - bro[0] + 1);
     let made = 0, novel = -1;
     for (let e = 0; e < n; e++) {
-      if (rng() > bro[2]) continue;
+      // ⚠️ the roof bonus is THRESHOLD-side, not draw-side: the same rng call
+      // happens either way, so the gene stream keeps its exact shape. +0.10
+      // hatch odds under a roof — eggs kept warm and out of the rain.
+      if (rng() > Math.min(0.98, bro[2] + (k.home[mo] >= 0 ? 0.10 : 0))) continue;
       const child = new Uint8Array(G);
       for (let li = 0; li < LOCI.length; li++) {
         let a = gm[li * 2 + (rng() < 0.5 ? 0 : 1)];
@@ -1516,7 +1742,11 @@ export class Sim {
         if (rng() < 0.008) { b = ri(rng, LOCI[li].alleles.length); novel = li; }
         child[li * 2] = a; child[li * 2 + 1] = b;
       }
-      const id = this._spawn(k.x[mo] + rr(rng, -1.2 * S, 1.2 * S), k.y[mo] + rr(rng, -1.2 * S, 1.2 * S), child, mo, fa,
+      // eggs are laid AT HOME when there is one — same two rng draws, different
+      // base, so the stream shape is identical for housed and unhoused mothers
+      const hm = k.home[mo] >= 0 ? this.workById(k.home[mo]) : null;
+      const bx = hm ? hm.x : k.x[mo], by2 = hm ? hm.y : k.y[mo];
+      const id = this._spawn(bx + rr(rng, -1.2 * S, 1.2 * S), by2 + rr(rng, -1.2 * S, 1.2 * S), child, mo, fa,
         Math.max(k.gen[mo], k.gen[fa]) + 1);
       if (id < 0) break;
       made++;
@@ -1539,6 +1769,22 @@ export class Sim {
 
   _die(id, cause, noBody) {
     const k = this.k;
+    // the door passes down: the lowest-slot unhoused child keeps it. An argmin,
+    // deterministic, and the claim pass never has to know it happened.
+    if (k.home[id] >= 0) {
+      let heir = -1;
+      for (let c = 0; c < this.count; c++) {
+        if (!k.alive[c] || c === id || k.home[c] >= 0) continue;
+        if (k.mother[c] !== id && k.father[c] !== id) continue;
+        if (k.stage[c] < STAGE.HALF) continue;
+        heir = c; break;
+      }
+      if (heir >= 0) {
+        k.home[heir] = k.home[id]; k.homeTier[heir] = k.homeTier[id];
+        if (k.nameId[id] >= 0) this.log('door', `${this.nameOf(heir)} kept ${this.nameOf(id)}'s door.`, 2.2);
+      }
+      k.home[id] = -1; k.homeTier[id] = 0;
+    }
     const named = k.nameId[id] >= 0;
     const nm = named ? this.names[k.nameId[id]] : null;
     this._weaveDeath(id);
@@ -1635,6 +1881,21 @@ export class Sim {
       // when its last witness does.
     }
     this._handBeats();
+    // HEARTHNIGHT: the first night the whole town slept under roofs
+    {
+      let adults = 0, housed = 0;
+      for (let id = 0; id < this.count; id++) {
+        if (!this.k.alive[id] || this.k.stage[id] < STAGE.WHOLE) continue;
+        adults++; if (this.k.home[id] >= 0) housed++;
+      }
+      if (adults >= 10 && housed === adults) {
+        if (this._beat == null) this._beat = {};
+        if (this.day - (this._beat.hearthnight == null ? -999 : this._beat.hearthnight) > 90) {
+          this._beat.hearthnight = this.day;
+          this.log('hearthnight', 'every roof had somebody under it that night.', 6.5);
+        }
+      }
+    }
     // seasonal room temperature from the real calendar is applied by the view via setRoom()
     if (this.alive === 0 && !this._ended) {
       this._ended = true;
@@ -1819,6 +2080,98 @@ export class Sim {
       seen++;
     }
     return seen;
+  }
+
+  // —— THE SEED ————————————————————————————————————
+  //
+  // A crumb is a meal. A seed is a FIELD — you press it into the ground and
+  // the moss comes back thicker there for a season. The crumb answers today;
+  // this answers the year, and it is the only power that makes the board
+  // better at feeding them instead of feeding them directly.
+  sow(x, y) {
+    if (!this.inJar(x, y)) return false;
+    const N = this.N, R = 6 * S;
+    const x0 = Math.max(0, (x - R) | 0), x1 = Math.min(N - 1, (x + R) | 0);
+    const y0 = Math.max(0, (y - R) | 0), y1 = Math.min(N - 1, (y + R) | 0);
+    for (let yy = y0; yy <= y1; yy++) for (let xx = x0; xx <= x1; xx++) {
+      const d = Math.sqrt((xx - x) * (xx - x) + (yy - y) * (yy - y));
+      if (d > R) continue;
+      const f = 1 - d / R;
+      const i = yy * N + xx;
+      // ⚠️ it does NOT paint moss on. It raises the ground's moisture, which is
+      // what _growth actually reads — so the green arrives over days, from the
+      // ground's own logic, and a seed sown on a scorched patch does nothing
+      // until the burn cools. The hand plants; the world decides.
+      this.moist[i] = Math.min(1, this.moist[i] + 0.55 * f);
+      this.moss[i] = Math.min(1, this.moss[i] + 0.05 * f);
+    }
+    this.log('sown', 'the ground took something, and began to think about it.', 3.2);
+    return true;
+  }
+
+  // —— THE KNOCK ———————————————————————————————————
+  //
+  // The oldest verb in the fiction — the thing you must not do — and until now
+  // it lived in main.js as a view-side shake that the simulation never heard.
+  // A knock on the table is felt by the WHOLE board at once: everybody stops,
+  // every commitment breaks, and anything standing loses a little of itself.
+  knock() {
+    const k = this.k, NN = NEEDS.length;
+    let felt = 0;
+    for (let id = 0; id < this.count; id++) {
+      if (!k.alive[id] || k.stage[id] === STAGE.EGG) continue;
+      k.need[id * NN + 5] = Math.max(0, k.need[id * NN + 5] - 0.22);
+      k.pulse[id] = 2.8;
+      k.hold[id] = 0;                       // whatever they were doing, they are not now
+      felt++;
+    }
+    // ⚠️ and it SHAKES THE BUILDINGS. Small — 0.004 of progress, about three
+    // weeks of ordinary decay — but it is the first time the knock has left a
+    // mark the town has to repair, which is what makes it a real transgression
+    // rather than a jump-scare.
+    for (const o of this.works) if (o.done != null) o.prog = Math.max(0.05, o.prog - 0.004);
+    if (felt) this.log('knock', 'the whole world knocked, once, and every one of them stopped.', 4.0);
+    return felt;
+  }
+
+  // —— THE DROP ————————————————————————————————————
+  //
+  // You could feed them and you could not give them a drink. Thirst was the
+  // one need with no hand behind it: the pond is where the seed put it, the
+  // channel only holds what somebody carried, and breathing on the board takes
+  // a whole weather cycle to come back down as rain. A drop of water is the
+  // immediate answer — and it is the same hand, so it is the same bargain.
+  //
+  // ⚠️ WATER IS THE MOST DANGEROUS KIND THING IN THIS GAME. Standing water is
+  // the fastest killer on the board: `_kin` gives a kin in >0.14 of water a
+  // 0.09-day death clock, which is four times faster than thirst and twenty
+  // times faster than hunger. So the drop spreads a POOL, not a column — a
+  // wide shallow disc that waters a neighbourhood and drowns nobody, unless
+  // you pour again and again on the same spot, which is a choice.
+  drop(x, y) {
+    if (!this.inJar(x, y)) return false;
+    const N = this.N, R = 4.5 * S;
+    const x0 = Math.max(0, (x - R) | 0), x1 = Math.min(N - 1, (x + R) | 0);
+    const y0 = Math.max(0, (y - R) | 0), y1 = Math.min(N - 1, (y + R) | 0);
+    let wet = 0;
+    for (let yy = y0; yy <= y1; yy++) for (let xx = x0; xx <= x1; xx++) {
+      const d = Math.sqrt((xx - x) * (xx - x) + (yy - y) * (yy - y));
+      if (d > R) continue;
+      const f = 1 - d / R;
+      const i = yy * N + xx;
+      // shallow on purpose: 0.055 at the centre is well under the 0.14 that
+      // starts a drowning clock, and it thins to nothing at the rim
+      this.water[i] += 0.055 * f * f;
+      this.moist[i] = Math.min(1, this.moist[i] + 0.30 * f);
+      wet++;
+    }
+    // ⚠️ the water CAME FROM SOMEWHERE. Under the sheet the room is a closed
+    // system — every drop you pour is drawn out of the air that would have
+    // rained later, so a player who waters constantly quietly cancels their
+    // own weather. Off the sheet, the hand is bringing it in from the house.
+    if (this.lid) this.humid = Math.max(0, this.humid - 0.9 * S * S);
+    this.log('drop', 'water came down out of nowhere and soaked into the ground.', 3.0);
+    return wet > 0;
   }
 
   // —— THE CRUMB ——————————————————————————————————————
@@ -2031,7 +2384,8 @@ export class Sim {
     // fewer entries than the one it came from — asserting on it made the
     // fingerprint fail for a save that had lost nothing at all.
     mix(this.names.length); mix(this.works.length);
-    for (const o of this.works) { mix(o.kind); mix(o.x); mix(o.y); mix(o.prog); mix(o.stock || 0); }
+    mix(this.workSeq);
+    for (const o of this.works) { mix(o.id || 0); mix(o.kind); mix(o.x); mix(o.y); mix(o.prog); mix(o.stock || 0); }
     for (const p of this.prac) { mix(p.invented); mix(p.lost); mix(p.tradition); mix(p.reinvented); }
     for (const key of Object.keys(this.placeNames).sort()) mix(key.length + this.placeNames[key].length);
     mix(this.humid); mix(this.rainLeft); mix(this.curtain); mix(this.lid ? 1 : 0); mix(this.lampOn ? 1 : 0);
@@ -2042,7 +2396,7 @@ export class Sim {
       if (!k.alive[id]) continue;
       mix(k.x[id]); mix(k.y[id]); mix(k.age[id]); mix(k.stage[id]); mix(k.strain[id]);
       mix(k.nameId[id]); mix(k.glued[id]); mix(k.tender[id]); mix(k.goal[id]); mix(k.knows[id]);
-      mix(k.memX[id]); mix(k.memY[id]); mix(k.memV[id]); mix(k.saw[id]);
+      mix(k.memX[id]); mix(k.memY[id]); mix(k.memV[id]); mix(k.saw[id]); mix(k.home[id]); mix(k.homeTier[id]);
       for (let j = 0; j < G; j++) mix(k.genome[id * G + j]);
       for (let n = 0; n < NN; n++) mix(k.need[id * NN + n]);
     }
@@ -2055,7 +2409,7 @@ export class Sim {
       v: 1, seed: this.seed, tick: this.tick, day: this.day, dayFrac: this.dayFrac,
       count: this.count, free: this.free.slice(), names: this.names.slice(),
       graves: this.graves, corpses: this.corpses, stats: this.stats,
-      works: this.works, prac: this.prac,
+      works: this.works, prac: this.prac, workSeq: this.workSeq,
       placeMem: this.placeMem, placeNames: this.placeNames,
       // keep the opening AND the recent past — see HEAD_KEEP in log()
       chronicle: this.chronicle.length <= 600 ? this.chronicle.slice()
@@ -2088,6 +2442,7 @@ export class Sim {
         lastRainLog: this._lastRainLog == null ? null : this._lastRainLog,
         tendLog: this._tendLog == null ? null : this._tendLog,
         ended: !!this._ended,
+        duskSweep: this._duskSweep == null ? null : this._duskSweep,
         counts: Array.from(this.eventCounts.entries()),
       },
       rngState: [this.rng.getState(), this.rngWeather.getState(), this.rngGene.getState()],
@@ -2110,7 +2465,25 @@ export class Sim {
     s.count = o.count; s.free = o.free.slice(); s.names = o.names.slice();
     s.graves = o.graves; s.corpses = o.corpses; s.stats = o.stats;
     s.works = o.works || [];
-    if (o.prac) s.prac = o.prac;
+    // ⚠️ MIGRATION: saves from before work ids existed. Assign 0..n-1 in array
+    // order (deterministic — the order the save carried them) and set workSeq
+    // past the top so new works never collide with migrated ones.
+    let maxId = -1;
+    for (let i = 0; i < s.works.length; i++) {
+      if (s.works[i].id == null) s.works[i].id = i;
+      if (s.works[i].id > maxId) maxId = s.works[i].id;
+    }
+    s.workSeq = o.workSeq != null ? o.workSeq : maxId + 1;
+    if (s.workSeq <= maxId) s.workSeq = maxId + 1;   // a corrupt seq must never mint a duplicate id
+    if (o.prac) {
+      s.prac = o.prac;
+      // ⚠️ a save written when the ladder was SHORTER: pad the missing rungs
+      // with fresh never-invented entries, or every loop over prac indexes
+      // undefined the moment a new rung ships.
+      while (s.prac.length < WORKS.length) {
+        s.prac.push({ invented: -1, inventor: -1, inventorGone: -1, lost: -1, tradition: -1, reinvented: 0, tries: 0 });
+      }
+    }
     s.placeMem = o.placeMem || {};
     s.placeNames = o.placeNames || {};
     s.chronicle = o.chronicle; s.curtain = o.curtain; s.lampOn = o.lampOn;
@@ -2124,6 +2497,7 @@ export class Sim {
       s._lastRainLog = o.narr.lastRainLog == null ? undefined : o.narr.lastRainLog;
       s._tendLog = o.narr.tendLog == null ? undefined : o.narr.tendLog;
       s._ended = !!o.narr.ended;
+      s._duskSweep = o.narr.duskSweep == null ? undefined : o.narr.duskSweep;
       s.eventCounts = new Map(o.narr.counts || []);
     } else {
       // a save from before the narrator's state round-tripped: rebuild the
@@ -2137,6 +2511,10 @@ export class Sim {
       if (o.fields[key]) s[key].set(o.fields[key]);
     }
     for (const key of Object.keys(s.k)) if (o.k[key]) s.k[key].set(o.k[key]);
+    // ⚠️ MANDATORY for the home array: a save from before homes has no k.home,
+    // the constructor default would be 0, and 0 is a real work id — every kin
+    // in an old save would wake up owning the first thing the town ever built.
+    if (!o.k.home) s.k.home.fill(-1);
     // ⚠️ a held kin who is not alive would sit in this.held forever, and lift()
     // refuses while anything is held — so one bad blob would silently disable the
     // power for the rest of that town's life, with nothing to see and nothing to

@@ -225,8 +225,10 @@ export class UI {
     // with the goal list in sim.js _decide (0 wander … 10 make)
     const GOALS = ['wandering', 'looking for food', 'going to water', 'looking for a warm place',
       'resting', 'looking for company', 'getting away', 'courting', 'carrying the dead',
-      'going to the one who stays', 'making something', 'going to what fell out of the sky'];
+      'going to the one who stays', 'making something', 'going to what fell out of the sky',
+      'going where something wanted them', 'gathering for the store', 'carrying water'];
 
+    const TRADES = ['', 'one who gathers', 'one who carries water', 'one who keeps what stands', 'one who shows how things are done'];
     const glued = !!k.glued[id];
     const worst = worstNeed(k.need, base);
     const mark = LUT.glyphs ? NEED_MARK[worst] : '';
@@ -269,6 +271,8 @@ export class UI {
     if (marrowHomozygous(g)) h += `<div class="warn">both marrow alleles match — half a life</div>`;
 
     const mo = k.mother[id], fa = k.father[id];
+    if (k.job && k.job[id] > 0) h += `<div class="line2">${TRADES[k.job[id]]}.</div>`;
+    if (k.home && k.home[id] >= 0) { const hw = s.workById(k.home[id]); if (hw) h += `<div class="line2">lives at the ${['','','','hut','house'][hw.kind] || 'hall'} by the ${s.placeName(s.idx(hw.x, hw.y))}.</div>`; }
     if (mo >= 0) h += `<div class="line2">out of ${s.nameOf(mo)} and ${s.nameOf(fa)} · generation ${k.gen[id]}</div>`;
     else h += `<div class="line2">a founder. nobody made them.</div>`;
 

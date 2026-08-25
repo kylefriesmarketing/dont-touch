@@ -508,6 +508,89 @@ t('a crumb outside the board is refused', () => {
   eq(s.gifts.length, before, 'it landed anyway');
 });
 
+// --- homes ------------------------------------------------------------------
+console.log('homes');
+
+t('adults claim the standing dwellings, and children ride along', () => {
+  const s = clone(fixture('live', 200));
+  run(s, 30);
+  let adults = 0, housed = 0, childHomes = 0;
+  for (let i = 0; i < s.count; i++) {
+    if (!s.k.alive[i]) continue;
+    if (s.k.stage[i] >= STAGE.WHOLE) { adults++; if (s.k.home[i] >= 0) housed++; }
+    else if (s.k.home[i] >= 0) childHomes++;
+  }
+  const dwellings = s.works.filter(o => (o.kind === 3 || o.kind === 4) && o.prog >= WORK_DONE).length;
+  if (dwellings > 0) ok(housed > 0, `dwellings exist (${dwellings}) but nobody moved in`);
+  // every claim must point at a real, standing dwelling
+  for (let i = 0; i < s.count; i++) {
+    if (!s.k.alive[i] || s.k.home[i] < 0) continue;
+    const h = s.workById(s.k.home[i]);
+    ok(h && h.prog >= 0.5 && (h.kind === 3 || h.kind === 4), 'a claim points at nothing');
+  }
+});
+
+t('a fallen house leaves no stale claims (the one cleanup funnel)', () => {
+  const s = clone(fixture('live', 200));
+  run(s, 30);
+  const dw = s.works.find(o => (o.kind === 3 || o.kind === 4) && o.prog >= WORK_DONE &&
+    Array.from({ length: s.count }, (_, i) => i).some(i => s.k.alive[i] && s.k.home[i] === o.id));
+  if (!dw) return;                        // no occupied dwelling this fixture — nothing to assert
+  // ⚠️ 0.49 was WRONG for a living town: builders repaired the house back over
+  // the line within a day and people legitimately moved back in — the first run
+  // of this test failed on a house that had been SAVED, not on a stale claim.
+  // Drop it far below anything a repair crew can catch before the next weave.
+  dw.prog = 0.05; dw.done = s.day - 20;
+  run(s, 2);
+  for (let i = 0; i < s.count; i++) ok(!(s.k.alive[i] && s.k.home[i] === dw.id), 'a stale claim survived the fall');
+});
+
+t('a starving kin eats before it goes home at night (the empty cup, again)', () => {
+  const s = clone(fixture('live', 200));
+  let id = -1;
+  for (let i = 0; i < s.count; i++) if (s.k.alive[i] && s.k.home[i] >= 0 && s.k.stage[i] === STAGE.WHOLE && !s.k.glued[i]) { id = i; break; }
+  if (id < 0) return;
+  s.k.need[id * NEEDS.length + 2] = 0.1;
+  while (s.dayFrac > 0.05) s.step();
+  // ⚠️ ASSERT THE CONTRACT, NOT A SNAPSHOT. The first form checked 'is eating
+  // OR above 0.2' sixty ticks later — which failed on a kin that had eaten its
+  // way up to 0.18 and gone back to work, i.e. correct behaviour landing in the
+  // gap between the survival threshold (0.15) and the test's bar (0.2). The
+  // real invariant is the one the override exists to enforce: while a kin is
+  // genuinely critical it must never be on a long deferrable errand — courting,
+  // building, or hauling for a trade.
+  const LONG = [7, 10, 13, 14];
+  for (let i = 0; i < 240; i++) {
+    s.step();
+    if (!s.k.alive[id]) break;
+    const f = s.k.need[id * NEEDS.length + 2], w = s.k.need[id * NEEDS.length + 1];
+    if (f < 0.15 || w < 0.15) {
+      ok(!LONG.includes(s.k.goal[id]),
+        `critical (food ${f.toFixed(2)}) and still on a long errand (goal ${s.k.goal[id]})`);
+    }
+  }
+});
+
+t('a legacy save wakes with nobody claiming work 0', () => {
+  // ⚠️ -1 is 'nowhere' and 0 is a REAL work id, so a save from before homes
+  // must load as unhoused — the constructor default of a fresh Int32Array is 0.
+  const s = clone(fixture('live', 200));
+  const blob = JSON.parse(JSON.stringify(s.toJSON()));
+  delete blob.k.home; delete blob.k.homeTier;
+  const b = Sim.fromJSON(blob);
+  for (let i = 0; i < b.count; i++) eq(b.k.home[i], -1, 'a legacy kin woke up owning work 0');
+});
+
+t('homes round-trip and hold determinism', () => {
+  const s = clone(fixture('live', 200));
+  run(s, 20);
+  const fp = s.fingerprint();
+  const b = Sim.fromJSON(JSON.parse(JSON.stringify(s.toJSON())));
+  eq(b.fingerprint(), fp, 'homes did not restore identically');
+  run(s, 15); run(b, 15);
+  eq(b.fingerprint(), s.fingerprint(), 'they drifted after the doors were claimed');
+});
+
 console.log('save');
 t('save -> JSON -> restore -> compare', () => {
   const a = new Sim({ seed: 'save' });

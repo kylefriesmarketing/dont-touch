@@ -247,7 +247,7 @@ class App {
   // shipped, just looks broken.
   arm(p) {
     this.armed = p;
-    if (['crumb', 'lift', 'call', 'mend', 'strike', 'still', 'dread'].includes(p) && this.sim.lid) {
+    if (['crumb', 'water', 'seed', 'lift', 'call', 'mend', 'strike', 'still', 'dread'].includes(p) && this.sim.lid) {
       this.sim.setLid(false);
       this.ui.sync();
       this.ui.nudge('the sheet is off. the room drinks their pond while it is.', 'sheetoff');
@@ -279,14 +279,48 @@ class App {
 
       if (this.armed === 'crumb') {
         const h = v.pickGround(nx, ny);
-        if (h && s.give(h.cell[0], h.cell[1])) { this.sfx.birth(); v.flinch(h.cell[0], h.cell[1]); }
+        if (h && s.give(h.cell[0], h.cell[1])) {
+          this.sfx.birth(); v.flinch(h.cell[0], h.cell[1]);
+          if (v.vfx) { v.vfx.ring(h.cell[0], h.cell[1], { color: 0xd8bd86, r0: 0.4, r1: 3.2, life: 0.7 });
+                       v.vfx.burst(h.cell[0], h.cell[1], { color: 0xc9ad78, n: 14, speed: 0.9, up: 0.5, life: 0.8 }); }
+        }
+        mode = null; down = false; return;
+      }
+      // ⚠️ WATER IS HELD, NOT TAPPED. A single click would make the safest
+      // possible gift; holding is what lets you overfill one spot and drown
+      // somebody, so the danger is in the gesture and not in a number.
+      if (this.armed === 'water') {
+        mode = 'water'; this.pourAt = null; return;
+      }
+      if (this.armed === 'seed') {
+        const h = v.pickGround(nx, ny);
+        if (h && s.sow(h.cell[0], h.cell[1])) {
+          this.sfx.touch();
+          if (v.vfx) { v.vfx.ring(h.cell[0], h.cell[1], { color: 0x7fbf5a, r0: 0.5, r1: 6.5, life: 1.3 });
+                       v.vfx.burst(h.cell[0], h.cell[1], { color: 0x9fd870, n: 20, speed: 0.7, up: 0.9, life: 1.4 }); }
+        }
+        mode = null; down = false; return;
+      }
+      if (this.armed === 'knock') {
+        const n2 = s.knock();
+        this.sfx.tap();
+        const c2 = (s.N - 1) / 2;
+        v.flinch(c2, c2);
+        if (v.vfx && n2) v.vfx.ring(c2, c2, { color: 0xcfd6e0, r0: 1, r1: 46, life: 1.1 });
         mode = null; down = false; return;
       }
       if (this.armed === 'call' || this.armed === 'dread') {
         const h = v.pickGround(nx, ny);
         if (h) {
           const nHit = this.armed === 'call' ? s.call(h.cell[0], h.cell[1]) : s.terror(h.cell[0], h.cell[1]);
-          if (nHit) { this.sfx.touch(); v.flinch(h.cell[0], h.cell[1]); }
+          if (nHit) {
+            this.sfx.touch(); v.flinch(h.cell[0], h.cell[1]);
+            if (v.vfx) {
+              if (this.armed === 'call') v.vfx.converge(h.cell[0], h.cell[1], { color: 0xe6d3ae, n: 30, r: 22, life: 1.2 });
+              else { v.vfx.ring(h.cell[0], h.cell[1], { color: 0x9aa7ff, r0: 0.5, r1: 26, life: 0.9 });
+                     v.vfx.burst(h.cell[0], h.cell[1], { color: 0x8f9adf, n: 24, speed: 2.0, up: 0.4, life: 1.0 }); }
+            }
+          }
         }
         mode = null; down = false; return;
       }
@@ -345,6 +379,9 @@ class App {
         const wx = dx * Math.cos(a) - dy * 0 - 0;   // screen-x maps to world by camera yaw
         s.setTilt(this.tilt0.x + (dx * Math.cos(a) + dy * 0.0) * 0.9,
                   this.tilt0.y + (dy * 0.9 + dx * Math.sin(a) * 0.35));
+      } else if (mode === 'water') {
+        const h = v.pickGround(nx, ny);
+        if (h) this.pourAt = h.cell;
       } else if (mode === 'reach') {
         // ⚠️ moving off the kin CANCELS the reach rather than dragging the board.
         // Taking somebody must never be what happens when a click slips.
@@ -432,6 +469,7 @@ class App {
           }
         }
       }
+      if (mode === 'water') { this.pourAt = null; this.pourT = 0; }
       if (mode === 'breathe') this.breathing = false;
       if (mode === 'tilt') s.setTilt(0, 0);     // the jar rights itself
       mode = null;
@@ -512,6 +550,21 @@ class App {
   // The hand's radius and heat, pushed every frame. This is the ONLY place the
   // curve is evaluated, so the board's disc and the sim's kernel can never
   // disagree about what the hand is currently doing.
+  // pouring runs on the FRAME clock, not on pointer events: a still hand over
+  // one spot must keep filling it (that is how you drown somebody on purpose),
+  // and a moving one must lay a wet trail.
+  _pour(dt) {
+    if (!this.pourAt) return;
+    this.pourT = (this.pourT || 0) + dt;
+    if (this.pourT < 0.18) return;
+    this.pourT = 0;
+    const [cx, cy] = this.pourAt;
+    if (this.sim.drop(cx, cy)) {
+      const v = this.view;
+      if (v.vfx) v.vfx.splash(cx, cy);
+    }
+  }
+
   _pushHand(dt = 0) {
     // the reach builds in real seconds, and the board shows it building
     if (this.reach && !this.sim.held) {
@@ -522,9 +575,16 @@ class App {
         const id = this.reach.id, p = this.reach.power || 'lift';
         if (p === 'lift') { this.sim.lift(id); this.sfx.mutate(); }
         else {
-          if (p === 'mend') { this.sim.mend(id); this.sfx.birth(); }
-          else if (p === 'strike') { this.sim.smite(id); this.sfx.death(); }
-          else if (p === 'still') { this.sim.still(id); this.sfx.lid(); }
+          const kx = this.sim.k.x[id], ky = this.sim.k.y[id];
+          const V = this.view.vfx;
+          if (p === 'mend') { this.sim.mend(id); this.sfx.birth();
+            if (V) { V.column(kx, ky, { color: 0x9ce8b5, life: 1.4 });
+                     V.burst(kx, ky, { color: 0xbdf2cf, n: 26, speed: 0.6, up: 1.6, life: 1.3 }); } }
+          else if (p === 'strike') { this.sim.smite(id); this.sfx.death();
+            if (V) { V.ring(kx, ky, { color: 0xef5861, r0: 0.3, r1: 7, life: 0.6 });
+                     V.burst(kx, ky, { color: 0xd6414c, n: 30, speed: 1.6, up: 0.7, life: 0.9 }); } }
+          else if (p === 'still') { this.sim.still(id); this.sfx.lid();
+            if (V) V.ring(kx, ky, { color: 0xd8a45c, r0: 2.4, r1: 0.6, life: 0.9 }); }
           this.reach = null;
           if (this.view.setReach) this.view.setReach(-1, 0);
         }
@@ -554,6 +614,7 @@ class App {
     this.last = now;
 
     this._pushHand(dt);
+    if (this.phase === 'play') this._pour(dt);
 
     // ⚠️ breathe/ventFog sit OUTSIDE the paused guard below, so without the
     // phase test the title screen quietly fogs and un-fogs a town nobody is

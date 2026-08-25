@@ -600,4 +600,147 @@ makes the take generate a religion, and it is not built either.
 
 ---
 
+---
+
+## v0.6 — THE PEOPLE, THEIR HOUSES, AND THE CEILING THAT DIED (2026-08-25)
+
+Built against a 15-step flagship spec produced by a 12-agent research pass (full bible
+audit + real research on Anno 1800, SimCity 4 and Thronglets). The spec, its verifier
+flags and the research findings are in the workflow journal for run `wf_43c00b00-278`.
+
+### THE LITTLE ALIEN PEOPLE
+
+Kyle: *"i dont like the little lantern guys - i want it to be more like little alien people."*
+The dark blob + engulfing glow is gone. The figure is ONE hand-merged geometry — lathe
+torso, oversized head, stub legs, arm nubs, eye-whites — plus a dark features layer
+(pupils, mouth dash, antenna) and the old lantern **shrunk to the antenna tip**.
+
+⚠️ **BufferGeometryUtils is an examples module and is NOT in the vendored core.** Everything
+is hand-merged via `toNonIndexed()` + concatenated position/normal arrays. Do not reach for
+`mergeBufferGeometries`; it does not exist here.
+
+**The interface did not die, it moved.** The lantern *was* the entire UI (hue = worst need,
+brightness = wellbeing). Now: body PAINT carries the hue (per-instance `setColorAt`),
+POSTURE carries wellbeing (a failing kin droops — legible at distances where colour is not),
+and the TIP keeps hue + brightness. `pickKin` still reads `lanternPos`, so the reach, the
+inspector and every power survived untouched.
+
+Also on the body, all view-only reads of already-fingerprinted state: gait amplitude scales
+with `k.bright` (**amplitude only — never frequency**, a rate change teleports the whole
+colony's phase), a shiver below 0.25, RIME at 0.6 amplitude and 35% toward bone-grey,
+**family silhouettes from the two marrow allele bytes** (children resemble parents, so
+bloodlines share a shape), temper posture, and THE BURDEN — a fifth and final InstancedMesh
+showing what is being carried, bone-pale for the dead, raw-timber for building.
+
+⚠️ **The colony's draw-call ceiling is 5, forever**: bodies, features, tips, burden, glue.
+
+### ⚠️⚠️ THE FALL HAD NEVER FIRED, IN ANY SHIPPED BUILD
+
+`if (o.prog < WORK_DONE) continue;` sat ABOVE the decay line in the aging loop, so the first
+decay tick pulled a work under 0.98 and the loop skipped it forever after. Every building in
+the game froze at **0.9799** and *"went back to the ground"* was unreachable code.
+
+The contract now: **SERVICE gates on standing; DECAY runs on anything that was ever
+finished.** Construction sites (never finished) do not rot. Measured after: the beat fires
+4 times in a dead town and **0 times in a living one** — because `_workFor` offers anything
+under WORK_DONE to builders, so a slipping roof gets hands on it long before 0.50. The fall
+is for the dead, the empty and the forgotten.
+
+### THE 37-STRUCTURE CEILING IS DEAD
+
+The old `cap` column totalled **37 buildings maximum, EVER** — 0.4% of a 9,216-cell board —
+which is why coverage stalled at 17.6% at day 1000 no matter what happened. Caps are sanity
+ceilings now (total 122), room scales with hands, and **the cap reliever is the game's own
+signature system**: once a practice is TRADITION, the town builds denser (`per × 0.6`).
+The existing 3-cell spacing check makes LAND the real limit, so the board fills as a town
+rather than a carpet.
+
+Measured at day 600, 3 seeds: **81 and 74 standing works, ~40% board coverage** (was 37 max
+and 17.6% stalled). One seed still died out — extinction is not solved, and should not be.
+
+### HOMES — somebody lives at the house by the bank
+
+`k.home` is a **work ID**, not an index, which is why work ids had to exist first
+(commit A of step 8: `o.id`, `workSeq`, `workById()` as a **linear scan, never a Map cache** —
+a cache drifts after `fromJSON` and a stale one is a wrong-home bug that surfaces days later).
+
+⚠️⚠️ **`-1` is 'nowhere' and `0` is a VALID work id.** A legacy save without `k.home` must be
+filled with -1 in `fromJSON` or every restored kin silently claims the first thing the town
+ever built. There is a pinned test for exactly this.
+
+Adults claim the nearest standing hut/house with a free bed (hut 3, house 6), ties broken by
+lower id — an argmax, never an assignment (§18 intact). Homes give real rest (0.014 → 0.022),
+safety, and night company; a stranger in someone's doorway during a heat press gets 0.55 of
+the shelter, which is a story. Children are born into the household and the **HALF→WHOLE
+transition is the leaving-home moment**. Doors are inherited by the lowest-slot unhoused
+child. Measured: **60–100% of adults housed across 3 seeds by day 200.**
+
+⚠️ **The splice is the ONE cleanup funnel.** Everything referencing a work by id clears there
+and only there — a second cleanup site is how two systems end up disagreeing about whether
+somebody still lives in a house that no longer exists.
+
+### ⚠️ DUSK: WHAT TRACING FOUND THAT TUNING NEVER WOULD
+
+Three raised-pull attempts all failed to bring the town home at night. Tracing three kin
+through a full evening showed why: at nightfall most were **mid-errand with commitment holds
+of 200–770 ticks**, so they did not even re-decide until deep night — and a kin 25 cells from
+home needs ~600 ticks of walking against a ~300-tick night. **No pull strength beats
+arithmetic.** Two mechanisms shipped instead: a once-per-evening sweep capping every open
+hold at 90 ticks, and home answering the COLD (night is cold; home is the warm place) rather
+than only tiredness — because traced rest stayed high all night, so a rest-only pull could
+never win.
+
+⚠️ `_duskSweep` **must round-trip** (it is in `narr`): a save loaded after tonight's sweep
+would otherwise sweep again on one client and not the other, and diverge that evening.
+
+**Honest status:** the mechanisms are in and correct, but aggregate night-homecoming is still
+weak (4–6 of 26 housed adults near home at night; only seed hc showed the intended 1.5×
+day/night contrast). The remaining gap is **distance** — towns are sparse and homes are far.
+It should be revisited after the trades and the settled land, when towns are denser and
+richer, not by pushing the number again.
+
+### ⚠️ THE SURVIVAL OVERRIDE, AND THE FIRST VERSION THAT GUTTED THE WEAVE
+
+Found by test: a starving kin chose goal 10 (building) over eating and died with its tools
+out. The empty-cup rule existed for tend and carry errands, but nothing stopped a long
+errand outranking food once nearby moss was grazed thin and the food score was
+distance-damped into the floor.
+
+**The first fix whitelisted eat/drink/flee below 0.25 — and it broke two culture tests.**
+Measured: 14.2% of adult-days sit under 0.25 on a struggling town, and building is only 1.2%
+of adult-days to begin with; locking those days out meant works never finished, `stands`
+never fired, and practices never spread past their inventor. **A hungry town must still be
+able to build its way out — that is the whole engine.** The shipped version blacklists only
+the long deferrable errands (courting, building, the two trades) at 0.15, which means
+genuinely critical rather than merely hungry.
+
+### Smaller, and the traps
+
+- `k.knows` is **Uint16Array** now (16 rungs; the planned ladder needs 11).
+- ⚠️⚠️ **WORKS IS APPEND-ONLY.** A rung's INDEX is save format twice over: `k.knows` is a
+  bitmask over these indices, and every work stores `o.kind` by index. Insert a rung in the
+  middle and every save's heads and buildings silently become the wrong things.
+- Old `prac` arrays are padded on load, so a save from a shorter ladder still opens.
+- The inspector shows trade and home, both guarded (`k.job && ...`) so a pre-trades sim
+  cannot throw on a click.
+- ⚠️ **Anchor-based patching hit the wrong function twice this session** — a `// mate` anchor
+  matched in `_weave` before `_decide`, and `let alive = 0` appears twice in sim.js. Anchor on
+  something unique to the target function, and parse-check every time.
+- ⚠️ **Patch scripts containing template literals must be written with the Write tool**, never
+  a bash heredoc or `node -e` — backticks and `${...}` are eaten. This is the third session
+  to lose time to it.
+
+### Still open, in spec order
+
+**THE TRADES** (step 11) is fully written and staged at
+`scratchpad/patch-trades.cjs` with its gate harness at `scratchpad/trades.mjs` — forager and
+water-carrier as real two-phase errands with a pack, the channel finally *doing something*
+(it has been decor since it was invented: the finished-works service loop only ever handled
+windbreak and store), the mender as a `_workFor` distance bias, the teacher as a widened
+threshold on the same rng draw, settling by DEED at 8, and vacancy demand. Then step 13 THE
+SETTLED (satisfaction promotes, promotion wants more — Anno's engine in the weave's clothes),
+step 4 the camera and the guttering lantern, and step 14 the upper ladder.
+
+---
+
 *Dirty Boy Devs. The jar runs, the tests are green, and nobody has told the player what they were.*
