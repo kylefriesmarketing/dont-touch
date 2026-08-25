@@ -7,6 +7,7 @@
 import * as THREE from './lib/three.module.js';
 import { STAGE, NEEDS, LANTERN_HUE, LOCI, L, expressed, S, C } from './sim.js';
 import { Post } from './post.js';
+import { Vfx } from './vfx.js';
 import { hueOf } from './palette.js';
 
 const R = 1.0;
@@ -18,7 +19,21 @@ const EDGE_Y = 0.035;   // the lip where the fascia meets the terrain
 // no bare plywood to look at, because you are never outside the layout. The
 // basement, the sawhorses and the bulb belong to THE ROOM hub, not to the game.
 const BOARD = GR * 1.035;
-const EL_MIN = 0.92, EL_MAX = 1.52;   // 53deg .. 87deg — bird's eye only
+// ⚠️⚠️ THE FLOOR IS NOW A FUNCTION OF ZOOM, AND THAT IS THE POINT.
+// EL_MIN was a flat 0.92 — 53 degrees above the horizon, "bird's eye only" —
+// and the stated reason is real: at a shallow angle you see past the edge of
+// the board into whatever is beyond it. But it had a cost nobody had measured.
+// Photographed from directly overhead at maximum zoom, a kin is a pastel blob
+// with a lamp on top: `_kin()` builds eye-whites, pupils, a mouth and an
+// antenna, and from 53-87 degrees YOU ARE LOOKING AT THE TOP OF ITS HEAD. The
+// creatures have faces and the camera was never allowed to see one. "The
+// creatures aren't cute enough" was a camera constraint, not a modelling one.
+// So: the high floor still applies when you are pulled back and the horizon
+// would actually come into frame, and drops to EL_NEAR once you are close
+// enough that the board fills the view anyway.
+const EL_MIN = 0.92, EL_MAX = 1.52;   // 53deg .. 87deg — the pulled-back floor
+const EL_NEAR = 0.44;                 // ~25deg — close up, where faces live
+const EL_NEAR_DIST = 0.95;            // below this zoom the low floor applies
 // ⚠️ SEVERAL BAGS OF FLOCK, NOT ONE GREEN. On a real table the scenic grass is
 // laid down in patches from different tubs — bright spring, deep summer, a dry
 // olive, a burnt sandy scrub — and those patch boundaries are most of what
@@ -65,7 +80,15 @@ export class View {
     this.camera = new THREE.PerspectiveCamera(38, 1, 0.05, 60);
     // BIRD'S EYE. You look down into the layout, never across it — the elevation
     // floor is what keeps the horizon (and therefore the real world) off screen.
-    this.orbit = { az: 0.35, el: 1.16, dist: 2.35, tAz: 0.35, tEl: 1.16, tDist: 2.35 };
+    // ⚠️⚠️ THE DEFAULT CAMERA WAS THE GRAPHICS BUG. The zoom range is 0.60–2.75
+    // and this shipped at 2.35 — the player opened the game almost fully zoomed
+    // OUT, where a kin is a three-pixel dot and a hut is a smudge. Photographed
+    // side by side at the same instant, 2.35 is a dark green rectangle with
+    // fireflies on it; 1.25 is a village with pitched roofs, chimney smoke and
+    // little glowing people you can tell apart. Nothing else changed between the
+    // two frames. "Where are the buildings and civilisation" was answered by a
+    // number in this line, not by the art and not by the pacing.
+    this.orbit = { az: 0.35, el: 1.16, dist: 1.25, tAz: 0.35, tEl: 1.16, tDist: 1.25 };
     // 'jar' by history: this group is THE BOARD — everything that lifts
     // together when you tilt one edge of the plywood off the sawhorses.
     this.jar = new THREE.Group();
@@ -86,6 +109,20 @@ export class View {
     this._handDisc();
     this._nightLife();
     this._giftView();
+
+    // ⚠️ EVERY VERB HAS TO LEAVE A MARK ON THE PICTURE. Before this the board
+    // answered a mend, a strike and a call with the same nothing — the ring
+    // told you what was ABOUT to happen and then the act itself was invisible,
+    // which is most of what "unresponsive" meant. Three pooled objects, three
+    // draw calls, parented to `jar` so the spectacle tilts with the plywood.
+    this.vfx = new Vfx(this.jar, this, { GR, YS, EDGE_Y });
+    // ⚠️ seeded from the sim, not from zero: a LOADED save can arrive with
+    // crumbs already lying on the board, and starting at 0 would puff dust off
+    // every one of them on the first frame as if dad had just come downstairs.
+    this._giftSeen = (sim.gifts && sim.gifts.length) || 0;
+    this._heldPrev = -1;      // who was in the hand last frame
+    this._heldWhere = null;   // and where the hand was holding them
+    this._reachDone = '';     // the reach we have already paid out
 
     // the miniature look. Falls back to a plain render where WebGL2 is not
     // available, so nothing depends on it existing.
@@ -417,6 +454,7 @@ export class View {
   // none, so determinism and the save are untouched.
   flinch(cx, cy) {
     const s = this.sim, k = s.k;
+    this._flinchFx(cx, cy);
     if (!this.phase) return;
     for (let id = 0; id < s.count; id++) {
       if (!k.alive[id]) continue;
@@ -426,6 +464,74 @@ export class View {
       if (pull <= 0) continue;
       this.phase[id] += (this.chordPhase - this.phase[id]) * pull * 0.92;
     }
+  }
+
+  // ⚠️ READING THE VERB OFF THE BOARD, so the spectacle needed no main.js
+  // change to exist. `flinch` is the one call every ground act already makes,
+  // and the sim state at that instant says which act it was:
+  //   · s.hand is SET   — _pushHand ran first, so a finger is down: rest/press.
+  //   · goal 12 + a long hold inside 26*S — sim.call just committed them.
+  //   · goal 6 + hold 200 inside 20*S     — sim.terror just scattered them.
+  //   · none of the above — the T key, which knocks the whole world at once.
+  // main.js is still free to call view.fxPower() outright; the claim guard in
+  // vfx.js means the explicit call and this detector cannot both pay out.
+  // ⚠️ if the ORDER in main.js ever changes so that flinch runs BEFORE the sim
+  // verb, this silently degrades to a plain knock ring. It never breaks; it
+  // just gets less specific. That is why the explicit hook exists too.
+  _flinchFx(cx, cy) {
+    if (!this.vfx) return;
+    const s = this.sim, k = s.k;
+    // ⚠️ IF MAIN.JS SAID WHAT HAPPENED, DO NOT GUESS. An explicit fxPower for
+    // a ground verb closes this detector for a quarter second — otherwise a
+    // wrong guess would sit BESIDE the right answer rather than being swallowed
+    // by the claim guard, because a bad guess is a DIFFERENT kind and claims
+    // are per kind.
+    if (this.vfx.spokeRecently()) return;
+    // a finger is down (main._pushHand runs before flinch), so this is a
+    // contact, not a power — the continuous hand emitter says the rest.
+    if (s.hand) { this.vfx.fire('contact', cx, cy); return; }
+    // startle() knocks the WHOLE WORLD and flinches at the exact board centre.
+    // Checked before anything else so no stale kin state can steal it.
+    const mid = (s.N - 1) / 2;
+    if (Math.abs(cx - mid) < 0.001 && Math.abs(cy - mid) < 0.001) { this.vfx.fire('knock', cx, cy); return; }
+    // a crumb also flinches them. The gift watcher in _paintGifts owns that one
+    // (it also catches the double-tap crumb, which never flinches at all).
+    if ((s.gifts ? s.gifts.length : 0) > this._giftSeen) return;
+
+    // ⚠️⚠️ EDGE-TRIGGERED, NOT STATE-MATCHED, and this took two goes to get
+    // right. The first version read the kin: goal 12 with a long hold meant
+    // call, goal 6 with hold 200 meant terror. But `hold` only ticks down when
+    // the SIM runs, so with the game PAUSED those marks sit there for as long
+    // as you like and every later flinch re-read them — a knock after a dread
+    // drew a second dread. sim.eventCounts is a Map that only ever grows and is
+    // never trimmed, so a delta of one is proof the verb fired since the last
+    // time a finger landed, whatever the clock is doing.
+    const ec = s.eventCounts;
+    const nc = (ec && ec.get('called')) || 0, nt = (ec && ec.get('terror')) || 0;
+    const dc = nc - (this._evCall || 0), dt = nt - (this._evDread || 0);
+    this._evCall = nc; this._evDread = nt;
+    if (dc > 0) { this.vfx.fire('call', cx, cy); return; }
+    if (dt > 0) { this.vfx.fire('dread', cx, cy); return; }
+    // ⚠️ log() DEDUPES an identical sentence inside eight days and returns
+    // before it counts — and sim.call's sentence only varies by how many went,
+    // so calling the same crowd twice really can leave the counter still. The
+    // kin-state read is kept as the second opinion for exactly that case.
+    let called = 0, scared = 0;
+    for (let id = 0; id < s.count; id++) {
+      if (!k.alive[id]) continue;
+      const d2 = (k.x[id] - cx) * (k.x[id] - cx) + (k.y[id] - cy) * (k.y[id] - cy);
+      if (d2 > (26 * S) * (26 * S)) continue;
+      // exact values: sim.call writes hold = 1400, sim.terror writes 200, and
+      // _decide subtracts 1 per tick — so equality means "this tick".
+      if (k.goal[id] === 12 && k.hold[id] >= 1400) called++;
+      else if (k.goal[id] === 6 && k.hold[id] >= 200 && k.pulse[id] >= 2.8 &&
+               d2 <= (20 * S) * (20 * S)) scared++;
+    }
+    if (called) this.vfx.fire('call', cx, cy);
+    else if (scared) this.vfx.fire('dread', cx, cy);
+    // ⚠️ and if we genuinely cannot tell, the fallback is the SMALL ring, not
+    // the world-knock. A wrong guess has to be cheap.
+    else this.vfx.fire('contact', cx, cy);
   }
 
   _tickPhases(dt) {
@@ -1735,7 +1841,47 @@ export class View {
   // confirm dialog, so the whole of the player's protection is that they can
   // SEE it coming: the ring tightens onto one figure and goes red over 900ms,
   // and letting go before it closes costs nothing.
-  setReach(id, f, power) { this.reachId = id; this.reachF = f; this.reachPower = power || 'lift'; }
+  // ⚠️ THIS IS ALSO WHERE THE ACT LANDS. main.js pushes f up to 1 and only
+  // THEN calls sim.mend/smite/still/lift — so the frame f first reaches 1 is
+  // exactly the frame the thing happens, and view.js can pay out the spectacle
+  // without main.js knowing this file exists.
+  // ⚠️ 'lift' keeps being pushed at f === 1 for as long as the kin is in the
+  // air (the reach is not cleared for a lift), so the payout has to be keyed
+  // and one-shot or the shaft re-fires every frame you carry somebody.
+  setReach(id, f, power) {
+    const P = power || 'lift';
+    if (this.vfx && f >= 1 && id >= 0) {
+      const key = id + ':' + P;
+      if (this._reachDone !== key) {
+        this._reachDone = key;
+        const k = this.sim.k;
+        this.vfx.fire(P, k.x[id], k.y[id]);
+      }
+    } else if (f < 0.6) this._reachDone = '';
+    this.reachId = id; this.reachF = f; this.reachPower = P;
+  }
+
+  // —— THE SPECTACLE, FROM OUTSIDE ————————————————————————————
+  // main.js reaches all of this as app.view.vfx.* ; these are the thin
+  // convenience wrappers so a caller never has to know the pool exists.
+  //   v.fxPower('call', cx, cy)      — the named verb, fully composed
+  //   v.fxRing(cx, cy, {color, r0, r1, life, width, alpha, fill, ease})
+  //   v.fxBurst(cx, cy, {color, n, speed, up, life, size, grav, drag})
+  //   v.fxColumn(cx, cy, {color, life, h, rBot, rTop, alpha, rise})
+  //   v.fxConverge(cx, cy, {color, n, r, life, pull})
+  //   v.fxTrail(cx, cy, {key, color, y, size, gap})  — safe every frame; pass
+  //        a distinct `key` per concurrent stream ('lift' is taken) or two
+  //        trails throttle each other and both look broken
+  //   v.fxSplash(cx, cy)             — water. THE OTHER ENGINEER'S HOOK.
+  // ⚠️ every one of these is a no-op before the constructor finishes, because
+  // several of them are reachable from input handlers that bind early.
+  fxPower(name, cx, cy, o) { if (this.vfx) this.vfx.fire(name, cx, cy, o); }
+  fxRing(cx, cy, o) { if (this.vfx) this.vfx.ring(cx, cy, o); }
+  fxBurst(cx, cy, o) { if (this.vfx) this.vfx.burst(cx, cy, o); }
+  fxColumn(cx, cy, o) { if (this.vfx) this.vfx.column(cx, cy, o); }
+  fxConverge(cx, cy, o) { if (this.vfx) this.vfx.converge(cx, cy, o); }
+  fxTrail(cx, cy, o) { if (this.vfx) this.vfx.trail(cx, cy, o); }
+  fxSplash(cx, cy, o) { if (this.vfx) this.vfx.splash(cx, cy, o); }
 
   // point the camera at where they actually live
   lookAtTown() {
@@ -1760,6 +1906,15 @@ export class View {
 
   _paintGifts() {
     const s = this.sim, N = s.N, g = s.gifts || [];
+    // ⚠️ THE CRUMB IS DETECTED, NOT SIGNALLED. There are two ways to feed them
+    // (the armed power and the double tap) and only one of them flinches, so
+    // watching the list is the only place that catches both. sim.give appends,
+    // and _gifts splices from the tail — so a newly arrived crumb is always at
+    // the end of a LONGER list, and this cannot mistake a decayed one for a new
+    // one. Puff at the crumb's own cell, not at the cursor.
+    if (g.length > this._giftSeen)
+      for (let i = this._giftSeen; i < g.length; i++) this.vfx.fire('crumb', g[i].x, g[i].y);
+    this._giftSeen = g.length;
     while (this._giftMeshes.length < g.length) {
       const m = new THREE.Mesh(this.giftGeo, this.giftMat);
       m.castShadow = true; m.receiveShadow = true;
@@ -1780,12 +1935,22 @@ export class View {
       m.rotation.set(gf.x * 0.7, gf.y * 1.3, gf.x * 0.4);
     }
   }
-  setHeldAt(cell) { this.heldCell = cell; }
+  setHeldAt(cell) {
+    this.heldCell = cell;
+    // somebody in your hand trails. The lantern is drawn 0.16 above the
+    // scenery (see _paintLantern), so the wake is dropped at the same height
+    // or it comes out of their feet instead of out of them.
+    if (cell && this.vfx && this.sim.held)
+      this.vfx.trail(cell[0], cell[1], { key: 'lift', color: 0xffb861, y: this._surfaceY(cell[0], cell[1]) + 0.155, size: 0.03, up: 0.4, gap: 0.05 });
+  }
 
   // cx, cy in cells; r in cells; e is 0 (hot and narrow) … 1 (resting and wide)
   setHandDisc(cx, cy, r, e) {
     if (!this.handDisc) return;
-    if (cx == null) { this._handWant = 0; return; }
+    if (cx == null) { this._handWant = 0; if (this.vfx) this.vfx.setHand(null); return; }
+    // ⚠️ the motes are fed the SAME r and e the ring is drawn from, for the
+    // same reason the ring is: two readouts of one hand must never disagree.
+    if (this.vfx) this.vfx.setHand(cx, cy, r, e);
     this._handWant = 1;
     const N = this.sim.N, SEG = this._handSeg;
     const pos = this.handDisc.geometry.attributes.position;
@@ -2016,10 +2181,17 @@ export class View {
     o.az += (o.tAz - o.az) * Math.min(1, dt * 9);
     o.el += (o.tEl - o.el) * Math.min(1, dt * 9);
     o.dist += (o.tDist - o.dist) * Math.min(1, dt * 7);
-    const cy = Math.cos(o.el), sy = Math.sin(o.el);
     // ⚠️ the elevation floor is load-bearing: it is the only thing keeping the
-    // horizon — and therefore whatever is beyond the board — out of frame.
-    o.el = Math.max(EL_MIN, Math.min(EL_MAX, o.el));
+    // horizon — and therefore whatever is beyond the board — out of frame. It
+    // relaxes to EL_NEAR once you are zoomed in past EL_NEAR_DIST, because at
+    // that range the board fills the frame and there is no horizon to protect
+    // — and it is the only angle from which these creatures have faces.
+    const elFloor = o.dist < EL_NEAR_DIST ? EL_NEAR : EL_MIN;
+    o.el = Math.max(elFloor, Math.min(EL_MAX, o.el));
+    // ⚠️ AFTER the clamp, not before. These used to be computed from the
+    // UNCLAMPED elevation, so the frame you actually saw was always one behind
+    // the limit — most visible as a shimmer when you drag into the stop.
+    const cy = Math.cos(o.el), sy = Math.sin(o.el);
     // ⚠️ the eye and the target move TOGETHER. Shifting only lookAt swings the
     // camera round and skews the board instead of panning across it.
     // ⚠️ RE-AIMED ON A SLOW CADENCE, not once at startup. A town migrates — it
@@ -2054,6 +2226,27 @@ export class View {
       else if (P === 'strike') this.handDisc.material.color.setHSL(0.995, 0.72 + f * 0.2, 0.44 + f * 0.10);
       else if (P === 'still') this.handDisc.material.color.setHSL(0.10, 0.35, 0.45 + f * 0.10);
       else this.handDisc.material.color.setHSL(0.055 * (1 - f), 0.62 + 0.34 * f, 0.50 + 0.12 * f);
+      // ⚠️ the reach drives the contact disc too, and the disc feeds the hand
+      // emitter — so without this a mend spits press-sparks for 450ms while
+      // the ring is closing. The reach has its own spectacle; the finger does
+      // not get one as well.
+      if (this.vfx) this.vfx.setHand(null);
+    }
+
+    // — LETTING GO. Over the board puts them back; off it does not, and the
+    // board has to say which one just happened. Detected rather than signalled:
+    // sim.held clearing with the kin still alive is a set-down, and clearing
+    // with the kin dead is a taking (sim.takeAway kills them on the way out).
+    {
+      const hn = s.held ? s.held.id : -1;
+      if (hn >= 0) this._heldWhere = this.heldCell ? [this.heldCell[0], this.heldCell[1]] : [s.k.x[hn], s.k.y[hn]];
+      else if (this._heldPrev >= 0) {
+        const id = this._heldPrev, w = this._heldWhere;
+        if (s.k.alive[id]) this.fxPower('setdown', s.k.x[id], s.k.y[id]);
+        else if (w) this.fxPower('taken', w[0], w[1]);
+        this._heldWhere = null;
+      }
+      this._heldPrev = hn;
     }
 
     if (this.handDisc) {
@@ -2143,6 +2336,16 @@ export class View {
         this.post.p.bandCenter = this.focusY;
       }
     }
+    // ⚠️ ONE update, at the END of the frame, AFTER everything that can fire
+    // an effect has run — the reach branch, the held-kin check, _paintGifts.
+    // Ticked here rather than in each system so a paused board holds its rings
+    // exactly where they were instead of losing them to a dropped call.
+    this.vfx.update(dt);
+    // ⚠️ after the kin pass, never before: _hoverFrame reads lanternPos, which
+    // is rewritten every frame, and a stale read puts the halo one frame behind
+    // the figure — which at a walking pace is a visible slip.
+    this._hoverFrame(dt);
+
     if (this.post.enabled === false) this.postOn = false;
     else if (this.post.enabled === true) this.postOn = true;
     if (this.postOn !== false && this.post.ok) this.post.render(this.scene, this.camera);
@@ -2178,5 +2381,70 @@ export class View {
       if (d < bd) { bd = d; best = id; }
     }
     return best;
+  }
+
+  // ⚠️⚠️ WHY THIS EXISTS. The inspector — name, age, trade, all six needs, the
+  // genome — has been built and correct this whole time, and the player reported
+  // "there are no powers or way to interact". They were telling the truth from
+  // where they sat: NOTHING on screen ever suggested a figure could be clicked.
+  // No cursor change, no highlight, no name. A system nobody can find is a
+  // system that does not exist, so the fix is not more inspector — it is one
+  // ring and one name that follow the pointer.
+  //
+  // Returns pixel coordinates for a kin's lantern so the DOM tag can sit over
+  // them, or null when they are behind the camera or off the board.
+  kinScreenPos(id) {
+    if (id < 0) return null;
+    let n = -1;
+    for (let i = 0; i < this.kinCount; i++) if (this.kinScreen[i] === id) { n = i; break; }
+    if (n < 0) return null;
+    const v = new THREE.Vector3(
+      this.lanternPos[n * 3], this.lanternPos[n * 3 + 1], this.lanternPos[n * 3 + 2]);
+    this.jar.localToWorld(v);
+    v.project(this.camera);
+    if (v.z > 1) return null;
+    const el = this.renderer.domElement;
+    // ⚠️ clientWidth, not .width: the drawing buffer is in device pixels and the
+    // DOM tag is positioned in CSS pixels. On any HiDPI screen those differ by
+    // the pixel ratio and the tag lands at double the offset — off-screen.
+    const w = el.clientWidth || el.width, h = el.clientHeight || el.height;
+    return [(v.x * 0.5 + 0.5) * w, (-v.y * 0.5 + 0.5) * h];
+  }
+
+  // The hover halo. Deliberately NOT a vfx ring: those are pooled one-shots that
+  // drain, and this has to persist for exactly as long as the pointer rests.
+  setHoverKin(id) {
+    if (this._hoverId === id) return;
+    this._hoverId = id;
+    if (!this._hoverRing) {
+      const g = new THREE.RingGeometry(0.030, 0.040, 28);
+      g.rotateX(-Math.PI / 2);
+      this._hoverRing = new THREE.Mesh(g, new THREE.MeshBasicMaterial({
+        color: 0xffe6b0, transparent: true, opacity: 0.62, depthWrite: false,
+        depthTest: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+        forceSinglePass: true,
+      }));
+      this._hoverRing.renderOrder = 12;
+      this._hoverRing.frustumCulled = false;
+      this.jar.add(this._hoverRing);
+    }
+    this._hoverRing.visible = id >= 0;
+  }
+
+  // called from render(): the ring rides the figure, and breathes so it reads as
+  // a live highlight rather than a decal somebody left on the floor
+  _hoverFrame(dt) {
+    const r = this._hoverRing;
+    if (!r || !r.visible) return;
+    const id = this._hoverId, k = this.sim.k;
+    if (id < 0 || !k.alive[id]) { r.visible = false; this._hoverId = -1; return; }
+    let n = -1;
+    for (let i = 0; i < this.kinCount; i++) if (this.kinScreen[i] === id) { n = i; break; }
+    if (n < 0) { r.visible = false; return; }
+    r.position.set(this.lanternPos[n * 3], 0.0016, this.lanternPos[n * 3 + 2]);
+    this._hoverT = (this._hoverT || 0) + dt;
+    const p = 1 + Math.sin(this._hoverT * 4.2) * 0.10;
+    r.scale.set(p, 1, p);
+    r.material.opacity = 0.48 + Math.sin(this._hoverT * 4.2) * 0.14;
   }
 }

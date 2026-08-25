@@ -63,6 +63,17 @@
     padding:calc(9px + env(safe-area-inset-top)) 14px 9px;pointer-events:none;z-index:6;
     background:linear-gradient(#06080ccc,#06080c00);font-size:calc(14px * var(--ui))}
   #strip > *{pointer-events:auto}
+
+  /* the hovered person's name, riding just above their head */
+  #nameTag{position:fixed;transform:translate(-50%,-100%);pointer-events:none;z-index:40;
+    padding:4px 9px 5px;border-radius:7px;white-space:nowrap;
+    background:rgba(14,15,19,.82);border:1px solid rgba(255,225,178,.22);
+    box-shadow:0 3px 14px rgba(0,0,0,.45);
+    font-size:calc(12.5px * var(--ui));line-height:1.25;
+    transition:opacity .12s ease}
+  #nameTag b{display:block;color:#ffe6b0;font-weight:600;letter-spacing:.02em}
+  #nameTag i{display:block;font-style:normal;opacity:.62;font-size:.88em}
+  #nameTag.hide{display:none}
   #hud,#weather{font-variant-numeric:tabular-nums;display:flex;gap:8px;align-items:center}
   #hud b{font-weight:650}
   #hud span,#weather span{color:var(--faint)}
@@ -359,6 +370,11 @@
     data-say="pick one of them up. let go over the board and they are set down again. let go anywhere else and they do not come back, and there is no body to bury."
     ><span class="g">✥</span><span class="n">lift</span></button>
 </div>
+
+<!-- ⚠️ THE NAME TAG. Pointer-events NONE is load-bearing: this sits directly
+     over the figure it names, so any hit-testing of its own would swallow the
+     very click it exists to invite. -->
+<div id="nameTag" class="hide"></div>
 
 <div id="inspect" class="hide">
   <h3>the one you're looking at <button id="closeInspect" style="padding:0 6px">×</button></h3>

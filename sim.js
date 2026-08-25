@@ -46,8 +46,20 @@ export const tcos = (t) => tsin(t + 0.25);
 // ---------------------------------------------------------------------------
 export const C = {
   N: 96,                 // heightfield resolution
-  TICK_HZ: 15,
-  TICKS_PER_DAY: 900,    // 60 real seconds per in-game day at 1x
+  // ⚠️⚠️ TICK_HZ IS THE ONLY REAL-TIME KNOB IN THE WHOLE PROJECT, and it is
+  // used in exactly ONE place: the frame accumulator in main.js. Raising it
+  // replays the IDENTICAL tick sequence faster in wall-clock — the simulation,
+  // every save, every fingerprint and the whole harness are untouched, because
+  // nothing in sim.js reads it.
+  //
+  // It sat at 15 (a 60-second day) and that was the single biggest reason the
+  // game read as a museum diorama rather than something you play: a kin crossed
+  // the board in 78 seconds, the first hut landed 20-51 REAL MINUTES in, and a
+  // player watching for five minutes saw nothing happen at all. At 45 a day is
+  // 20 seconds, a kin crosses in 26, and the first hut is 7-17 minutes at 1x —
+  // or under four at 4x. Same world, same seed, same story; you can just SEE it.
+  TICK_HZ: 45,
+  TICKS_PER_DAY: 900,    // 20 real seconds per in-game day at 1x
   // ⚠️ headroom over the observed peak, not a tuning number. The grid battery
   // measured peaks to 318 at N=96; at CAP the spawn simply fails and breeding
   // stops dead, which reads as a bug rather than a limit. Costs one array slot.
@@ -219,11 +231,11 @@ export const WORKS = [
   // --- and then you work out that you could LIVE somewhere ----------------
   // `pre` is a mask of practices that must already be known. This is the whole
   // progression and the player never sees a tree of it.
-  { key: 'hut', name: 'the first hut', need: 3, pressure: 0.34, effort: 900, radius: 5.0, cap: 40, per: 7,
+  { key: 'hut', name: 'the first hut', need: 3, pressure: 0.34, effort: 300, radius: 5.0, cap: 40, per: 7,
     made: 'made a place to be out of the weather', pre: 0b111, preN: 2, near: 1 },
-  { key: 'house', name: 'a house', need: 3, pressure: 0.30, effort: 1600, radius: 5.0, cap: 48, per: 9,
+  { key: 'house', name: 'a house', need: 3, pressure: 0.30, effort: 620, radius: 5.0, cap: 48, per: 9,
     made: 'built something meant to outlast them', pre: 0b1000, preN: 1, near: 1 },
-  { key: 'hall', name: 'the hall', need: 4, pressure: 0.30, effort: 2600, radius: 9.0, cap: 4, per: 40,
+  { key: 'hall', name: 'the hall', need: 4, pressure: 0.30, effort: 1300, radius: 9.0, cap: 4, per: 40,
     made: 'raised a roof big enough for all of them', pre: 0b10000, preN: 1, near: 1 },
 ];
 export const WORK_AT = {}; WORKS.forEach((w, i) => WORK_AT[w.key] = i);
@@ -352,6 +364,14 @@ export class Sim {
     // worth walking across the board for, and the first thing that runs out.
     this.gifts = [];           // [{x, y, mass, day}]
     this.curtain = 0.75;       // 0 = closed, 1 = open
+    // ⚠️ THE LAMP STAYS OFF, AND THIS IS THE SECOND TIME. Turning it on was
+    // tried as a fix for "the board goes black every twenty seconds" and it is
+    // the wrong tool: the lamp adds 1.6 degrees to `ambient` and a 0.22 floor
+    // under `daylight`, so it warms the whole jar (a thermal test caught it at
+    // 22.4 against ambient 20.6) and it feeds the moss all night, which grew
+    // the town from 46 to 64 and left a sixth of them starving in an overgrazed
+    // corner. Darkness the player cannot see through is a VIEW problem; it is
+    // fixed in view.js's night floor, where it costs the simulation nothing.
     this.lampOn = false;
 
     // the basement's own temperature — set from the real calendar by main.js,
@@ -625,6 +645,17 @@ export class Sim {
       const kk = this.k;
       for (let id = 0; id < this.count; id++) {
         if (!kk.alive[id]) continue;
+        // ⚠️⚠️ THE DUSK SWEEP WAS EATING THE CALL. `call()` sets hold = 1400
+        // with a comment saying a long commitment is required "or _decide takes
+        // them back off it within a second and the whole power reads as nothing
+        // happening" — and then this sweep clamped it to 90 ticks, which at 45Hz
+        // is TWO SECONDS. A call issued anywhere near dusk did exactly the
+        // nothing its own author was guarding against.
+        // Goal 12 is summoned, and it is the only goal the PLAYER set. The sweep
+        // exists to stop the town's own errands stranding it in the dark; the
+        // hand's instruction is not one of those, and being called somewhere at
+        // nightfall is the player's business, not the town's.
+        if (kk.goal[id] === 12) continue;
         if (kk.hold[id] > 90) kk.hold[id] = 90;
       }
     }
@@ -915,6 +946,17 @@ export class Sim {
       // starve twenty cells from the pond.' Measured: two healthy seeds that
       // reach 300 days went EXTINCT. Once they have turned toward food the
       // emergency is over and ordinary commitment carries them there.
+      // ⚠️⚠️ DO NOT ADD GOAL 3 (warm) OR 5 (company) TO THIS SET. It was tried
+      // — to catch one kin dying on a warmth errand in a field of food — and it
+      // destroyed the game: 7 tests went from passing to "nothing was ever
+      // built", "only 0 kin carry any practice", "no practice ever became a
+      // tradition". Warmth-seeking is CONSTANT, so including it made hunger the
+      // standing emergency this comment already warns about, `_decide` ran every
+      // tick, and the town thrashed instead of living. The one starving kin is
+      // handled where it belongs — in the food candidate's SCORE in `_decide`,
+      // which is only read at a decision point and cannot thrash.
+      // This set is exactly "long errands that are not survival": courting,
+      // building, hauling, and fetching water.
       const starving = (k.need[base + 2] < 0.15 || k.need[base + 1] < 0.15) &&
         (k.goal[id] === 7 || k.goal[id] === 10 || k.goal[id] === 13 || k.goal[id] === 14);
       const emergency = this.temp[i] > band2[3] - 4 || this.water[i] > 0.07 || starving;
@@ -940,12 +982,26 @@ export class Sim {
     const k = this.k, NN = NEEDS.length, rng = this.rng;
     const day = this.day;
 
+    // ⚠️ ONE PASS FOR EVERY PRACTICE. This used to be a full sweep of the
+    // population per work (nine sweeps), and then the pacing valve added a
+    // TENTH sweep per prerequisite per candidate — 200M+ reads over a 300-day
+    // run, which turned the test battery from minutes into "is it hung?".
+    // Walking the town once and tallying every bit it carries is the same
+    // answer for a fraction of the cost, and both readers below share it.
+    const hold = this._holdN || (this._holdN = new Int32Array(WORKS.length));
+    hold.fill(0);
+    for (let id = 0; id < this.count; id++) {
+      if (!k.alive[id]) continue;
+      const kn = k.knows[id];
+      if (!kn) continue;
+      for (let q = 0; q < WORKS.length; q++) if (kn & (1 << q)) hold[q]++;
+    }
+
     for (let wi = 0; wi < WORKS.length; wi++) {
       const W = WORKS[wi], pr = this.prac[wi], bit = 1 << wi;
 
       // ---- is the practice still in anybody's head?
-      let holders = 0;
-      for (let id = 0; id < this.count; id++) if (k.alive[id] && (k.knows[id] & bit)) holders++;
+      const holders = hold[wi];
       if (pr.invented >= 0 && holders === 0 && pr.lost < 0) {
         pr.lost = day;
         this.log('lost', `nobody left remembers how they made ${W.name}.`, 4.0);
@@ -975,7 +1031,28 @@ export class Sim {
         let got = 0;
         for (let q = 0; q < WORKS.length; q++) {
           if (!(W.pre & (1 << q))) continue;
-          const held = W.near ? this.prac[q].tradition >= 0 : this.prac[q].invented >= 0;
+          // ⚠⚠ THE PACING VALVE. `near` means this rung waits for its prerequisite
+          // to become a TRADITION — somebody repeating it who was born after the
+          // inventor DIED. That is a beautiful rule and it is generational, so
+          // measured at 1x speed the first hut landed 83 REAL MINUTES in, the
+          // first house at 4.2 HOURS and the hall at 5.8. Nobody was ever going
+          // to see the town they were tending.
+          //
+          // The valve (pre-approved in the spec): a practice ALSO counts as
+          // settled once it has been carried by more than the one who thought of
+          // it and has stood for a season. That is still 'the town knows this
+          // now, not just one clever kin' — it just does not require a funeral
+          // first. Real tradition still fires, still logs, and is still the
+          // thing that makes a rung build DENSER (see the room formula).
+          const pq = this.prac[q];
+          const settled = pq.tradition >= 0 ||
+            // ⚠️ 30 days here was still MOST of the wait: the store lands ~d11 and
+            // the windbreak ~d13, so a 30-day settle put the earliest possible hut
+            // at ~d43 before a single kin had even thought of it. At 12 the chain
+            // is store -> settled -> hut in about three weeks of board time, which
+            // is a evening of play rather than an afternoon.
+            (pq.invented >= 0 && day - pq.invented > 12 && hold[q] > 1);
+          const held = W.near ? settled : pq.invented >= 0;
           if (held) got++;
         }
         if (got < (W.preN || 1)) continue;
@@ -1138,6 +1215,12 @@ export class Sim {
     return null;
   }
 
+  // ⚠️ there WAS a `_holders(wi)` helper here — a full population sweep for one
+  // practice. It is gone on purpose: `_weave` tallies every practice in a single
+  // pass into `hold[]` at the top, and a per-practice sweep sitting next to it is
+  // exactly the shape that made the pacing valve cost 200M reads a run. If you
+  // need a holder count, you are already inside `_weave` and it is `hold[q]`.
+
   // has anybody who knew this practice died? the tradition clock starts there
   _weaveDeath(id) {
     const k = this.k;
@@ -1229,6 +1312,31 @@ export class Sim {
       const v = this.moss[i] / (1 + d * 0.09 / S);
       if (v > bm) { bm = v; bmx = px; bmy = py; }
     }
+    // ⚠️⚠️ THE MIDDLE DISTANCE. Measured on seed bat0 at day 300: SEVENTEEN kin
+    // starving to death, every one of them in the same overgrazed corner with
+    // moss 0.00–0.11 underfoot and SATURATED moss (1.00) five to eight cells
+    // away. The near scan above only reaches 4 cells, and the wide fallback
+    // below is 18 random samples in a box that grows with hunger — at hunger 1
+    // that box is 99x99, so those 18 samples cover 0.18% of it and essentially
+    // never find a patch six cells away. Desperation made them search WORSE.
+    //
+    // So: before the sparse guess, look properly at the middle distance. Strided
+    // by 2 to keep it ~150 reads, and only for a kin the near scan already
+    // failed — an animal that cannot find food underfoot lifts its head before
+    // it runs blindly. Consumes no rng, so on its own it cannot move the stream;
+    // it moves only by making the wide branch unnecessary, which is the point.
+    if (bm < 0.22) {
+      const MR = Math.max(2, Math.round(9 * S));
+      for (let dy = -MR; dy <= MR; dy += 2) for (let dx = -MR; dx <= MR; dx += 2) {
+        const px = x + dx, py = y + dy;
+        const i = this.idx(px, py);
+        if (this.water[i] > 0.05) continue;
+        const d = Math.abs(dx) + Math.abs(dy);
+        const v = this.moss[i] / (1 + d * 0.09 / S);
+        if (v > bm) { bm = v; bmx = px; bmy = py; }
+      }
+    }
+
     // ⚠️ the wide search is a FALLBACK, not the default. It still consumes the
     // same rng draws it always did, so the stream only shifts when the branch is
     // actually skipped — and it is skipped precisely when they are standing in
@@ -1245,6 +1353,13 @@ export class Sim {
         if (v > bm) { bm = v; bmx = px; bmy = py; }
       }
     }
+    // ⚠️ A "famine" weight was tried here — food scored up to 2.6x below need
+    // 0.15 — to catch kin choosing a warmth errand over poor moss. It measured
+    // WORSE (starving-in-food 1 → 5): weighting the score harder just makes
+    // them re-target between patches at successive decisions and arrive at
+    // neither. The real cause was never the choice, it was `_act` case 1
+    // refusing the meal when they stopped one cell short of it. Fix the mouth,
+    // not the appetite.
     push(1, bmx, bmy, deficit(2) * (0.3 + bm * 2.6));
 
     // — the crumb. A bounded nearest-of-N so the hot loop stays cheap; there are
@@ -1570,8 +1685,24 @@ export class Sim {
     const i = this.idx(k.x[id], k.y[id]);
     const near = Math.abs(k.tx[id] - k.x[id]) + Math.abs(k.ty[id] - k.y[id]) < 0.8 * S;
     switch (k.goal[id]) {
-      case 1: if (near && this.moss[i] > 0.05) {
-        const take = Math.min(this.moss[i], C.MOSS_EAT * 0.06);
+      // ⚠️⚠️ THEY EAT WITH THEIR MOUTH, NOT WITH THEIR FEET. This read
+      // `this.moss[i]` — the single cell the kin is STANDING ON — while `near`
+      // only requires being within 0.8*S (1.2 cells) of the target. So a kin
+      // could walk the whole way to the best moss on the board, stop one cell
+      // short, and be refused the meal entirely: the goal stays satisfied-ish,
+      // the hold runs, and they starve in arm's reach of food. Hunger was 90%
+      // of all mortality on a board that is 89% covered in moss, and this line
+      // is why. Reach for the best cell within one step instead.
+      case 1: {
+        let mi = i, mv = this.moss[i];
+        if (near) {
+          for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+            const j = this.idx(k.x[id] + dx, k.y[id] + dy);
+            if (this.moss[j] > mv) { mv = this.moss[j]; mi = j; }
+          }
+        }
+        if (near && mv > 0.05) {
+        const take = Math.min(this.moss[mi], C.MOSS_EAT * 0.06);
         // ⚠⚠ THIS MULTIPLIER WAS 1.5, AND AT 1.5 EATING WAS A NET LOSS. Standing on
         // saturated moss gained +0.030600 per tick while hunger cost -0.030667 —
         // they starved 0.02% faster than they could feed. That one number is why
@@ -1582,7 +1713,9 @@ export class Sim {
         // game was missing because of a rounding-width margin in one line.
         // At 2.4 a meal takes about 55 ticks and leaves a surplus;  is still
         // capped by what is in the cell, so they still graze it out and move on.
-        this.moss[i] -= take; k.need[base + 2] = Math.min(1, k.need[base + 2] + take * C.MOSS_FEED);
+        // ⚠️ decrement the cell they ATE FROM (mi), not the one under their feet.
+        this.moss[mi] -= take; k.need[base + 2] = Math.min(1, k.need[base + 2] + take * C.MOSS_FEED);
+        }
       } break;
       case 11: {                              // eating something dad dropped
         let gf = null, bd = 1e9;
@@ -2125,11 +2258,17 @@ export class Sim {
       k.hold[id] = 0;                       // whatever they were doing, they are not now
       felt++;
     }
-    // ⚠️ and it SHAKES THE BUILDINGS. Small — 0.004 of progress, about three
-    // weeks of ordinary decay — but it is the first time the knock has left a
-    // mark the town has to repair, which is what makes it a real transgression
-    // rather than a jump-scare.
-    for (const o of this.works) if (o.done != null) o.prog = Math.max(0.05, o.prog - 0.004);
+    // ⚠️ and it SHAKES THE BUILDINGS. The old comment here claimed 0.004 was
+    // "about three weeks of ordinary decay" and it was WRONG BY NINETEEN TIMES:
+    // decay is 0.00006 per `_weave`, `_weave` runs 60x a day (tick % 15, 900
+    // ticks a day), so ordinary decay is 0.0036/day and 0.004 was ONE DAY. The
+    // one act the whole game is named after cost the town a single day of
+    // upkeep, which is indistinguishable from nothing.
+    // 0.042 is twelve days — a mark somebody has to go and repair, which is what
+    // makes it a transgression rather than a jump-scare. Deliberately NOT three
+    // weeks: this is a thing a player will do out of curiosity the first time,
+    // and the first one should be survivable.
+    for (const o of this.works) if (o.done != null) o.prog = Math.max(0.05, o.prog - 0.042);
     if (felt) this.log('knock', 'the whole world knocked, once, and every one of them stopped.', 4.0);
     return felt;
   }

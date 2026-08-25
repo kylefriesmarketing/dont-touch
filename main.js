@@ -1,7 +1,7 @@
 // DON'T TOUCH — main.js
 // Boot, fixed-timestep loop, input, persistence. View and sim never touch. (§17)
 
-import { Sim, C, STAGE } from './sim.js';
+import { Sim, C, STAGE, NEEDS } from './sim.js';
 import { View } from './view.js';
 import { UI } from './ui.js';
 import { Sfx } from './sfx.js';
@@ -366,6 +366,26 @@ class App {
 
     canvas.addEventListener('pointermove', (e) => {
       const [nx, ny] = norm(e);
+
+      // ⚠️⚠️ THE HOVER. This handler used to return immediately unless a button
+      // was down, so the pointer could pass over forty living people and the
+      // screen never acknowledged one of them. That is why the game read as
+      // scenery: the inspector was one click away the whole time and nothing
+      // ever said so. Now a figure under the pointer lights up and gives its
+      // name, and the click that follows is an obvious one.
+      // Throttled to ~15Hz because pickKin is a linear scan over every kin on
+      // screen and pointermove fires per mouse report — 500Hz on a gaming mouse.
+      if (this.phase === 'play' && e.pointerType !== 'touch') {
+        const now = performance.now();
+        if (now - (this._hovT || 0) > 66) {
+          this._hovT = now;
+          try {
+            const id = (down || this.sim.held) ? -1 : v.pickKin(nx, ny);
+            this._setHover(id);
+          } catch (err) { /* a readout must never break input */ }
+        }
+      }
+
       if (!down) return;
       moved += Math.abs(e.clientX - sx) + Math.abs(e.clientY - sy);
       const dx = (e.clientX - sx) / innerWidth, dy = (e.clientY - sy) / innerHeight;
@@ -491,7 +511,10 @@ class App {
     canvas.addEventListener('wheel', (e) => {
       e.preventDefault();
       // the far limit is where the board still fills the frame
-      v.orbit.tDist = Math.max(0.75, Math.min(2.75, v.orbit.tDist + Math.sign(e.deltaY) * 0.16));
+      // ⚠️ the near limit is 0.60, not 0.75: at 0.75 you can never get low
+      // enough to watch one person do one thing, which is the whole appeal of
+      // a town this size. The far limit still shows the whole board.
+      v.orbit.tDist = Math.max(0.60, Math.min(2.75, v.orbit.tDist + Math.sign(e.deltaY) * 0.16));
     }, { passive: false });
 
     addEventListener('keydown', (e) => {
@@ -534,17 +557,17 @@ class App {
   }
 
   // the tap you should not do — the whole colony hears it
+  // ⚠️⚠️ THERE USED TO BE TWO KNOCKS. This function was a second, separately
+  // tuned reimplementation of `sim.knock()` — pulse 2.6 vs 2.8, safety −0.12 vs
+  // −0.22, no damage to anything standing — and it logged the BYTE-IDENTICAL
+  // sentence, so the T key and the knock button were visibly the same act and
+  // silently were not. There is one knock now; T is just another way to make it.
   startle() {
-    const s = this.sim, k = s.k;
-    for (let id = 0; id < s.count; id++) {
-      if (!k.alive[id] || k.stage[id] === STAGE.EGG) continue;
-      k.pulse[id] = 2.6;
-      k.need[id * 6 + 5] = Math.max(0, k.need[id * 6 + 5] - 0.12);
-      k.hold[id] = 0;
-    }
-    s.log('tap', 'the whole world knocked, once, and every one of them stopped.', 2.4);
-    // they flinch as one body, then come apart into individuals again
-    this.view.flinch((s.N - 1) / 2, (s.N - 1) / 2);
+    const s = this.sim;
+    const n = s.knock();
+    const mid = (s.N - 1) / 2;
+    this.view.flinch(mid, mid);
+    if (this.view.vfx && n) this.view.vfx.ring(mid, mid, { color: 0xcfd6e0, r0: 1, r1: 46, life: 1.1 });
   }
 
   // The hand's radius and heat, pushed every frame. This is the ONLY place the
@@ -563,6 +586,40 @@ class App {
       const v = this.view;
       if (v.vfx) v.vfx.splash(cx, cy);
     }
+  }
+
+  // The name that follows the pointer. Sim-read-only: it never writes a thing,
+  // so it cannot desync a replay or a save.
+  _setHover(id) {
+    const s = this.sim;
+    if (id >= 0 && !(s.k.alive[id] && s.k.stage[id] !== STAGE.EGG)) id = -1;
+    this.view.setHoverKin(id);
+    const tag = document.getElementById('nameTag');
+    if (!tag) return;
+    if (id < 0) { tag.classList.add('hide'); this.hoverId = -1; return; }
+    this.hoverId = id;
+    // ⚠️ the SECOND line is what makes this worth having. A name alone is a
+    // label; a name plus what they are short of turns a hover into the one
+    // reading the player actually wants — and it is the same worst-need the
+    // lantern is already showing in colour, so the two can never disagree.
+    const NN = NEEDS.length, base = id * NN;
+    let worst = 0;
+    for (let n = 1; n < NN; n++) if (s.k.need[base + n] < s.k.need[base + worst]) worst = n;
+    const v = s.k.need[base + worst];
+    const want = v < 0.30 ? `badly wants ${NEEDS[worst]}` : v < 0.62 ? `could use ${NEEDS[worst]}` : 'wants for nothing';
+    tag.innerHTML = `<b>${s.nameOf(id)}</b><i>${want}</i>`;
+    tag.classList.remove('hide');
+    this._moveTag();
+  }
+
+  // the tag rides the figure every frame, not just on pointer events — they walk
+  _moveTag() {
+    const tag = document.getElementById('nameTag');
+    if (!tag || this.hoverId == null || this.hoverId < 0) return;
+    const p = this.view.kinScreenPos(this.hoverId);
+    if (!p) { tag.classList.add('hide'); return; }
+    tag.style.left = p[0].toFixed(0) + 'px';
+    tag.style.top = (p[1] - 34).toFixed(0) + 'px';
   }
 
   _pushHand(dt = 0) {
@@ -614,7 +671,7 @@ class App {
     this.last = now;
 
     this._pushHand(dt);
-    if (this.phase === 'play') this._pour(dt);
+    if (this.phase === 'play') { this._pour(dt); this._moveTag(); }
 
     // ⚠️ breathe/ventFog sit OUTSIDE the paused guard below, so without the
     // phase test the title screen quietly fogs and un-fogs a town nobody is

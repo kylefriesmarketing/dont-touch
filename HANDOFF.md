@@ -743,4 +743,195 @@ step 4 the camera and the guttering lantern, and step 14 the upper ladder.
 
 ---
 
+## v0.7 — THE GAME BECOMES WATCHABLE (2026-08-25)
+
+Kyle, four times: *"there are no powers or way to interact"*, *"where are the
+buildings and civilization"*, *"weaker than tomagachi - its just not fun"*.
+Every one of those was **literally true from where he sat**, and almost none of
+it was the systems being missing. It was three numbers.
+
+### 1. `TICK_HZ` 15 → 45 — the single highest-leverage line in the project
+
+`TICK_HZ` is read in **exactly one place**: the frame accumulator in `main.js`.
+Nothing in `sim.js` reads it. So raising it replays the *identical tick
+sequence* faster in wall-clock — same seed, same world, same fingerprint, same
+saves, harness completely unaffected.
+
+It shipped at 15, a **60-second day**. That meant a kin crossed the board in 78
+seconds and a player watching for five minutes saw nothing happen. At 45 a day
+is 20 seconds and a kin crosses in 26.
+
+### 2. The default camera was the entire "where are the buildings" bug
+
+The zoom range is 0.60–2.75 and `view.js` opened the game at **2.35** — almost
+fully zoomed OUT, where a kin is a three-pixel dot and a hut is a smudge.
+Photographed at the same instant, same seed, nothing else changed:
+- **2.35**: a dark green rectangle with fireflies on it.
+- **1.25**: a village — pitched roofs, chimneys, tents, little glowing people
+  you can tell apart, crowds around the buildings.
+
+The art was never the problem. Default is now **1.25** and the near limit went
+0.75 → **0.60** so you can get down among them.
+
+### 3. Pacing: the ladder was generational, so nobody ever saw it
+
+`near: 1` rungs (hut/house/hall) waited for their prerequisite to become a
+**tradition** — which requires somebody repeating it who was born after the
+inventor *died*. Measured at 1×: first hut **83 real minutes**, first house
+**4.2 hours**, the hall **5.8 hours**.
+
+The valve: a practice also counts as settled once **more than one living head
+carries it** and it has stood **12 days**. Real tradition still fires, still
+logs, and is still what makes a rung build *denser*. Dwelling effort also cut
+(hut 900→300, house 1600→620, hall 2600→1300).
+
+| | before | after (1×) | after (4×) |
+|---|---|---|---|
+| store | 11–30 d | 3.0–10.0 min | 45 s – 2.5 min |
+| first hut | 83 d | 6.7–17 min | 1.7–4.3 min |
+| house | 251 d | 11.3–21 min | 2.8–5.3 min |
+| hall | 348 d | 17.7–39.3 min | 4.4–9.8 min |
+
+⚠️ `_weave` now tallies **every** practice's holders in ONE pass at the top
+(`hold[]`). The valve's first version called a full population sweep per
+prerequisite per candidate — 200M+ reads over a 300-day run, which turned the
+battery from minutes into "is it hung?".
+
+### 4. 🐛 DESPERATION MADE THEM SEARCH WORSE — a real, pre-existing forage bug
+
+Measured on `bat0` at day 300: **17 kin starving to death**, every one in the
+same overgrazed corner with moss 0.00–0.11 underfoot and **saturated moss
+(1.00) five to eight cells away**.
+
+The near scan in `_decide` reaches 4 cells. When it fails, the fallback is 18
+random samples in a box that **grows with hunger** — at hunger 1 that box is
+99×99, so 18 samples cover **0.18% of it** and essentially never find a patch
+six cells away. The hungrier they got, the blinder they searched.
+
+Fix: a strided exhaustive scan of the **middle distance** (9·S cells, step 2,
+~150 reads) between the two, for a kin the near scan already failed. Consumes
+no rng. **17 → 1.**
+
+### 4b. 🐛🐛 THEY ATE WITH THEIR FEET — the biggest bug in the project
+
+Found by the audit, and it is the single most consequential line in `sim.js`:
+
+```js
+case 1: if (near && this.moss[i] > 0.05) {      // i = the cell they STAND on
+```
+
+`near` only requires being within `0.8 * S` (**1.2 cells**) of the target, and
+`i` is the cell underfoot. So a kin could pick the best moss on the board, walk
+the entire way to it, **stop one cell short — and be refused the meal entirely.**
+The goal stayed satisfied-ish, the hold ran down, and they starved in arm's
+reach of food.
+
+**Hunger was 90% of all mortality on a board that is 89% covered in moss.** Half
+the chronicle is funerals for a death nobody caused.
+
+Fixed by letting them reach: a 3×3 scan for the best moss within one step, and
+the take is decremented from the cell they **ate from**, not the one they are
+standing on. Measured on `bat0` at day 300, kin starving with saturated moss
+within eight cells: **17 → 0**, and the living population went 49 → 61.
+
+⚠️ Two other things were tried at this and BOTH were wrong, because both treated
+it as a decision problem when it was a reach problem:
+- **goals 3 (warm) and 5 (company) added to the `starving` emergency set** —
+  catastrophic. Warmth-seeking is constant, so it made hunger the standing
+  emergency the code already warns about; `_decide` ran every tick and the town
+  thrashed. Seven tests went to "nothing was ever built", "only 0 kin carry any
+  practice", "no practice ever became a tradition". **Never add a common goal
+  to that set.**
+- **a "famine" weight on the food candidate's score** (up to 2.6× below need
+  0.15) — measured WORSE, 1 → 5. Weighting the score harder just makes them
+  re-target between patches at successive decisions and arrive at neither.
+
+**Fix the mouth, not the appetite.**
+
+### 5. Discoverability: the inspector was built and unfindable
+
+Name, age, stage, trade, all six need bars, the genome strip — all correct, all
+one click away, and **nothing on screen had ever suggested a figure could be
+clicked**. No cursor change, no highlight, no name. A system nobody can find is
+a system that does not exist.
+
+`pointermove` returned immediately unless a button was down, so the pointer
+could cross forty living people and the screen never acknowledged one. Now:
+a pulsing halo (`view.setHoverKin` / `_hoverFrame`) and a DOM tag with the
+person's **name and what they are short of** (`main.js _setHover` / `_moveTag`).
+Throttled to 15Hz, `pointer-events:none` on the tag, wrapped in try/catch, and
+sim-read-only — it cannot desync a replay.
+
+### ⚠️ THE LAMP: TRIED, MEASURED, REVERTED — do not try it again
+
+`lampOn = true` looks like the obvious fix for "the board goes black every
+twenty seconds". It is the wrong tool, in two ways that only measurement finds:
+- `ambient` is `ambientBase + (lampOn ? 1.6 : 0)`, so it warms the **whole
+  jar** — a thermal test caught it at 22.4 against ambient 20.6.
+- `get daylight` puts a **0.22 floor** under night, which feeds the moss all
+  night. The town grew 46 → 64 and a sixth of them starved in the overgrazed
+  corner above.
+
+And it was solving a problem that **does not exist**: photographed at true deep
+night (`daylight` 0.0105, lamp off) at the new camera distance, the board is
+perfectly readable — houses, tents, ponds, the rail, amber kin. The original
+black frame was the 2.35 camera plus an un-decayed `titleDim`, not the
+lighting. Darkness a player cannot see through would be a **view** problem;
+this one was not a problem at all.
+
+### VFX (`vfx.js`, 893 lines, new)
+
+Three pooled systems behind `ring / burst / column / converge / trail / splash`
+plus a semantic `fire(name, cx, cy)` for the twelve verbs. **Draw calls idle 53
+→ busy 56, delta 3**, with 9 verbs + hand + tilt + breath + 2 trails live at
+once; every pool drains to exactly 0. Traps it hit are worth keeping:
+- `${46.0}` in GLSL emits `46` → `min(float,int)` has no overload → the whole
+  points program failed to compile and **every mote silently did not exist**.
+- transparent + `DoubleSide` = **2 draw calls per mesh**; `forceSinglePass:
+  true` is the difference between delta 5 and delta 3.
+- The Browser pane's canvas is 0×0, so `getDrawingBufferSize().y` is 0 →
+  `gl_PointSize` 0 → invisible motes **on the exact surface this is verified
+  on**. Floored at 240.
+
+### Verification for this batch
+
+- **`node test-sim.mjs` — 94 passed, 0 failed**, against a HEAD baseline of
+  94/0 measured by running the identical suite against `git show HEAD:sim.js`.
+  Do that when attributing a failure; it is the only way to tell your
+  regression from a pre-existing one.
+- **8 seeds × 300 days unattended: 8/8 towns alive** (HEAD 8/8), with **373
+  buildings standing against HEAD's 297**, and 61% more standing by day 60.
+- Starving with saturated moss within eight cells, seed `bat0` day 300:
+  **17 → 0**.
+- Live: hover on/off from real pointer events, all 12 VFX verbs fire and drain
+  to 0, the knock takes exactly 0.042 off every standing work, a call at dusk
+  holds at 1400 and pulls mean distance 19.2 → 0, the placename nudge fires
+  once and never again. **0 console errors, 0 warnings.**
+
+⚠️ The suite is now noticeably slower — the eat fix means towns are ~50% bigger,
+so every long test simulates more kin. That is the fix working, not a leak.
+
+### ⚠️ What the audit found, and what it means for what comes next
+
+A 45-agent read of the shipped build, measured not guessed:
+
+- 20 real minutes at 4×, zero player input: **831 chronicle lines**. The
+  maximum that could *ever* be about the hand is **15**, and 14 of those were
+  `nonight` (a lamp+curtain observation). `scorch` fired 0 times in 240 days,
+  `drought` 0, `warmth` 0. **A player's act is one dim line in a river of 831.**
+- The four "the world noticed your hand" beats are rate-limited to once per
+  14–20 in-game days *and* their thresholds are so hard they never fire.
+- `nudge` returns early on a persisted key and **both call sites share the key
+  `'sheetoff'`** — so at most one of them fires, once, forever. After a
+  player's first session the game never speaks again.
+- Every player act is logged with the agent deleted: *"something came down out
+  of the sky and stayed where it landed."*
+
+P2 (the town writes the record) and P3 (no score, no advisor) are why. They are
+good rules that have been taken far enough to delete the player from their own
+game. **The next batch is the consequence layer**: the world must visibly
+answer a touch — without ever saying "you".
+
+---
+
 *Dirty Boy Devs. The jar runs, the tests are green, and nobody has told the player what they were.*

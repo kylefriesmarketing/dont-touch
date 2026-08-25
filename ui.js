@@ -71,7 +71,11 @@ export class UI {
     $('lidBtn').addEventListener('click', () => {
       this.sim.setLid(!this.sim.lid); this.app.sfx.lid(); this.sync();
       // the one thing about this verb a player cannot see coming, said once
-      if (!this.sim.lid) this.nudge('the room is dry. whatever they lose to the air now, the air keeps.', 'sheetoff');
+      // ⚠️ this key used to be 'sheetoff', the SAME key main.js:253 uses. Both
+      // are one-shot-forever against a persisted set, so whichever fired first
+      // permanently silenced the other — one of the game's only two lines of
+      // voice could never be read at all.
+      if (!this.sim.lid) this.nudge('the room is dry. whatever they lose to the air now, the air keeps.', 'sheetdry');
     });
     $('pageBtn').addEventListener('click', () => this.showPage());
     $('boxBtn').addEventListener('click', () => this.showBox(true));
@@ -205,6 +209,15 @@ export class UI {
       else if (e.kind === 'death-named') this.app.sfx.death();
       else if (e.kind === 'clutch' || e.kind === 'hatch') this.app.sfx.birth();
       else if (e.kind === 'rain') this.app.sfx.thunder();
+      // ⚠️ THE ONE LOOP WORTH POINTING AT. Measured: ZERO placenames in 720 days
+      // across three no-input seeds, and one after resting a hand on the crowd
+      // for 2.6 real seconds. It is the fastest, most legible thing the player
+      // can do that ends up in the town's own book — and it was completely
+      // unsignposted, so nobody would ever find it. This stays inside P3: it
+      // reports what the TOWN did, gives no instruction, and fires once ever.
+      if (e.kind === 'placename') {
+        this.nudge('a place only gets a name where something kept happening to them.', 'placename');
+      }
     }
     while (this.chronBox.children.length > 90) this.chronBox.removeChild(this.chronBox.firstChild);
     this.chronBox.scrollTop = this.chronBox.scrollHeight;
