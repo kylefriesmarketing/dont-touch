@@ -144,6 +144,16 @@ class App {
       if (!world) world = await loadWorld(params.get('world'));
       this.sim = new Sim({ seed, founders: 14, world });
     }
+    // ⚠️ the licence line goes up as soon as we know we are somewhere real,
+    // and it is NOT behind a setting -- ODbL obliges attribution to be shown.
+    if (this.sim.world) {
+      const el = document.getElementById('attrib');
+      if (el) {
+        el.textContent = this.sim.world.label + ' — ' + this.sim.world.attribution;
+        el.classList.remove('hide');
+      }
+    }
+    this._fillPlaces(world);
     this.setSeason();
 
     const canvas = document.getElementById('c');
@@ -163,6 +173,41 @@ class App {
     setInterval(() => this.save(), 25000);
     addEventListener('beforeunload', () => this.saveSummary());
     requestAnimationFrame(() => this.frame());
+  }
+
+  // The places you have baked, offered on the title screen. Reloads with
+  // ?world=<name>&newgame because a colony belongs to ONE world -- switching
+  // under a living town would move the ground out from under its homes and
+  // graves, which is exactly what Sim.fromJSON refuses to do.
+  async _fillPlaces(current) {
+    const row = document.getElementById('tplaces');
+    if (!row) return;
+    let list = [];
+    try {
+      const r = await fetch('worlds/index.json');
+      if (r.ok) list = await r.json();
+    } catch (e) { /* no baked worlds is a perfectly normal checkout */ }
+    if (!list.length) return;
+    const mk = (name, text, title) => {
+      const b = document.createElement('button');
+      b.textContent = text;
+      if (title) b.title = title;
+      b.onclick = () => {
+        const q = new URLSearchParams();
+        if (name) q.set('world', name);
+        q.set('newgame', '1');
+        location.search = '?' + q.toString();
+      };
+      return b;
+    };
+    // ⚠️ prefer the baker's `title`. Falling back to the geocoder label put
+    // "Keswick Climbing Wall & Activity Centre" on a button.
+    for (const w of list) {
+      const short = w.title || String(w.label || w.name).split(',')[0].trim();
+      row.appendChild(mk(w.name, short, (w.label || short) + ' — ' + w.reliefM + 'm of relief'));
+    }
+    row.appendChild(mk(null, 'nowhere', 'a world with no real place behind it'));
+    row.classList.remove('hide');
   }
 
   // ⚠️⚠️ THE TITLE IS A LOOK, NOT A STATE. It must NEVER call setLamp,

@@ -52,6 +52,7 @@ function parseArgs(argv) {
     else if (k === '--radius') o.radius = +argv[++i];
     else if (k === '--name') o.name = argv[++i];
     else if (k === '--zoom') o.zoom = +argv[++i];
+    else if (k === '--title') o.title = argv[++i];
   }
   return o;
 }
@@ -371,7 +372,13 @@ async function bake(opts) {
   }
 
   const out = {
-    v: 1, name, label, lat, lon, radius: opts.radius, zoom: opts.zoom, N,
+    // ⚠️ TWO NAMES ON PURPOSE. `label` is the full Nominatim string and it is
+    // what the ODbL attribution line shows. `title` is what a human calls the
+    // place -- because the geocoder happily resolves "Keswick, Cumbria" to
+    // "Keswick Climbing Wall & Activity Centre, Goosewell Farm, ...", which is
+    // correct, useless as a button, and was exactly what the picker displayed.
+    v: 1, name, label, title: opts.title || (opts.place ? String(opts.place).split(',')[0].trim() : name),
+    lat, lon, radius: opts.radius, zoom: opts.zoom, N,
     reliefM: +relief.toFixed(1),
     // quantised to 1/4096 — the game clamps height to [0, 1.2] and nothing reads
     // finer than that, and it keeps a world file at tens of KB instead of megabytes
@@ -396,7 +403,7 @@ async function bake(opts) {
     try { idx = JSON.parse(readFileSync(idxFile, 'utf8')); } catch (e) { idx = []; }
   }
   idx = idx.filter((w) => w.name !== name);
-  idx.push({ name, label, reliefM: out.reliefM, radius: opts.radius, water: nWater, buildings: nBuild });
+  idx.push({ name, title: out.title, label, reliefM: out.reliefM, radius: opts.radius, water: nWater, buildings: nBuild });
   writeFileSync(idxFile, JSON.stringify(idx, null, 1));
   log('worlds/index.json now lists ' + idx.length);
 }

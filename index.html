@@ -64,6 +64,21 @@
     background:linear-gradient(#06080ccc,#06080c00);font-size:calc(14px * var(--ui))}
   #strip > *{pointer-events:auto}
 
+  /* the place row on the title screen */
+  #tplaces{margin-top:10px;display:flex;flex-wrap:wrap;gap:6px;justify-content:center;align-items:center;
+    font-size:calc(12.5px * var(--ui));opacity:.75}
+  #tplaces.hide{display:none}
+  #tplaces .tpl{opacity:.55;margin-right:2px}
+  #tplaces button{padding:3px 9px;border-radius:11px;
+    border:1px solid rgba(255,225,178,.22);background:rgba(255,225,178,.06);
+    color:#ffe6b0;font:inherit;cursor:pointer}
+  #tplaces button:hover{background:rgba(255,225,178,.15)}
+
+  /* the licence line. Small, out of the way, never hidden by a setting. */
+  #attrib{position:fixed;left:8px;bottom:6px;z-index:30;pointer-events:none;
+    font-size:10.5px;line-height:1.3;max-width:52vw;opacity:.38;color:#cfd6e0}
+  #attrib.hide{display:none}
+
   /* the hovered person's name, riding just above their head */
   #nameTag{position:fixed;transform:translate(-50%,-100%);pointer-events:none;z-index:40;
     padding:4px 9px 5px;border-radius:7px;white-space:nowrap;
@@ -508,8 +523,19 @@
     <button id="tBox">the box</button> &middot;
     <button id="tNew">a new town</button>
   </div>
+  <!-- ⚠️ Populated at boot from worlds/index.json. Hidden entirely when no
+       place has been baked, so a plain checkout shows nothing extra. This
+       exists because ?world= is a URL parameter, and a feature reachable only
+       by typing a URL parameter is a feature nobody has. -->
+  <div id="tplaces" class="hide"><span class="tpl">somewhere real:</span></div>
   <div id="tfoot">A DIRTY BOY DEVS GAME</div>
 </div>
+
+<!-- ⚠⚠ ODbL REQUIRES THIS AND IT IS NOT DECORATION. OpenStreetMap data may
+     be used freely, but the licence obliges visible attribution. The baker
+     writes the exact string into every world file; this shows it whenever a
+     baked world is loaded, and stays hidden for a generated one. -->
+<div id="attrib" class="hide"></div>
 
 <div id="boot"><div class="bootin"><h1>DON'T TOUCH</h1><p>dad said. it's alive anyway</p></div></div>
 

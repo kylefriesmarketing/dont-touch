@@ -1,22 +1,7 @@
 [
  {
-  "name": "ithaca",
-  "label": "Town of Ithaca, Tompkins County, New York, United States",
-  "reliefM": 128.5,
-  "radius": 700,
-  "water": 176,
-  "buildings": 48
- },
- {
-  "name": "centralpark",
-  "label": "Central Park, New York County, New York, 11025, United States",
-  "reliefM": 26,
-  "radius": 500,
-  "water": 2392,
-  "buildings": 229
- },
- {
   "name": "keswick",
+  "title": "Keswick",
   "label": "Keswick Climbing Wall & Activity Centre, Goosewell Farm, St. John's Castlerigg and Wythburn, Keswick, Cumberland, England, CA12 4RN, United Kingdom",
   "reliefM": 121.8,
   "radius": 800,
@@ -25,10 +10,29 @@
  },
  {
   "name": "boulder",
+  "title": "Boulder",
   "label": "Boulder, Boulder County, Colorado, United States",
   "reliefM": 61.5,
   "radius": 900,
   "water": 169,
   "buildings": 1893
+ },
+ {
+  "name": "centralpark",
+  "title": "Central Park",
+  "label": "Central Park, New York County, New York, 11025, United States",
+  "reliefM": 26,
+  "radius": 500,
+  "water": 2392,
+  "buildings": 229
+ },
+ {
+  "name": "hallstatt",
+  "title": "Hallstatt",
+  "label": "Hallstatt, Bezirk Gmunden, Oberösterreich, 4830, Österreich",
+  "reliefM": 866.2,
+  "radius": 700,
+  "water": 0,
+  "buildings": 1
  }
 ]

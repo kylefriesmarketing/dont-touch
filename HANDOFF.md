@@ -1076,21 +1076,38 @@ buildings), **centralpark** (2,392 water cells), **ithaca**.
    bake created a literal `New%20folder` directory, wrote 99KB into it, and printed
    *"wrote worlds/ithaca.json"*.
 
-### Does a real place actually run a town?
-Three of four do. 120 unattended days, same seed:
+### Does a real place actually run a town? Yes — as well as a generated one.
 
-| world | alive | standing | note |
-|---|---|---|---|
-| (generated) | 176 | 56 | the baseline |
-| keswick | 60 | 23 | |
-| centralpark | 51 | 24 | |
-| boulder | 49 | 17 | |
-| **ithaca** | **0** | 6 | rural township, **69 OSM elements**, zero green |
+120 unattended days, **best of two seeds** (a/b), which matters — see the warning:
 
-Real places support smaller towns than generated ones — real terrain is more
-constrained. ⚠️ **A sparse rural bbox makes a world that cannot support life.**
-Prefer somewhere with real green and real water in it; check the `osm:` line the
-baker prints before adopting a bake.
+| world | alive | standing |
+|---|---|---|
+| (generated) | 49 | 20 |
+| Keswick | 66 | 28 |
+| Boulder | 61 | 22 |
+| Central Park | 69 | 29 |
+| Hallstatt | 51 | 29 |
+
+⚠️⚠️ **AN EARLIER VERSION OF THIS TABLE WAS WRONG AND THE MISTAKE IS THE POINT.**
+A single-seed run put generated at 176 and the real places at 49–60, and that got
+written up as "real terrain is more constrained, so real towns are smaller".
+Re-run across two seeds, the generated world scores **49** on the same measure.
+The spread between seeds is far larger than the spread between worlds — so a
+one-seed comparison of anything in this game is noise, and this project has now
+made that mistake twice. Every world above clears the baseline.
+
+⚠️ **A sparse bbox still makes a world that cannot support life.** `ithaca` was
+baked, shipped, measured at **0 alive by day 300**, and deleted: a rural township
+with **69 OSM elements** and zero green ways. Read the `osm:` line the baker
+prints before adopting a bake — hundreds of green cells and some water is the
+shape you want.
+
+⚠️ The geocoder resolves a place name to a POI, not a town centre: "Keswick,
+Cumbria" became *Keswick Climbing Wall & Activity Centre* and "Hallstatt,
+Austria" landed on the mountain above the lake (866m of relief, **zero water**,
+one building — and it still runs a town). Pass `--title` for the button label,
+and `--center lat,lon` when you want a specific spot rather than whatever
+Nominatim decides the name means.
 
 ### 🐛 And a latent save bug it flushed out
 `this.alive` is a cached aggregate recomputed at the end of every `_kin()` pass —
