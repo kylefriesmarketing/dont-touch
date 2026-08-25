@@ -1,7 +1,7 @@
 // DON'T TOUCH — main.js
 // Boot, fixed-timestep loop, input, persistence. View and sim never touch. (§17)
 
-import { Sim, C, STAGE, NEEDS } from './sim.js';
+import { Sim, C, STAGE, NEEDS, S as SIM_S } from './sim.js';
 import { View } from './view.js';
 import { UI } from './ui.js';
 import { Sfx } from './sfx.js';
@@ -94,6 +94,28 @@ class App {
     }
 
     const params = new URLSearchParams(location.search);
+
+    // ⚠⚠ THE BAKED WORLD IS LOADED BEFORE ANYTHING ELSE, and it has to be:
+    // Sim's constructor is what lays the terrain down, and Sim.fromJSON refuses
+    // to restore a colony whose save names a world it was not given -- rather
+    // than silently rebuilding it on noise with its homes, graves and pond all
+    // in the wrong place.
+    // The save is the authority on WHICH world; ?world= only picks one for a
+    // brand new town.
+    let world = null;
+    const loadWorld = async (name) => {
+      if (!name) return null;
+      try {
+        const r = await fetch('worlds/' + name + '.json');
+        if (!r.ok) throw new Error(r.status + '');
+        const w = await r.json();
+        console.log('world: ' + w.label + ' (' + w.reliefM + 'm of relief)');
+        return w;
+      } catch (e) {
+        console.warn('could not load world "' + name + '"', e);
+        return null;
+      }
+    };
     let saved = null;
     if (!params.has('newgame')) {
       try { saved = await get('save'); } catch (e) { console.warn('no store', e); }
@@ -108,7 +130,8 @@ class App {
       // unreadable blob is set aside under its own key (so the 25s autosave
       // cannot overwrite the evidence) and the town starts again.
       try {
-        this.sim = Sim.fromJSON(saved.state);
+        world = await loadWorld(saved.state && saved.state.worldName);
+        this.sim = Sim.fromJSON(saved.state, world);
         away = Math.min(Date.now() - (saved.at || Date.now()), 24 * 3600e3);
       } catch (e) {
         console.warn('unreadable save, keeping it aside and starting over', e);
@@ -118,7 +141,8 @@ class App {
     }
     if (!this.sim) {
       const seed = params.get('seed') || String(Date.now() & 0xffffff);
-      this.sim = new Sim({ seed, founders: 14 });
+      if (!world) world = await loadWorld(params.get('world'));
+      this.sim = new Sim({ seed, founders: 14, world });
     }
     this.setSeason();
 
@@ -247,7 +271,7 @@ class App {
   // shipped, just looks broken.
   arm(p) {
     this.armed = p;
-    if (['crumb', 'water', 'seed', 'lift', 'call', 'mend', 'strike', 'still', 'dread'].includes(p) && this.sim.lid) {
+    if (['crumb', 'water', 'seed', 'raise', 'lower', 'lift', 'call', 'mend', 'strike', 'still', 'dread'].includes(p) && this.sim.lid) {
       this.sim.setLid(false);
       this.ui.sync();
       this.ui.nudge('the sheet is off. the room drinks their pond while it is.', 'sheetoff');
@@ -291,6 +315,14 @@ class App {
       // somebody, so the danger is in the gesture and not in a number.
       if (this.armed === 'water') {
         mode = 'water'; this.pourAt = null; return;
+      }
+      // ⚠️ SO IS THE GROUND. A tap that moved terrain would make the one
+      // permanent act in the game the cheapest gesture in it. Holding means a
+      // hill is something you lean on until it is the size you wanted, and the
+      // shape follows the pointer, so you draw a ridge rather than stamp dots.
+      if (this.armed === 'raise' || this.armed === 'lower') {
+        mode = 'shape'; this.shapeAt = null; this.shapeDir = this.armed === 'raise' ? 1 : -1;
+        return;
       }
       if (this.armed === 'seed') {
         const h = v.pickGround(nx, ny);
@@ -402,6 +434,9 @@ class App {
       } else if (mode === 'water') {
         const h = v.pickGround(nx, ny);
         if (h) this.pourAt = h.cell;
+      } else if (mode === 'shape') {
+        const h = v.pickGround(nx, ny);
+        if (h) this.shapeAt = h.cell;
       } else if (mode === 'reach') {
         // ⚠️ moving off the kin CANCELS the reach rather than dragging the board.
         // Taking somebody must never be what happens when a click slips.
@@ -490,6 +525,7 @@ class App {
         }
       }
       if (mode === 'water') { this.pourAt = null; this.pourT = 0; }
+      if (mode === 'shape') { this.shapeAt = null; this.shapeT = 0; }
       if (mode === 'breathe') this.breathing = false;
       if (mode === 'tilt') s.setTilt(0, 0);     // the jar rights itself
       mode = null;
@@ -588,6 +624,31 @@ class App {
     }
   }
 
+  // The ground rises under a held thumb. Runs on the FRAME clock like the pour,
+  // for the same reason: a still hand must keep building the hill up, and a
+  // moving one must draw a ridge along where it went.
+  // ⚠️ 12Hz, and a fraction of a handful each time, so a full-height hill takes
+  // about a second and a half of deliberate pressing. Instant terrain makes the
+  // world feel like clay; slow terrain makes it feel like the world.
+  _shape(dt) {
+    if (!this.shapeAt) return;
+    this.shapeT = (this.shapeT || 0) + dt;
+    if (this.shapeT < 0.085) return;
+    this.shapeT = 0;
+    const [cx, cy] = this.shapeAt, v = this.view;
+    if (!this.sim.shape(cx, cy, this.shapeDir, 0.34)) return;
+    // ⚠️ the view has to be told, every time. Nothing else re-reads `height`
+    // for the ground mesh — it is built once at boot — so without this the
+    // simulation quietly has a hill in it that the player cannot see.
+    v.reshapeGround(cx, cy, 3 * SIM_S);
+    if (v.vfx) {
+      v.vfx.ring(cx, cy, {
+        color: this.shapeDir > 0 ? 0xd8c49a : 0x8fa4b8,
+        r0: this.shapeDir > 0 ? 3.4 : 0.6, r1: this.shapeDir > 0 ? 0.6 : 3.4, life: 0.5,
+      });
+    }
+  }
+
   // The name that follows the pointer. Sim-read-only: it never writes a thing,
   // so it cannot desync a replay or a save.
   _setHover(id) {
@@ -671,7 +732,7 @@ class App {
     this.last = now;
 
     this._pushHand(dt);
-    if (this.phase === 'play') { this._pour(dt); this._moveTag(); }
+    if (this.phase === 'play') { this._pour(dt); this._shape(dt); this._moveTag(); }
 
     // ⚠️ breathe/ventFog sit OUTSIDE the paused guard below, so without the
     // phase test the title screen quietly fogs and un-fogs a town nobody is

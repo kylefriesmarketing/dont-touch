@@ -2,6 +2,7 @@
 // Headless battery. `node test-sim.mjs`
 // Invariant 4: every era gets a soak, zero errors, no NaN, nothing outside the jar.
 
+import { readFileSync } from 'node:fs';
 import { Sim, C, LOCI, L, expressed, NEEDS, STAGE, makeRNG, S, WORKS, WORK_AT, WORK_DONE } from './sim.js';
 
 let pass = 0, fail = 0;
@@ -589,6 +590,210 @@ t('homes round-trip and hold determinism', () => {
   eq(b.fingerprint(), fp, 'homes did not restore identically');
   run(s, 15); run(b, 15);
   eq(b.fingerprint(), s.fingerprint(), 'they drifted after the doors were claimed');
+});
+
+// --- a real place ----------------------------------------------------------
+console.log('somewhere real');
+
+t('a colony lives on a baked real place, and it round-trips', () => {
+  // ⚠️ The world is DATA the caller supplies, not something sim.js fetches --
+  // sim.js still imports nothing. And it CANNOT be regenerated from the seed
+  // the way the noise terrain is, because it came off the network, which is
+  // exactly why fromJSON takes it as a second argument.
+  let world = null;
+  try { world = JSON.parse(readFileSync(new URL('./worlds/keswick.json', import.meta.url), 'utf8')); }
+  catch (e) { console.log('    (no baked world on disk, skipping)'); return; }
+  const a = new Sim({ seed: 'realplace', founders: 14, world });
+  ok(a.worldName === 'keswick', 'the colony does not know where it lives');
+  // the landmarks are derived from REAL height by the same code as always
+  ok(a.inJar(a.pond.x, a.pond.y), 'the pond landed outside the jar');
+  ok(a.inJar(a.hearth.x, a.hearth.y), 'the founders were seeded outside the jar');
+  let wet = 0;
+  for (let i = 0; i < a.N * a.N; i++) if (a.water[i] > 0.001) wet++;
+  ok(wet > 100, 'a real place with real lakes came out dry: ' + wet + ' cells');
+  run(a, 20);
+  ok(a.alive > 0, 'the town died in twenty days on real ground');
+  const blob = JSON.parse(JSON.stringify(a.toJSON()));
+  eq(blob.worldName, 'keswick', 'the save forgot which place this is');
+  const b = Sim.fromJSON(blob, world);
+  eq(b.fingerprint(), a.fingerprint(), 'a real place did not restore identically');
+  run(a, 10); run(b, 10);
+  eq(b.fingerprint(), a.fingerprint(), 'two identical real worlds drifted');
+});
+
+t('a save that names a world REFUSES to load without it', () => {
+  // ⚠⚠ the alternative is silently rebuilding the colony on noise terrain
+  // with its homes, graves and pond all in the wrong place -- a corruption that
+  // looks like a rendering bug and is actually the world underneath moving.
+  let world = null;
+  try { world = JSON.parse(readFileSync(new URL('./worlds/keswick.json', import.meta.url), 'utf8')); }
+  catch (e) { return; }
+  const a = new Sim({ seed: 'refuse', founders: 6, world });
+  run(a, 3);
+  const blob = JSON.parse(JSON.stringify(a.toJSON()));
+  let threw = false;
+  try { Sim.fromJSON(blob); } catch (e) { threw = true; }
+  ok(threw, 'it laid a real colony onto a generated world without complaining');
+});
+
+t('a generated world still needs no world file at all', () => {
+  const a = new Sim({ seed: 'plain', founders: 8 });
+  eq(a.worldName, null, 'a generated world claimed to be somewhere');
+  run(a, 5);
+  const b = Sim.fromJSON(JSON.parse(JSON.stringify(a.toJSON())));
+  eq(b.fingerprint(), a.fingerprint(), 'the old path stopped round-tripping');
+});
+
+// --- the ground where somebody was taken -----------------------------------
+t('the town stops using the ground where it watched somebody taken', () => {
+  // ⚠⚠ `k.saw` was written by _witness, folded into the fingerprint, and read
+  // by NOTHING for the whole life of the feature -- so the one irreversible act
+  // in the game had zero mechanical consequence. This test exists so that can
+  // never quietly become true again.
+  // The control wipes k.saw every tick. Nothing else in the sim reads it, so the
+  // two runs differ by exactly one bias and nothing else.
+  const R = 6 * S;
+  const go = (shunOn) => {
+    const s2 = new Sim({ seed: 'sawread', founders: 14 });
+    run(s2, 45);
+    let vic = -1, best = 0;
+    for (let id = 0; id < s2.count; id++) {
+      if (!s2.k.alive[id] || s2.k.stage[id] === STAGE.EGG) continue;
+      let n = 0;
+      for (let j = 0; j < s2.count; j++) {
+        if (s2.k.alive[j] && Math.hypot(s2.k.x[id] - s2.k.x[j], s2.k.y[id] - s2.k.y[j]) < 10) n++;
+      }
+      if (n > best) { best = n; vic = id; }
+    }
+    ok(vic >= 0, 'nobody to take');
+    const vx = s2.k.x[vic], vy = s2.k.y[vic];
+    s2.lift(vic); s2.takeAway();
+    let samples = 0, near = 0;
+    for (let i = 0; i < 3000; i++) {
+      if (!shunOn) s2.k.saw.fill(0);
+      s2.step();
+      if (i % 25) continue;
+      for (let id = 0; id < s2.count; id++) {
+        if (!s2.k.alive[id] || s2.k.stage[id] === STAGE.EGG) continue;
+        samples++;
+        if (Math.hypot(s2.k.x[id] - vx, s2.k.y[id] - vy) < R) near++;
+      }
+    }
+    return samples ? near / samples : 0;
+  };
+  const off = go(false), on = go(true);
+  ok(on < off * 0.85,
+    `the take changed nothing: ${(off * 100).toFixed(1)}% -> ${(on * 100).toFixed(1)}% of time on that ground`);
+});
+
+t('the taken place round-trips through a save', () => {
+  const a = fixture('sawsave', 30);
+  let vic = -1;
+  for (let id = 0; id < a.count; id++) if (a.k.alive[id] && a.k.stage[id] !== STAGE.EGG) { vic = id; break; }
+  a.lift(vic); a.takeAway();
+  ok(a._lifted, 'lift recorded nothing');
+  const b = Sim.fromJSON(JSON.parse(JSON.stringify(a.toJSON())));
+  ok(b._lifted, 'the place they lost somebody was forgotten on reload');
+  eq(b._lifted.x.toFixed(6), a._lifted.x.toFixed(6), 'it came back in the wrong place');
+  eq(b.fingerprint(), a.fingerprint(), 'a town that had lost somebody did not restore identically');
+  run(a, 10); run(b, 10);
+  eq(b.fingerprint(), a.fingerprint(), 'they drifted after the take');
+});
+
+// --- DAD'S CORNER: the ground the player made -------------------------------
+console.log('the ground you made');
+
+t('a raised hill is still there after a reload, and the pond did not move', () => {
+  // ⚠️ THE WHOLE POINT OF THE TEST. `height` is deliberately NOT saved -- it is
+  // regenerated from the seed -- so the player's own terrain travels as a sparse
+  // `lump` delta and is re-applied AFTER _genWorld has derived the pond, the
+  // graveyard and the hearth from the UNSHAPED ground. Get that order wrong and a
+  // hill somebody raised silently relocates the graveyard on load.
+  const a = fixture('lump', 30);
+  const mid = (a.N - 1) / 2;
+  ok(a.shape(mid, mid, 1, 1), 'the ground refused to rise at all');
+  const h = a.height[a.idx(mid, mid)];
+  const b = Sim.fromJSON(JSON.parse(JSON.stringify(a.toJSON())));
+  eq(b.height[b.idx(mid, mid)].toFixed(6), h.toFixed(6), 'the hill did not come back');
+  eq(JSON.stringify(b.pond), JSON.stringify(a.pond), 'the pond moved');
+  eq(JSON.stringify(b.yard), JSON.stringify(a.yard), 'the graveyard moved');
+  eq(JSON.stringify(b.hearth), JSON.stringify(a.hearth), 'the hearth moved');
+  eq(b.fingerprint(), a.fingerprint(), 'the shaped world did not restore identically');
+});
+
+t('the shaped ground is IN the fingerprint', () => {
+  // ⚠⚠ without this the harness lies: two towns, one with a hill and one
+  // without, would hash EQUAL, and the save round-trip test above would pass
+  // while quietly flattening the only field in this world that never decays.
+  const a = fixture('lumphash', 20);
+  const b = clone(a);
+  eq(b.fingerprint(), a.fingerprint(), 'the clone did not start equal');
+  const mid = (a.N - 1) / 2;
+  a.shape(mid, mid, 1, 1);
+  ok(b.fingerprint() !== a.fingerprint(), 'a hill did not move the fingerprint');
+  // and the SAME lump in a different place must not hash the same
+  const c = clone(fixture('lumphash', 20));
+  c.shape(mid + 6, mid, 1, 1);
+  ok(c.fingerprint() !== a.fingerprint(), 'the same hill in two places hashed equal');
+});
+
+t('water runs down a channel the player dug', () => {
+  // ⚠️ THE FIRST VERSION OF THIS TEST WAS WRONG and it is worth saying why: it
+  // dug a pit five cells from the pond and asserted it filled. Water does not
+  // climb. If anything between the pit and the water sits higher, the pit stays
+  // dry forever and that is CORRECT physics -- the test was asserting a bug.
+  // What a player actually does is dig a CHANNEL, and that is what _fluids has
+  // always been able to answer. Measured live before this test existed: a
+  // 16-cell trench cut out of the pond carried water down 14 of its 16 cells.
+  const s2 = fixture('hollow', 40);
+  const N = s2.N;
+  let px = -1, py = -1;
+  for (let y = 6; y < N - 6 && px < 0; y++) for (let x = 6; x < N - 6; x++) {
+    if (s2.water[s2.idx(x, y)] > 0.03) { px = x; py = y; break; }
+  }
+  ok(px >= 0, 'the world had no pond to dig out of');
+  // cut a trench away from the water, digging each cell as we go
+  const dir = px < N / 2 ? 1 : -1, LEN = 10;
+  for (let pass = 0; pass < 8; pass++) {
+    for (let q = 1; q <= LEN; q++) s2.shape(px + dir * q, py, -1, 1);
+    run(s2, 1);
+  }
+  // ⚠️ ASSERT ON VOLUME, NOT ON A CELL COUNT. Measured at 8/14/20 digging
+  // passes the wetted-cell count bounces 6/5/7 -- it depends on exactly where
+  // the trench bottoms out against the terrain -- while the total water IN the
+  // trench is a steady 0.41-0.54. A count near its own threshold is a flaky
+  // test; the volume is the thing the feature actually claims.
+  let wet = 0, depth = 0;
+  for (let q = 1; q <= LEN; q++) {
+    const i = s2.idx(px + dir * q, py);
+    if (s2.water[i] > 0.01) wet++;
+    depth += s2.water[i];
+  }
+  ok(depth > 0.15, `the channel stayed dry: ${wet}/${LEN} cells, total water ${depth.toFixed(3)}`);
+});
+
+t('a raised ridge sheds the water off itself', () => {
+  const s2 = fixture('ridge', 40);
+  const N = s2.N;
+  let px = -1, py = -1;
+  for (let y = 6; y < N - 6 && px < 0; y++) for (let x = 6; x < N - 6; x++) {
+    if (s2.water[s2.idx(x, y)] > 0.05) { px = x; py = y; break; }
+  }
+  ok(px >= 0, 'no water to push off anything');
+  const before = s2.water[s2.idx(px, py)];
+  for (let i = 0; i < 30; i++) s2.shape(px, py, 1, 1);
+  run(s2, 1);
+  const after = s2.water[s2.idx(px, py)];
+  ok(after < before * 0.5, `the water stayed on the hill: ${before.toFixed(3)} -> ${after.toFixed(3)}`);
+});
+
+t('shaping is deterministic and refuses the world outside the jar', () => {
+  const a = fixture('lumpdet', 25), b = clone(a);
+  const mid = (a.N - 1) / 2;
+  for (const s3 of [a, b]) { s3.shape(mid, mid, 1, 0.5); s3.shape(mid + 3, mid + 1, -1, 1); }
+  run(a, 12); run(b, 12);
+  eq(b.fingerprint(), a.fingerprint(), 'two identically shaped worlds drifted');
+  eq(a.shape(-40, -40, 1, 1), false, 'it shaped ground outside the jar');
 });
 
 console.log('save');

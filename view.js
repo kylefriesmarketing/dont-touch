@@ -375,6 +375,7 @@ export class View {
     this.pickMesh = new THREE.Mesh(pgeo, new THREE.MeshBasicMaterial());
     this.pickMesh.visible = false;
     this.jar.add(this.pickMesh);
+    this._groundSUB = SUB; this._groundM = M;
 
     // the evidence layer: every touch presses the flocking flat, forever (§15.3)
     this.fpGrid = new Float32Array(N * N);
@@ -1071,6 +1072,8 @@ export class View {
     // the window and the month, so a constant can only ever be right for one of
     // them. This is the same number _thermal relaxes toward, plus a margin.
     const warmFloor = s.ambient + s.daylight * C.SUN_GAIN + 3;
+    // hoisted: a property lookup per cell over 9,216 cells, every frame, adds up
+    const RD = s.world && s.world.road ? s.world.road : null;
     for (let y = 0; y < N; y++) {
       for (let x = 0; x < N; x++) {
         const i = y * N + x;
@@ -1134,6 +1137,14 @@ export class View {
         // the finger's mark: scorch, then heat glow
         if (T > 40) { const h = Math.min(1, (T - 40) / 45); r += h * 150; g += h * 46; b -= h * 20; }
         if (T < 8) { const c2 = Math.min(1, (8 - T) / 18); r += c2 * 20; g += c2 * 34; b += c2 * 62; }
+        // ⚠️ THE REAL STREETS, PAINTED ON. When this board is a model of a real
+        // place, `world.road` is where OpenStreetMap says the roads actually
+        // run. They are painted into the albedo rather than simulated: nothing
+        // in the game walks on a road, and a model railway layout has its roads
+        // PAINTED ON TOO. It costs one array read per cell and it is the single
+        // strongest cue that this is somewhere rather than anywhere.
+        // Under water it is skipped -- a road does not show through a lake.
+        if (RD && RD[i] && w <= 0.002) { r = r * 0.55 + 118 * 0.45; g = g * 0.55 + 108 * 0.45; b = b * 0.55 + 96 * 0.45; }
         // water darkens and cools the ground beneath it
         if (w > 0.002) { const a = Math.min(1, w * 7); r = r * (1 - a) + 18 * a; g = g * (1 - a) + 34 * a; b = b * (1 - a) + 44 * a; }
 
@@ -2367,6 +2378,42 @@ export class View {
   }
 
   // Nearest kin to a screen position, within a radius, or -1.
+  // ⚠️⚠️ RESHAPE ONLY THE RECTANGLE THAT MOVED. The display terrain is a
+  // 191×191 grid — ~72k vertices and ~110k triangles — so rebuilding it on
+  // every frame of a held press would cost more than the rest of the renderer
+  // put together. A press is 3*S cells across, so it touches on the order of a
+  // hundred vertices; walking only those, then recomputing normals, keeps a
+  // continuous press cheap.
+  // ⚠️ BOTH MESHES. `pickMesh` is the low-res raycast target, and if it is not
+  // patched too then the ground you can SEE and the ground the pointer HITS
+  // drift apart — you would aim at a hill and the game would put the crumb
+  // where the flat used to be.
+  reshapeGround(cx, cy, r) {
+    if (!this.ground) return;
+    const N = this.sim.N, SUB = this._groundSUB, M = this._groundM;
+    const pad = r + 1.5;
+    const pos = this.ground.geometry.attributes.position;
+    const gx0 = Math.max(0, Math.floor((cx - pad) * SUB)), gx1 = Math.min(M - 1, Math.ceil((cx + pad) * SUB));
+    const gy0 = Math.max(0, Math.floor((cy - pad) * SUB)), gy1 = Math.min(M - 1, Math.ceil((cy + pad) * SUB));
+    for (let gy = gy0; gy <= gy1; gy++) for (let gx = gx0; gx <= gx1; gx++) {
+      pos.setY(gy * M + gx, this._heightAt(gx / SUB, gy / SUB));
+    }
+    pos.needsUpdate = true;
+    // normals are what make a new hill catch the light instead of reading as a
+    // flat smear of the old shading
+    this.ground.geometry.computeVertexNormals();
+    this.ground.geometry.attributes.normal.needsUpdate = true;
+
+    const ppos = this.pickMesh.geometry.attributes.position;
+    const px0 = Math.max(0, Math.floor(cx - pad)), px1 = Math.min(N - 1, Math.ceil(cx + pad));
+    const py0 = Math.max(0, Math.floor(cy - pad)), py1 = Math.min(N - 1, Math.ceil(cy + pad));
+    for (let y = py0; y <= py1; y++) for (let x = px0; x <= px1; x++) {
+      ppos.setY(y * N + x, this._surfaceY(x, y));
+    }
+    ppos.needsUpdate = true;
+    this.pickMesh.geometry.computeBoundingSphere();
+  }
+
   pickKin(nx, ny) {
     const cam = this.camera;
     let best = -1, bd = 0.05;

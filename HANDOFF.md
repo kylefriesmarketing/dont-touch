@@ -934,4 +934,172 @@ answer a touch — without ever saying "you".
 
 ---
 
+## v0.8 — DAD'S CORNER, and two systems that were written and never read
+
+### 1. ⛰️ THE PLAYER CAN CHANGE THE SHAPE OF THE WORLD
+
+`this.height` was written **once**, in `_genWorld`, and never again. It is the
+only field in this world that does not decay — temp runs back to ambient, water
+evaporates, moss regrows, memory fades — and the player could not touch a cell
+of it. Every verb they had was weather. That is the mechanical statement of
+"the map doesn't feel real": **you could not change the map.**
+
+`shape(x, y, dir, f)` (sim.js) presses a soft Gaussian of ±0.06 over `3*S`,
+clamped to [0, 1.2]. Held, not tapped — `_shape(dt)` in main.js runs it at 12Hz
+at 0.34 of a handful, so a full hill takes ~1.5s of deliberate pressing and a
+drag draws a ridge.
+
+**Nothing downstream needed writing, and that is the whole point:**
+- `_fluids` already re-routes every drop by `H[i] + tilt + W[j]` on the field
+  lane. Measured: dig a hollow beside the pond and it goes **0.028 → 0.209 in
+  60 ticks** (~1.3 real seconds). Carve a 16-cell channel out of the pond and
+  **14 of 16 cells hold water.** Zero new code.
+- `_move` already adds `-gx * slide * sp`, so kin **already** walk downhill — a
+  raised ridge steers a whole town with no pathfinder involved.
+- `eff()`, `pondLevel` and `placeName` all key off it, so a hill you make can
+  become the high ground they name.
+
+**⚠️ THE TRAP, AND HOW IT IS AVOIDED.** `_genWorld` derives the pond, the
+graveyard and the hearth FROM the height. `height` is deliberately not saved —
+it regenerates bit-identically from the seed. So the player's edits live in a
+separate `this.lump` delta which is saved **sparsely** (`[index, delta, …]`) and
+re-applied in `fromJSON` **after** the constructor has run genesis. Get that
+order wrong and a hill somebody raised relocates the graveyard on load.
+⚠️ `shape()` clamps `height` and then records **what actually landed** into
+`lump` (`after - before`), not what was intended — otherwise the two drift and a
+reload silently produces a different world from the one that was saved.
+⚠️ `lump` is folded into `fingerprint()` **by index as well as value**, or two
+towns — one with a hill, one flat — hash EQUAL and the round-trip test passes
+while flattening the only permanent thing in the game.
+
+View: `reshapeGround(cx, cy, r)` patches **only the touched rectangle** of the
+191×191 display mesh (~72k verts) and recomputes normals. ⚠️ It patches
+`pickMesh` too — miss that and the ground you SEE and the ground the pointer
+HITS drift apart.
+
+### 2. 🐛 `k.saw` WAS WRITE-ONLY — the one irreversible act had no consequence
+
+Lifting somebody out of the world and letting go is the only thing here that
+cannot be undone. `_witness` writes a signed memory into every watcher and
+`_daily` **deliberately exempts it from decay** ("the hand is forgotten; the one
+it took is not"). Grep gave **one write, one fingerprint fold, and zero
+readers.** You could take somebody in front of forty witnesses and the town's
+behaviour was byte-for-byte what it would have been.
+
+It now gets exactly the read `k.memV` already has, at the same site and in the
+same shape: a witness holding `saw < -0.35` scales candidate scores within
+`6*S` of `this._lifted`. Measured with a control that wipes `saw` every tick
+(nothing else reads it, so the two runs differ by one bias):
+**the town uses that ground 44.5% less after watching it happen** — 32.5% → 18.0%
+of kin-samples. Nothing tells the player why.
+⚠️ `_lifted` now steers decisions, so it had to join the save and the
+fingerprint. It was written-and-never-read before, so leaving it out cost
+nothing; the moment it is read, a save without it reloads a town that forgave you.
+
+### 3. 🐛 THE BETTER YOU PLAYED, THE LESS INFLUENCE YOU HAD
+
+The crumb scored `deficit(2) * 3.4`, and `deficit` is `(1 - need)²` — so at food
+0.9 a crumb scored **one percent** of its maximum and a well-fed town walked
+straight past it. Every steering tool the player had was keyed to a deficit, so
+the moment the town was thriving there was nothing left to do but watch. That is
+the "it's not fun" complaint stated as an equation.
+
+A small need-independent term now rides along, and it spends an allele that was
+doing almost nothing: `temper: curious` was read in exactly one other place in
+the whole simulation. **Somebody always goes to look at a new thing** — measured
+2,375 goal-11 kin-frames in a fully-fed town — and the curious ones are the ones
+who come, which is the first time hovering two of them shows a reason they differ.
+⚠️ `_decide(id, g)` already receives the genome slice as `g`; do not re-slice it.
+
+⚠️ MEASUREMENT NOTE: the first probe of this read 0 because it dropped the crumb
+80 cells from the crowd, where the `1 + bd * 0.055 / S` divisor kills any score.
+That was a bad test, not a broken feature. Drop it near somebody.
+
+---
+
+## v0.9 — DAD BUILT HIS DIORAMA FROM SOMEWHERE THAT EXISTS
+
+Kyle: *"use home town as reference and OpenStreetMap + a free elevation model
+to improve the map and world"* — after *"the map just doesnt feel real"*.
+
+The board can now be **a model of a real place**. That is what model railroaders
+actually do, and this board has had a rail loop round its edge since the first
+commit, so the fiction was already sitting there.
+
+```
+node tools/bake.mjs --place "Keswick, Cumbria, England" --radius 800 --name keswick
+node tools/bake.mjs --center 44.4759,-73.2121 --radius 900 --name burlington
+```
+
+Then `index.html?world=keswick`. Baked so far: **keswick** (Derwentwater and the
+becks, 121.8m relief), **boulder** (Boulder Creek and the real street grid, 1,893
+buildings), **centralpark** (2,392 water cells), **ithaca**.
+
+### Sources — both free, both key-less, same pair HOMETOWN uses
+| layer | source | licence |
+|---|---|---|
+| water, green, roads, buildings | **OpenStreetMap** via Overpass | ODbL, attribution carried in the world file |
+| elevation | **AWS Terrain Tiles** (terrarium PNG) | public domain-ish |
+
+### The contract, and why it is shaped this way
+- `tools/bake.mjs` is **bake-time only**. `sim.js` still imports nothing: a bake
+  writes `worlds/<name>.json` and the game reads it as plain data.
+- `new Sim({ seed, world })` — `_genWorld` lays the real terrain down instead of
+  value noise, then falls through to **the same `_genLandmarks`** as always. The
+  pond, the graveyard and the hearth are all derived from `height` and do not
+  care where it came from, so a real place gets a real pond in its real lowest
+  ground for free.
+- ⚠️⚠️ **`Sim.fromJSON(o, world)` takes the world as a SECOND ARGUMENT.** Noise
+  terrain regenerates bit-identically from the seed, which is why `height` is not
+  saved. Baked terrain **cannot** — it came off the network. So the save carries
+  only `worldName` and the caller re-loads the file. A save that names a world and
+  is handed none **throws**: the alternative is silently rebuilding the colony on
+  noise with its homes, graves and pond all in the wrong place, which looks like a
+  rendering bug and is actually the world underneath moving.
+
+### ⚠️ Four things measured the hard way
+1. **OSM green is ADDITIVE, never a replacement.** First version made a green cell
+   0.72 moss and everything else 0.10 — and Ithaca baked with **zero green ways**,
+   so the whole board came out at 0.10 and the colony was down to **one survivor
+   by day 60**. Absence of `landuse=grass` means *nobody mapped it*, not that the
+   ground is bare; coverage is good in cities and almost nothing rurally. The
+   natural scatter always runs and OSM adds on top.
+2. **Water is feathered from the bank, not pressed flat.** A flat 0.10 press turns
+   a two-cell river into a walled trench: **nine kin drowned in 60 days** against
+   zero on a generated world. A chamfer distance transform gives a wide lake a deep
+   middle and leaves a stream ankle-deep. Drownings 9 → 1.
+3. **The square lip still goes on.** It is a gameplay number, not scenery — it is
+   what keeps water off the board edge. A real coastline slopes off the edge of the
+   bbox and would drain the whole board without it.
+4. **`fileURLToPath`, not `new URL(...).pathname`.** This project lives in a folder
+   with a space in its name; the naive pathname percent-encodes it, so the first
+   bake created a literal `New%20folder` directory, wrote 99KB into it, and printed
+   *"wrote worlds/ithaca.json"*.
+
+### Does a real place actually run a town?
+Three of four do. 120 unattended days, same seed:
+
+| world | alive | standing | note |
+|---|---|---|---|
+| (generated) | 176 | 56 | the baseline |
+| keswick | 60 | 23 | |
+| centralpark | 51 | 24 | |
+| boulder | 49 | 17 | |
+| **ithaca** | **0** | 6 | rural township, **69 OSM elements**, zero green |
+
+Real places support smaller towns than generated ones — real terrain is more
+constrained. ⚠️ **A sparse rural bbox makes a world that cannot support life.**
+Prefer somewhere with real green and real water in it; check the `osm:` line the
+baker prints before adopting a bake.
+
+### 🐛 And a latent save bug it flushed out
+`this.alive` is a cached aggregate recomputed at the end of every `_kin()` pass —
+but `takeAway()` kills from **outside** the tick, so between a take and the next
+tick the count was one too high. `fingerprint()` folds it, so **a save written in
+that gap restored to a different hash than the town it came from** (caught at 31
+vs 30). That is the harness reporting a desync that was never real. `takeAway`
+now decrements it, by the same rule `_kin` counts with.
+
+---
+
 *Dirty Boy Devs. The jar runs, the tests are green, and nobody has told the player what they were.*

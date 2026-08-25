@@ -260,6 +260,21 @@ export class Sim {
     const N = C.N, n2 = N * N;
     this.N = N;
     this.height = new Float64Array(n2);
+    // ⚠️⚠️ DAD'S CORNER. `height` is the ONLY field in this world that does not
+    // decay — temp runs back to ambient, water evaporates, moss regrows, memory
+    // fades — and until now it was written exactly once, in `_genWorld`, and
+    // never again. Every other verb the player has is weather. This one is
+    // geology, and it is the mechanical answer to "the map doesn't feel real":
+    // you could not change the map.
+    //
+    // `lump` is the player's own delta, kept SEPARATE from the generated ground
+    // for the reason HANDOFF flagged before it was built: `_genWorld` derives
+    // the pond, the graveyard and the hearth FROM the height, so if a reload
+    // re-derived them from a height the player had already dented, a hill you
+    // raised would relocate the graveyard. Genesis reads the base; `lump` goes
+    // on top afterwards, and only `lump` is saved (height regenerates from the
+    // seed for free).
+    this.lump = new Float64Array(n2);
     this.temp = new Float64Array(n2);
     this.tmp2 = new Float64Array(n2);
     this.water = new Float64Array(n2);
@@ -386,6 +401,19 @@ export class Sim {
     this.alive = 0;
     this.wellbeing = 0;
 
+    // ⚠️⚠️ THE BAKED WORLD. When present this is a real place -- its real
+    // elevation from AWS Terrain Tiles and its real water, green and streets
+    // from OpenStreetMap -- and _genWorld lays it down instead of value noise.
+    // Dad built his diorama from somewhere that exists, which is what model
+    // railroaders actually do, and which is why there has always been a rail
+    // loop round the edge of this board.
+    // ⚠️ It is DATA, not a dependency: sim.js still imports nothing. The caller
+    // loads worlds/<name>.json and hands the parsed object in. `worldName` is
+    // the only part that goes in the save, and Sim.fromJSON takes the world
+    // back as its second argument -- see the note there for why it cannot just
+    // be regenerated from the seed like the noise terrain is.
+    this.world = opts.world || null;
+    this.worldName = this.world ? this.world.name : null;
     this._genWorld();
     // ⚠️⚠️ `||` MEANT `founders: 0` SPAWNED FOURTEEN. Sim.fromJSON restores into
     // `new Sim({seed, founders: 0})`, so every load ran a full phantom founding
@@ -400,6 +428,30 @@ export class Sim {
   // -- world -----------------------------------------------------------------
   _genWorld() {
     const N = this.N, s = this.seed;
+    const W = this.world;
+    // ⚠️ The baked path fills height/temp/moist and then falls through to the
+    // SAME pond, graveyard and hearth derivation below -- those read `height`
+    // and do not care where it came from, so a real place gets a real pond in
+    // its real lowest ground for free.
+    if (W && W.height && W.height.length === N * N) {
+      for (let i = 0; i < N * N; i++) {
+        this.height[i] = W.height[i] / 4096;
+        this.temp[i] = C.AMBIENT_BASE;
+        this.moist[i] = W.green && W.green[i] ? 0.62 : 0.45;
+      }
+      // ⚠️ THE SQUARE LIP STILL GOES ON. It is not scenery -- the comment on
+      // the noise path calls it a GAMEPLAY number: it is what keeps water off
+      // the board edge and guarantees the pond forms inside the layout rather
+      // than draining into the fascia. A real coastline slopes off the edge of
+      // the bbox and would empty the whole board without it.
+      for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+        const dx = (x - (N - 1) / 2) / (N / 2), dy = (y - (N - 1) / 2) / (N / 2);
+        const m = Math.abs(dx) > Math.abs(dy) ? Math.abs(dx) : Math.abs(dy);
+        if (m > 0.55) this.height[y * N + x] += (m - 0.55) * 0.62;
+      }
+      this._genLandmarks(true);
+      return;
+    }
     for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
       const i = y * N + x;
       let h = 0, amp = 1, f = 1 / (22 * S), tot = 0;
@@ -426,6 +478,20 @@ export class Sim {
       this.temp[i] = C.AMBIENT_BASE;
       this.moist[i] = 0.45;
     }
+    this._genLandmarks(false);
+  }
+
+  // ⚠⚠ SHARED BY BOTH WORLDS, AND THAT IS THE POINT. The pond, the graveyard
+  // and the hearth are all derived from `height` and none of them care where
+  // the height came from -- so a baked real place gets its pond in its real
+  // lowest ground, its graveyard on a real shelf, and its founders on real dry
+  // land within reach of real water, using the code that has always done it.
+  // `fromBake` only decides where the MOSS comes from: a generated world seeds
+  // it from the same value noise as its terrain, a real one seeds it from what
+  // OpenStreetMap says is actually green there.
+  _genLandmarks(fromBake) {
+    const N = this.N, s = this.seed;
+    const W = this.world;
     // pond: flood the basin until ~11% of the floor is under water
     let lo = 1e9, li = 0;
     for (let i = 0; i < N * N; i++) if (this.height[i] < lo) { lo = this.height[i]; li = i; }
@@ -437,10 +503,34 @@ export class Sim {
       this.water[i] = level - this.height[i];
       px += i % N; py += (i / N) | 0; pn++;
     }
+    // ⚠️ OSM OUTRANKS THE FLOOD FILL. The 11%-of-the-floor rule invents a pond
+    // for a world that has none; a real place already has real lakes and rivers,
+    // and the baker has already pressed them into the terrain so they sit in a
+    // real basin. Adding them here means a river that is only two cells wide
+    // still exists even though the flood level never reached it.
+    if (fromBake && W && W.water) {
+      for (let i = 0; i < N * N; i++) {
+        if (!W.water[i]) continue;
+        if (this.water[i] < 0.05) this.water[i] = 0.05;
+        px += i % N; py += (i / N) | 0; pn++;
+      }
+    }
     this.pond = pn ? { x: (px / pn) | 0, y: (py / pn) | 0 } : { x: li % N, y: (li / N) | 0 };
     for (let i = 0; i < N * N; i++) {
       const wet = this.water[i] > 0.001 ? 0 : 1;
-      this.moss[i] = wet * Math.max(0, vnoise((i % N) * 0.09 / S, ((i / N) | 0) * 0.09 / S, s + 13) * 1.3 - 0.32);
+      // ⚠️⚠️ OSM GREEN IS ADDITIVE, NOT A REPLACEMENT, AND THAT IS A DATA-HONESTY
+      // RULE. The first version used the mask as the whole answer -- green cell
+      // 0.72, everything else 0.10 -- and Ithaca baked with ZERO green ways in
+      // its bbox, so the entire board came out at 0.10 moss and the colony was
+      // down to ONE survivor by day 60. Absence of landuse=grass in OSM means
+      // NOBODY HAS MAPPED IT, not that the ground is bare; green coverage is
+      // good in cities and almost nothing in the countryside.
+      // So the natural scatter always runs, and what OSM actually knows about
+      // is added on top: a real park is genuinely lush, an unmapped field is
+      // still a field.
+      let base = Math.max(0, vnoise((i % N) * 0.09 / S, ((i / N) | 0) * 0.09 / S, s + 13) * 1.3 - 0.32);
+      if (fromBake && W && W.green && W.green[i]) base = Math.min(1, base + 0.55);
+      this.moss[i] = wet * base;
     }
     // graveyard: a flat shelf away from the pond, chosen once, named by them later
     let best = -1, bs = -1e9;
@@ -1373,7 +1463,25 @@ export class Sim {
       // it outscores grazing when they are hungry and it is close, and loses to
       // moss underfoot when it is halfway across the board — which is what makes
       // it a place worth walking to rather than a button that feeds everybody.
-      if (bg) push(11, bg.x, bg.y, deficit(2) * 3.4 / (1 + bd * 0.055 / S));
+      // ⚠️⚠️ SOMEBODY ALWAYS GOES TO LOOK AT A NEW THING. This score used to be
+      // `deficit(2) * 3.4` alone, and `deficit` is (1 − need)² — so at food 0.9
+      // a crumb scored ONE PERCENT of its maximum and a well-fed town walked
+      // straight past it. Every steering tool the player had was keyed to a
+      // DEFICIT, which means the better you played the less influence you had:
+      // the moment the town was thriving there was nothing left to do but
+      // watch. That is the "it's not fun" complaint stated as an equation.
+      // A small need-independent term fixes it, and it spends an allele that
+      // has been sitting in the genome doing almost nothing — `temper: curious`
+      // is read in exactly one other place in the whole simulation. Now the
+      // curious ones are the ones who come and look, which is also the first
+      // time a player can hover two toys and see a reason they differ.
+      // ⚠️ `g` is already this kin's genome slice — _decide takes it as its
+      // second argument and reads L.hide from it below. Re-slicing it here
+      // would cost a subarray on every decision for nothing.
+      if (bg) {
+        const nosy = expressed(g, L.temper) === 'curious' ? 0.55 : 0.12;
+        push(11, bg.x, bg.y, (deficit(2) * 3.4 + nosy) / (1 + bd * 0.055 / S));
+      }
     }
 
     // water: the pond, or the nearest wet cell
@@ -1547,6 +1655,28 @@ export class Sim {
       }
       // a place that was kind to them is somewhere to go back to
       if (mv > 0.4) cand.push({ goal: 3, tx: mx, ty: my, score: deficit(0) * mv * 1.7 });
+    }
+
+    // ⚠️⚠️ THE GROUND WHERE SOMEBODY WAS TAKEN. `k.saw` is the town's memory of
+    // watching a person be lifted out of the world and not come back — the one
+    // irreversible thing the player can do, deliberately EXEMPT from the daily
+    // decay that fades everything else ("the hand is forgotten; the one it took
+    // is not"). It has been written since the take shipped and READ BY NOTHING:
+    // grep gave one write, one fingerprint fold, and zero consumers. You could
+    // take somebody in front of forty witnesses and the town's behaviour was
+    // byte-for-byte what it would have been.
+    // It gets exactly the read memV already has, at the same site and with the
+    // same shape. What a player eventually notices is that the town has stopped
+    // walking over the place where it happened, and that the paths grew back —
+    // and nothing ever told them why. That is P2 working, not P3 breaking.
+    if (this._lifted && k.saw[id] < -0.35) {
+      const lx = this._lifted.x, ly = this._lifted.y, LR = 6 * S;
+      const shun = Math.max(0.25, 1 + k.saw[id] * 0.35);
+      for (const c of cand) {
+        const ddx = c.tx - lx, ddy = c.ty - ly;
+        if (ddx * ddx + ddy * ddy > LR * LR) continue;
+        c.score *= shun;
+      }
     }
 
     if (!cand.length) {
@@ -2217,6 +2347,51 @@ export class Sim {
 
   // —— THE SEED ————————————————————————————————————
   //
+  // —— DAD'S CORNER ————————————————————————————————————————————————
+  //
+  // Push a thumb into the world and leave it changed. `dir` is +1 for a rise
+  // and −1 for a hollow; `f` is 0..1 of a full handful, so a held press builds
+  // the shape up instead of stamping it, and a tap barely marks the ground.
+  //
+  // ⚠️ NOTHING DOWNSTREAM NEEDS WRITING — that is the whole reason this verb is
+  // worth its weight, and it is why it belongs in the simulation rather than
+  // the view. It is all already there and already reading `height`:
+  //   `_fluids` re-routes every drop by `H[i] + tilt + W[j]` on the field lane,
+  //     so a hollow fills and a ridge sheds water within a fraction of a second;
+  //   `_move` already adds `-gx * slide * sp`, so kin ALREADY walk downhill and
+  //     a raised ridge steers a whole town with no pathfinder involved;
+  //   `eff()`, `pondLevel` and `placeName` all key off it, so a hill you make
+  //     can literally become the high ground they name.
+  // The player makes terrain and the world answers with systems that shipped
+  // years of sessions ago.
+  shape(x, y, dir, f = 1) {
+    if (!this.inJar(x, y)) return false;
+    const N = this.N, R = 3 * S;
+    const amp = 0.06 * f * (dir < 0 ? -1 : 1);
+    const x0 = Math.max(0, Math.ceil(x - R)), x1 = Math.min(N - 1, (x + R) | 0);
+    const y0 = Math.max(0, Math.ceil(y - R)), y1 = Math.min(N - 1, (y + R) | 0);
+    let moved = 0;
+    for (let yy = y0; yy <= y1; yy++) for (let xx = x0; xx <= x1; xx++) {
+      const dx = xx - x, dy = yy - y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 > R * R) continue;
+      // a soft shoulder, so what you make is a landform and not a pillar
+      const g = 1 - Math.sqrt(d2) / R;
+      const i = yy * N + xx;
+      const before = this.height[i];
+      // ⚠️ CLAMP THE HEIGHT, THEN RECORD WHAT ACTUALLY LANDED. Adding the
+      // intended amount to `lump` and the clamped amount to `height` lets the
+      // two drift apart, and then a reload — which rebuilds height as base+lump
+      // — quietly produces a different world from the one that was saved.
+      const after = Math.max(0, Math.min(1.2, before + amp * g * g));
+      this.height[i] = after;
+      this.lump[i] += after - before;
+      moved += Math.abs(after - before);
+    }
+    if (moved > 0.0001) this._shaped = (this._shaped || 0) + moved;
+    return moved > 0.0001;
+  }
+
   // A crumb is a meal. A seed is a FIELD — you press it into the ground and
   // the moss comes back thicker there for a season. The crumb answers today;
   // this answers the year, and it is the only power that makes the board
@@ -2436,6 +2611,16 @@ export class Sim {
     this.held = null;
     if (!this.k.alive[id]) return false;
     this._die(id, 'taken', true);
+    // ⚠⚠ `alive` IS A CACHED AGGREGATE AND THIS IS THE ONE KILL THAT HAPPENS
+    // OUTSIDE THE TICK. Every other death runs inside _kin(), which recomputes
+    // the count at the end of the same pass -- but the player can take somebody
+    // between ticks, and until the next tick `this.alive` was one too high.
+    // That matters because fingerprint() folds it: a save written in that gap
+    // restored to a DIFFERENT hash than the town it came from (caught by the
+    // round-trip test at 31 vs 30), which is the harness reporting a desync
+    // that was never real. Same rule as _kin's own count -- every live slot,
+    // eggs included -- so one fewer is exactly right.
+    if (this.alive > 0) this.alive--;
     return true;
   }
 
@@ -2528,7 +2713,17 @@ export class Sim {
     for (const p of this.prac) { mix(p.invented); mix(p.lost); mix(p.tradition); mix(p.reinvented); }
     for (const key of Object.keys(this.placeNames).sort()) mix(key.length + this.placeNames[key].length);
     mix(this.humid); mix(this.rainLeft); mix(this.curtain); mix(this.lid ? 1 : 0); mix(this.lampOn ? 1 : 0);
+    // ⚠️ THE SHAPED GROUND HAS TO BE IN HERE. `height` is not saved and the
+    // harness compares two towns by this number, so without folding the
+    // player's own terrain a save that had a hill in it and one that did not
+    // would hash EQUAL — and the round-trip test would cheerfully pass while
+    // silently flattening the one thing in this world that never decays.
+    // Folded by INDEX as well as value so the same lump in the wrong place
+    // cannot cancel out.
+    for (let i = 0; i < this.lump.length; i++) if (this.lump[i] !== 0) { mix(i); mix(this.lump[i]); }
     mix(this.held ? this.held.id + 1 : 0);
+    // the shunned ground, now that it changes where they will walk
+    mix(this._lifted ? this._lifted.x + 1 : 0); mix(this._lifted ? this._lifted.y + 1 : 0);
     mix(this.gifts.length);
     for (const gf of this.gifts) { mix(gf.x); mix(gf.y); mix(gf.mass); mix(gf.day); }
     for (let id = 0; id < this.count; id++) {
@@ -2558,11 +2753,30 @@ export class Sim {
       // reloads standing wherever it was picked up, quietly undoing the one
       // irreversible act in the game.
       held: this.held,
+      // ⚠️ NOW THAT `_lifted` STEERS DECISIONS it has to travel. It was written
+      // by lift() and read by nothing, so leaving it out cost nothing; the
+      // moment the shunned-ground bias above reads it, a save that dropped it
+      // would reload a town that had forgiven you.
+      lifted: this._lifted || null,
+      // ⚠️ only the NAME. The baked terrain is tens of thousands of numbers and
+      // it never changes -- everything the player did to the ground is in `lump`.
+      // The loader re-fetches worlds/<name>.json and hands it to fromJSON.
+      worldName: this.worldName || null,
       gifts: this.gifts,
       humid: this.humid, rainLeft: this.rainLeft, fog: this.fog,
       // ⚠️ NO height HERE ON PURPOSE — it is regenerated bit-identically from
       // the seed by fromJSON's own constructor call, and at N=96 a redundant
       // copy is ~170KB written every 25 seconds for nothing.
+      // ⚠️ But the player's OWN ground has to travel, or every hill they ever
+      // made vanishes on reload. `lump` is almost entirely zeros, so it goes as
+      // a sparse [index, delta, index, delta, …] pair list — a town that has
+      // never been shaped costs one empty array, and a heavily worked board is
+      // still a fraction of a dense copy.
+      lump: (() => {
+        const out = [];
+        for (let i = 0; i < this.lump.length; i++) if (this.lump[i] !== 0) out.push(i, this.lump[i]);
+        return out;
+      })(),
       fields: {
         temp: Array.from(this.temp), water: Array.from(this.water),
         moss: Array.from(this.moss), moist: Array.from(this.moist),
@@ -2588,8 +2802,24 @@ export class Sim {
     };
   }
 
-  static fromJSON(o) {
-    const s = new Sim({ seed: o.seed, founders: 0 });
+  // ⚠⚠ `world` IS A SECOND ARGUMENT, NOT A FIELD OF THE SAVE, and it has to be.
+  // The noise terrain regenerates bit-identically from the seed, which is why
+  // `height` is not stored. A BAKED terrain cannot: it came off the network from
+  // OpenStreetMap and AWS, and reproducing it would mean re-baking. So the save
+  // carries `worldName` and the CALLER re-loads the world file and passes it in.
+  // ⚠️ Callers that pass nothing keep the old behaviour exactly -- every existing
+  // test and every generated-world save is unaffected.
+  // ⚠️ If a save names a world and the caller does not supply it, we do NOT
+  // silently fall back to noise: that would restore a colony onto a completely
+  // different landscape, with its homes, graves and pond all in the wrong place.
+  static fromJSON(o, world = null) {
+    // ⚠️ THE WORLD MUST BE PRESENT BEFORE THE CONSTRUCTOR RUNS, because the
+    // constructor is what calls _genWorld -- pass it late and the colony is laid
+    // onto noise and then told it lives somewhere else.
+    if (o.worldName && !world) {
+      throw new Error('this colony lives in "' + o.worldName + '" — load worlds/' + o.worldName + '.json and pass it to fromJSON');
+    }
+    const s = new Sim({ seed: o.seed, founders: 0, world });
     // refuse a save from a differently-shaped world rather than lay it into
     // this one — boot() catches this, keeps the blob, and starts fresh
     const want = s.N * s.N;
@@ -2628,6 +2858,7 @@ export class Sim {
     s.chronicle = o.chronicle; s.curtain = o.curtain; s.lampOn = o.lampOn;
     s.lid = o.lid; s.humid = o.humid; s.rainLeft = o.rainLeft; s.fog = o.fog || 0;
     s.held = o.held || null;
+    s._lifted = o.lifted || null;
     s.gifts = o.gifts || [];
     s.ambientBase = o.ambientBase != null ? o.ambientBase : C.AMBIENT_BASE;
     s.pond = o.pond; s.yard = o.yard; s.hearth = o.hearth || o.yard; s.lang = o.lang;
@@ -2648,6 +2879,20 @@ export class Sim {
     // older saves carry height; newer ones do not, and either is fine
     for (const key of ['height', 'temp', 'water', 'moss', 'moist', 'worn']) {
       if (o.fields[key]) s[key].set(o.fields[key]);
+    }
+    // ⚠️ THE PLAYER'S GROUND GOES BACK ON AFTER GENESIS, NEVER BEFORE IT. The
+    // constructor has already run `_genWorld`, which derived the pond, the
+    // graveyard and the hearth from the UNSHAPED height — which is exactly
+    // right, because those are the same landmarks the save carries and they
+    // must not move because somebody built a hill near them. Only now do we
+    // put the hill back.
+    // ⚠️ And it is added to `height`, not assigned: `height` already holds the
+    // regenerated base, and `lump` is the delta from it.
+    if (o.lump && o.lump.length) {
+      for (let q = 0; q < o.lump.length; q += 2) {
+        const i = o.lump[q], d = o.lump[q + 1];
+        if (i >= 0 && i < s.lump.length) { s.lump[i] = d; s.height[i] += d; }
+      }
     }
     for (const key of Object.keys(s.k)) if (o.k[key]) s.k[key].set(o.k[key]);
     // ⚠️ MANDATORY for the home array: a save from before homes has no k.home,
