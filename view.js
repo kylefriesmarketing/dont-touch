@@ -680,6 +680,73 @@ export class View {
       g.add(rf);
       g.add(chimney((rnd() - 0.5) * w * 0.5, (rnd() - 0.5) * d * 0.5, wh + 0.030, 0.008));
 
+    } else if (o.kind === 6) {                           // THE FIELD
+      // ⚠ A FIELD IS GROUND, NOT A BUILDING. It has to read as worked earth
+      // from the default camera without becoming another roof in the skyline —
+      // the whole silhouette rule works the other way here. Furrows, a low
+      // fence, and a leaning stake somebody put there.
+      const w = 0.090, d = 0.070;
+      const bed = new THREE.Mesh(new THREE.BoxGeometry(w, 0.004, d), M.cut);
+      bed.position.y = 0.002; g.add(bed);
+      const rows = 5;
+      for (let r = 0; r < rows; r++) {
+        const fz = (r / (rows - 1) - 0.5) * d * 0.82;
+        const fur = new THREE.Mesh(new THREE.BoxGeometry(w * 0.88, 0.005, d * 0.055), M.stack);
+        fur.position.set(0, 0.006, fz); g.add(fur);
+      }
+      // a rail fence on the two long sides
+      for (const sz of [-1, 1]) {
+        const rail = new THREE.Mesh(new THREE.BoxGeometry(w * 0.98, 0.003, 0.003), M.timber);
+        rail.position.set(0, 0.011, sz * d * 0.5); g.add(rail);
+        for (const sx of [-0.42, 0, 0.42]) {
+          const post = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.016, 0.004), M.timber);
+          post.position.set(sx * w, 0.008, sz * d * 0.5); g.add(post);
+        }
+      }
+      // the stake, leaning, because nobody ever drives one straight
+      const stake = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.034, 0.004), M.timber);
+      stake.position.set((rnd() - 0.5) * w * 0.5, 0.017, (rnd() - 0.5) * d * 0.4);
+      stake.rotation.z = (rnd() - 0.5) * 0.4; g.add(stake);
+
+    } else if (o.kind === 7) {                           // THE WELL
+      const r = 0.019;
+      const ring = new THREE.Mesh(new THREE.CylinderGeometry(r, r * 1.08, 0.020, 10), M.stone);
+      ring.position.y = 0.010; g.add(ring);
+      // the dark of it — a plain disc, so it reads as a hole and not a drum
+      const mouth = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.74, r * 0.74, 0.002, 10), M.cut);
+      mouth.position.y = 0.021; g.add(mouth);
+      for (const sx of [-1, 1]) {
+        const post = new THREE.Mesh(new THREE.BoxGeometry(0.005, 0.040, 0.005), M.timber);
+        post.position.set(sx * r * 0.86, 0.040, 0); g.add(post);
+      }
+      const rf = roof(r * 2.5, r * 2.0, 0.016, pick([M.tile, M.slate, M.thatch]));
+      rf.position.y = 0.060; g.add(rf);
+      // the winding bar between the posts
+      const bar = new THREE.Mesh(new THREE.BoxGeometry(r * 1.9, 0.003, 0.003), M.timber);
+      bar.position.y = 0.052; g.add(bar);
+
+    } else if (o.kind === 8) {                           // THE GRANARY
+      // the biggest thing a town builds that is not the hall, and it should
+      // look like the town has something worth keeping
+      const w = 0.086, d = 0.062, wh = 0.050;
+      // staddle stones — a granary stands off the ground or the winter gets in
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+        const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.008, 0.012, 6), M.stone);
+        leg.position.set(sx * w * 0.38, 0.006, sz * d * 0.34); g.add(leg);
+      }
+      const body = new THREE.Mesh(new THREE.BoxGeometry(w, wh, d), M.timber);
+      body.position.y = 0.012 + wh / 2; g.add(body);
+      // plank banding, so it is not a smooth crate
+      for (const fy of [0.30, 0.62]) {
+        const band = new THREE.Mesh(new THREE.BoxGeometry(w * 1.01, 0.004, d * 1.01), M.plasterB);
+        band.position.y = 0.012 + wh * fy; g.add(band);
+      }
+      const rf = roof(w * 1.16, d * 1.20, 0.030, pick([M.thatch, M.tile]));
+      rf.position.y = 0.012 + wh; g.add(rf);
+      // the loading step
+      const step = new THREE.Mesh(new THREE.BoxGeometry(w * 0.30, 0.008, 0.010), M.stone);
+      step.position.set(0, 0.004, d * 0.52); g.add(step);
+
     } else {                                             // THE HALL
       const w = 0.115, d = 0.075, wh = 0.048;
       const body = new THREE.Mesh(new THREE.BoxGeometry(w, wh, d), M.plasterA);
@@ -2130,12 +2197,18 @@ export class View {
             sc = new THREE.Vector3(1, 1, 1), e = new THREE.Euler();
       let n = 0;
       for (const [o, g] of this.workViews) {
-        if (o.kind < 3 || o.prog < 0.98 || n >= 158) continue;
+        // ⚠ A FIELD AND A WELL HAVE NO WINDOWS. This was `o.kind < 3`, and the
+        // trailing `else` below hands out the HALL's three-window row — so the
+        // moment the farming age shipped, every field on the board lit three
+        // windows in mid-air at night and every well lit three more.
+        if (o.kind < 3 || o.kind === 6 || o.kind === 7 || o.prog < 0.98 || n >= 158) continue;
         // ⚠️ OUTSIDE the deepest wall, or the quad sits inside the box and the
         // depth test hides it — 7 windows rendered invisible on the first pass
         // because a house body can be 0.062 deep and the quad sat at z 0.023.
         const spots = o.kind === 3 ? [[0, 0.014, 0.036]]
           : o.kind === 4 ? [[-0.014, 0.019, 0.038], [0.014, 0.019, 0.038]]
+          // a granary is a store, not a home: one lamp over the loading step
+          : o.kind === 8 ? [[0, 0.040, 0.033]]
           : [[-0.030, 0.027, 0.048], [0, 0.027, 0.048], [0.030, 0.027, 0.048]];
         for (const [lx, ly, lz] of spots) {
           // group-local offset through the group's own yaw, or windows float

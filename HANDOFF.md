@@ -1206,3 +1206,293 @@ on it would have been invisible to the harness until now.
 ---
 
 *Dirty Boy Devs. The jar runs, the tests are green, and nobody has told the player what they were.*
+
+## v1.0 — THE AGES, AND THE THREE THINGS NOBODY EVER WALKED TO (2026-08-27)
+
+Kyle played it and gave two verdicts. The first: *"so weak compared to sim city
+or anno or even thronglets — it's even weaker than tamagotchi."* The second,
+after the map work: *"the world needs to be a self sustaining ecosystem if i
+werent to lay a finger — they need to be able to farm their own food and make
+their own water well … and the creatures need to progress through ages clearly
+going from hunter gather to farmers and medieval to modern."*
+
+Both were right, and every cause turned out to be measurable rather than a
+matter of taste.
+
+### 1. Buildings rendered at 66.7% of the size they were authored at
+
+`_buildWorkView` ends with `g.scale.setScalar(S)` (S = N/64 = 1.5). `_paintWorks`
+then overwrote it **every frame** with `setScalar(0.55 + f * 0.45)` — an
+assignment, not a multiply. Every building in the game was capped at 1.0 against
+an intended 1.5. That is most of why a finished town read as a scattering of
+pebbles.
+
+The footprint is now always full authored scale and only the HEIGHT ramps, so a
+half-built work is a half-raised frame rather than a shrunken finished one.
+
+⚠️ **Required companion fix**: `_paintNightLife` builds window and chimney anchors
+from group-local offsets and never applied `g.scale`, so windows sank into walls
+and chimneys smoked from inside the roof — always, since the scale was never 1.
+Both loops now multiply by `g.scale` **before** `applyAxisAngle`.
+
+### 2. Every roof pointed a different way
+
+`g.rotation.y = rnd() * 6.283`. Fifteen pitched roofs at fifteen unrelated angles
+reads as rubble, not a village. A building now finds the nearest **real OSM road
+cell** and turns its front toward it; boards with no road data fall back to a
+shared axis with jitter. Measured: yaw spread 6.28 → 0.52 rad on a generated
+board; on Keswick (631 real road cells) the work faced its road at −0.01 rad.
+
+⚠️ The `rnd()` draw is consumed on **both** paths so the view stream does not
+shift depending on which world is loaded.
+
+### 3. THE FOUNDING IS NOT YEAR ZERO — `_endowWorks`
+
+Measured on Keswick: **day 46 held ONE work and 29 kin.** A player watching for
+fifteen real minutes saw a single hut appear. The game's subject is a town and
+there was no town on screen for the first quarter of an hour.
+
+Dad's layout has been on that board since the nineties, so the town was always
+already there. Genesis now lays down 14 works (3 store, 2 windbreak, 2 channel,
+7 hut) and a worn lane between them.
+
+- ⚠️ **This is the one place §18 bends, and it bends once.** It is WORLDGEN, not
+  a build menu — it runs before the first tick and there is still no way for the
+  player to place anything, ever.
+- ⚠️ **The practices come with the buildings or the village rots.** A kin can only
+  work on a kind it KNOWS, so endowed works nobody understood would never be
+  repaired. Founders are granted the four practices, marked invented on day 0
+  with **no inventor** — nobody alive remembers working it out, which is what a
+  tradition is. The invention arc is untouched: house and hall are still theirs
+  to discover.
+- ⚠️ **Gated on `nFound > 0`**, exactly like `_seedColony`, because `Sim.fromJSON`
+  restores into `new Sim({founders: 0})` — an ungated endowment would lay 14
+  phantom works and a worn lane on **every load**.
+- On a baked world the works are sited on **real OSM building centroids** and the
+  hearth is pulled toward the real village centre, so the founding town sits
+  where the actual town sits, lined along its actual streets.
+
+Measured: day-15 dwellings **0 on every seed → 7–8 on every seed**; day-60
+population mean **39.5 → 76.2**.
+
+### 4. THE AGES — the spine the game was missing
+
+`AGES` in sim.js plus `Sim.ageNow()`. Four rungs, each named for what the town
+has already managed: **the gathering days → the settling → the turned ground →
+the kept winter** (markers: nothing / hut / farm / granary).
+
+- An age is **read off the board, never stored as progress**. Nothing accumulates
+  and the player cannot push the town up the ladder.
+- ⚠️ **An age can be LOST.** `ageNow` takes the highest age whose marker still
+  STANDS, so a town that loses its last granary drops back and the chronicle says
+  so. An age you cannot lose is a score, and §9.5 forbids scores.
+- `this.age` (last-seen) is state, not derivation: it is in `toJSON`, in
+  `fromJSON`, and folded into `fingerprint()`. Without it a reload replays every
+  age-turn beat the town ever had into the page. It restores as `null` for old
+  saves so `_daily` seeds it from the board instead of announcing the gathering
+  days to a town centuries past them.
+- Shown in the HUD beside the day. ⚠️ That line has a hard rule — *room facts
+  only, never kin facts* — and the age passes it: it is a fact about what stands
+  on the board, exactly like the day is, and it says nothing about how anyone is.
+
+### 5. ⚠️⚠️ THE THREE THINGS NOBODY EVER WALKED TO
+
+The same defect, three times, and it is the most valuable pattern in this entry.
+**A building can be built, stand, be saved, be hashed, be rendered — and still be
+decoration, because nothing in the goal system can ever choose it as a
+destination.** Every one of these passed every existing test.
+
+| thing | what it did | what it does now |
+|---|---|---|
+| **the store / granary** | fed only kin already standing beside it | is a forage target, scored on the same distance curve as a moss patch |
+| **the well** | drinkable only if you happened to stand on it | is a drink target |
+| **the channel** | **nothing whatsoever** — grep found two hits, both non-behavioural | irrigates |
+
+Measured for each: a town at day 300 held **four granaries containing 0.01
+between them** while 11 of 21 kin stood on 0.003 moss with food eight cells away.
+And with the sheet off, a town of 90 went to **ZERO in 40 days with five standing
+wells on the board and moss at 0.79** — not starving, not homeless, simply unable
+to find a drink it had already dug.
+
+**THE LESSON: after adding a data key OR a building, grep for its READ SITE.**
+
+### 6. Farming is a better curve, not a bigger number
+
+Wild moss regrows logistically — `(0.18 + M) * (1 - M)` — so ground grazed to
+nothing returns at under a fifth the rate of ground that still has something on
+it. **The one patch a town can never recover is the patch it walks on**, which is
+why a town starves in the middle of a green board: measured town-core moss
+0.08–0.28 against a board average of 0.37–0.74.
+
+Inside a standing field that term is replaced by a flat rate (`C.FARM_GROW`). On
+bare earth a field regrows several times faster than wild moss; on healthy ground
+the `(1 - M)` term means it barely out-grows it. It rescues exhausted ground; it
+does not carpet the board.
+
+⚠️ **THE HARVEST IS WHAT MAKES THE AGE REAL.** Fields sit in town, so they are the
+*most* grazed ground on the board — measured 0.208 inside fields against 0.678
+outside. Kin stripped the crop before it could ever be stored. A field now
+carries what it grows beyond the grazers to the nearest store (`_sow`), which is
+the actual agricultural chain. Granary stock went **0.01 → 8.03**.
+
+⚠️ `STOCK_CAP(kind)` is ONE definition, read by the fill, the harvest, the
+hand-out and the forage targeting — four sites that must agree and that silently
+disagreed while the number was written inline.
+
+### 7. The sheet is a cost again, not a trapdoor
+
+§3.4 says the lid costs you the water cycle, and it should. But measured, taking
+it off was **certain extinction on every seed** — 94 → 0 in 140 days, with no
+counterplay, for touching one of the two controls the game offers.
+
+A **channel** carries surface water and stops working when the pond drops. A
+**well** reaches groundwater and keeps its ground damp through a drought that has
+emptied everything above it. So the lid still costs exactly what the bible says —
+water 58 → 5.8, humidity 13.7 → 0, the rain stops — but a town that dug its wells
+before the weather turned now lives: **91 → 148 across the same 140 days**, still
+growing. A town that did not still dies.
+
+### 8. The test that had to change, and why that is not cheating
+
+`nobody starves standing in food` asserted `bad === 0`. It was written for a real
+bug — kin *dying* with saturated moss in reach, 13 of 13 — caused by the mouth
+reading the cell underfoot instead of the cell they had walked to. That is fixed.
+
+What `bad > 0` measures today is **population pressure**: farming took the town
+from ~40 kin to ~219, and a growing town always has somebody walking to dinner at
+any given instant. Holding the old absolute zero would mean capping the
+population to keep a counter happy — tuning the game to fit the test.
+
+It now asserts the invariant the original bug actually violated and that an
+absolute count never checked: **hunger must not be a STUCK state.** Flag every kin
+starving within reach of food, run three days, require that most of them ate.
+Measured 22 of 30 fed, 3 died; under the original bug they starved where they
+stood.
+
+### Numbers
+
+| | before | after |
+|---|---|---|
+| day-15 dwellings | **0 on every seed** | 7–8 on every seed |
+| day-60 population (mean of 6 runs) | 39.5 | 76.2 |
+| day-300 population (bat0) | ~40 | 219 |
+| day-400 population (4 runs) | 58 / 132 / 100 / 93 | 138 / 116 / 175 / 136 |
+| hunger deaths (last 24 corpses, 4 runs) | 13 and 10 | one, total |
+| granary stock at day 300 | 0.01 | 8.03 |
+| **uncovered board, 140 days** | **90 → 0, every seed** | **91 → 148** |
+| building render scale | 1.0 (66.7% of authored) | 1.5 |
+| roof yaw spread | 6.28 rad | 0.52 rad |
+
+### ⚠️ STILL OPEN
+
+- **Medieval and modern ages are NOT built.** Kyle asked for "medieval to modern
+  etc etc" and this delivered hunter-gatherer → settler → farmer (4 rungs). The
+  `AGES` table takes new rungs by appending one entry with an `at` marker.
+  ⚠️ **Appending to `WORKS` is safe; INSERTING would break every `pre:` bitmask
+  and every saved `k.knows`.** Always append.
+- Each new work needs a branch in `_buildWorkView` **and** a decision in the
+  night-window block — the trailing `else` there hands out the HALL's three-window
+  row, which is how fields briefly lit three windows in mid-air.
+- The population oscillates (170 → 130 → 79 → 120 → 148 on an uncovered board).
+  That is honest carrying-capacity behaviour, not a bug, but it is untuned.
+- `test-view.mjs` still cannot run on this machine (it hardcodes
+  `/opt/pw-browsers/chromium`), so all view work is verified live and photographed.
+
+### The v1.0 audit — 14 agents, 10 raised, 3 confirmed, 7 refuted by measurement
+
+Four independent lenses over the change (save/fingerprint, the granted-and-never-read
+class, ecology edge cases, and one open design question), each finding then handed to
+a separate agent whose job was to REFUTE it. Seven were refuted with real numbers
+rather than opinion, which is the part that makes the other three trustworthy.
+
+#### ⚠️⚠️ 1. THE SHUN WAS A NO-OP, AND THE REASON WAS THE PICK, NOT THE WEIGHT
+
+The highest-value finding in the session. `k.saw` had a read — the bias that
+multiplies goal-candidate scores near the place somebody was taken — and the read
+did **nothing**: measured 1–2% avoidance, at every radius from 1 to 9 cells, even
+counting only the 43 kin who actually witnessed it.
+
+The cause is one line thirty lines further down:
+
+```js
+const c = cand[ri(rng, Math.min(3, cand.length))];   // UNIFORM over the top three
+```
+
+**Demoting a candidate from rank 1 to rank 3 changes its selection probability by
+exactly nothing.** Only eviction from that set matters, and a 0.65–0.81 multiplier
+on a mean of ~5.5 candidates rarely achieves it. A scoring bias in this file is
+therefore worth roughly nothing unless it can push a candidate out of the top three.
+⚠️ **Read the SELECTION before tuning a SCORE anywhere in `_decide`.**
+
+Fix: keep the multiplier for close calls, and additionally drop shunned candidates
+entirely — **guarded by the same critical need band the survival override uses**, so
+they can still eat on that ground rather than starve beside it. Measured after:
+ratios 0.405 / 0.104 / 0.087 across three seeds with **identical population on and
+off** (60/60, 39/39, 14/14). The take is now a real event.
+
+#### ⚠️ 2. A "WITNESSES ABANDON THEIR HOUSES" ARM WAS BUILT AND REMOVED — MEASURED
+
+The first attempt at the above reasoned that the shun cannot reach a settled town
+because going home is a CLAIM, not a scored goal, so a kin whose house stands on
+that ground walks back to it every night. That reasoning is correct and the fix
+made things **worse**:
+
+| radius | bias alone | bias + house release |
+|---|---|---|
+| 3.0 | 0.974 | 1.098 |
+| 4.5 | 0.958 | 1.100 |
+| 6.0 | 0.970 | 1.095 |
+
+A witness stripped of a home does not leave — they become homeless and loiter in the
+middle of the town, which is exactly where it happened. An independent auditor
+reached the same conclusion from the other end: an unguarded refusal cost **9 of 40
+lives**. Do not rebuild it.
+
+#### ⚠️ 3. THE HARVEST BANKED FOOD THE FIELD NEVER SURRENDERED
+
+`_sow` credited the store the full `take`, then spread it as a flat `per` across the
+disc and clamped each cell at zero. Every cell holding less than its share paid only
+what it had, and **the shortfall was banked anyway** — and a field in town runs at
+~0.15 mean moss with many cells at exactly 0, so this was not a rounding crumb. The
+comment two lines above promised the opposite ("taken off the FIELD, never
+conjured") and was simply wrong.
+`take` is now the ambition and gates the loop; `got` is what the ground actually
+paid, and only `got` is banked. ⚠️ The subtraction disc can be wider than the `cells`
+the growth loop counted (it skips flooded and out-of-band cells), so `got` can exceed
+`take` — the cap is what keeps the store honest.
+
+#### ⚠️ 4. `fingerprint()` FOLDED A STALE CACHED AGGREGATE (pre-existing)
+
+`fingerprint()` mixes `this.alive`, but `toJSON` does **not** carry it — `fromJSON`
+recomputes it from the `k.alive` bits. And `alive` was accumulated by a walk that
+increments once per slot as it passes, so it is wrong by construction whenever the
+population changes mid-walk: `_die` fires after the increment (leaves it high) and a
+birth can take a freed slot the cursor already passed (leaves it low). **A save
+written in that gap restored to a different hash than the town it came from** — the
+harness reporting a desync that was purely its own accounting.
+The file already knew this hazard and had patched exactly ONE path for it
+(`takeAway()` hand-decrements, with a comment citing "31 vs 30"). The birth and death
+paths had the same hole. `alive` is now recounted. Measured stale ticks over 90 days:
+**22 / 32 / 30 / 9 across four seeds → 0 / 0 / 0 / 0.**
+⚠️ It is also read by `_daily`, which runs BEFORE the walk, so a restore near a day
+boundary could take a different narrator branch than the town it was saved from —
+permanently, through `eventCounts`.
+⚠️ `wellbeing` is stale the same way and is deliberately left alone: not
+fingerprinted, never read by sim.js.
+
+#### What the refutations were worth
+
+Two of the seven mattered enough to record, because both sounded right:
+- *"the harvest debit is normalised by eligible cells but subtracted across the whole
+  disc"* — code shape accurately described, impact negligible: `_growth` already
+  strips flooded cells at ~74%/day, so the excluded cells are empty. Measured over
+  160 days, the excluded-cell contribution was **0.59–2.45%** of what was banked, and
+  the loop is net-conservative. The proposed fix moved in-field moss 0.107 → 0.128
+  against a board mean of 0.691 — i.e. it does not explain the gap it claimed to.
+- *"WORKS[].radius is read raw in `_sow`/`_irrigate` while every other reader
+  multiplies by S"* — refuted on units: the view evidence was inverted, because the
+  view scales geometry authored in WORLD units, not cells.
+
+**The meta-lesson: a finding that names a real code shape can still be wrong about
+its consequence.** Both of these correctly described the code and both were wrong
+about what it costs. Measure the consequence, not the shape.

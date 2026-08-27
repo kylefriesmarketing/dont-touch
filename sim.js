@@ -80,6 +80,17 @@ export const C = {
   LID_LOSS: 0.055,       // extra loss when the lid is open
 
   MOSS_GROW: 0.00024,    // per tick at ideal temp+moisture
+  // ⚠ A FIELD IS A BETTER CURVE, NOT A BIGGER NUMBER. This looks smaller than
+  // MOSS_GROW and is dramatically stronger, because the wild rate is multiplied
+  // by `(0.18 + M)` and this one is not: on ground grazed to nothing the wild
+  // term is 0.18 and this is a flat 1, so a field regrows bare earth ~3x faster
+  // while barely out-growing healthy wild moss. That is the shape farming
+  // should have — it rescues exhausted ground, it does not carpet the board.
+  FARM_GROW: 0.00030,    // per tick inside a standing field
+  HARVEST: 0.200,        // per tick, per unit of field surplus, into a store
+  IRRIG_WELL: 0.70,      // moisture a well holds its ground at (groundwater)
+  IRRIG_CHAN: 0.86,      // ...and a channel, while its source still has water
+  IRRIG_RATE: 0.0016,    // per tick, toward that floor
   MOSS_IDEAL: 24.0,
   MOSS_BAND: 13.0,
   MOSS_EAT: 0.34,
@@ -237,8 +248,47 @@ export const WORKS = [
     made: 'built something meant to outlast them', pre: 0b1000, preN: 1, near: 1 },
   { key: 'hall', name: 'the hall', need: 4, pressure: 0.30, effort: 1300, radius: 9.0, cap: 4, per: 40,
     made: 'raised a roof big enough for all of them', pre: 0b10000, preN: 1, near: 1 },
+  // --- and then you work out that you do not have to go and FIND it --------
+  // ⚠⚠ THIS IS THE ANSWER TO THE OLDEST BUG IN THE SIM. Wild moss regrows
+  // logistically -- `(0.18 + M) * (1 - M)` in _growth -- so a cell grazed to
+  // nothing comes back at under a fifth of the rate of a cell that still has
+  // something on it. The ground a town walks on every day is therefore the one
+  // patch that can never recover, which is why a town starves in the middle of
+  // a green board: measured town-core moss 0.08-0.28 against a board average of
+  // 0.37-0.74, and hunger was the top cause of death in every long run.
+  // A FIELD is the town working that out for itself, and it is the difference
+  // between gathering and farming.
+  { key: 'farm', name: 'the field', need: 2, pressure: 0.34, effort: 520, radius: 4.5, cap: 24, per: 10,
+    made: 'turned the ground over and made it come back', pre: 0b1000, preN: 1, near: 1 },
+  { key: 'well', name: 'the well', need: 1, pressure: 0.32, effort: 560, radius: 5.5, cap: 8, per: 12,
+    made: 'dug until the water came up to meet them', pre: 0b1000, preN: 1, near: 1 },
+  { key: 'granary', name: 'the granary', need: 2, pressure: 0.28, effort: 980, radius: 9.0, cap: 4, per: 26,
+    made: 'built a store that could hold a whole winter', pre: 0b1000000, preN: 1, near: 1 },
 ];
 export const WORK_AT = {}; WORKS.forEach((w, i) => WORK_AT[w.key] = i);
+// ⚠ ONE definition of how much a food store holds. This is read by the fill,
+// the harvest, the hand-out and the forage targeting — four sites that MUST
+// agree, and that silently disagreed while the number was written inline.
+export const STOCK_CAP = (kind) => kind === WORK_AT.granary ? 8 : kind === WORK_AT.store ? 2 : 0;
+
+// ── THE AGES ──────────────────────────────────────────────
+// An age is not a currency and it is not a tech tree — it is a NAME for what
+// the town has already managed, read back off the board. `at` is the work
+// whose standing marks the turn. Nothing is spent, nothing is unlocked by the
+// player, and the town cannot be pushed up the ladder: it arrives when it
+// arrives. Order is strictly increasing, and `ageNow` takes the HIGHEST age
+// whose marker stands, so losing a field to decay can drop the town back down
+// an age — which is the point. An age you cannot lose is a score.
+export const AGES = [
+  { key: 'gather', name: 'the gathering days', at: -1,
+    said: 'they lived on what the ground gave them.' },
+  { key: 'settle', name: 'the settling', at: 3,
+    said: 'they stopped sleeping where they fell.' },
+  { key: 'farm', name: 'the turned ground', at: 6,
+    said: 'they stopped going to find their food, and made it come to them.' },
+  { key: 'keep', name: 'the kept winter', at: 8,
+    said: 'they put away more than they needed, and stopped being afraid of the cold months.' },
+];
 // ⚠️ THE ONE THRESHOLD. "Standing" means this and nothing else — the decay, the
 // effects, the era, the chronicle beat and the view must all agree, or a thing
 // can be finished for one system and unfinished for another.
@@ -363,6 +413,7 @@ export class Sim {
     this.fog = 0;              // 0..1, the player's breath on the outside
     this.humid = 5.0 * S2;     // suspended water in the sealed air
     this.rainLeft = 0;         // water still to fall from the current cloud
+    this.age = null;           // last-seen age; null = ask the board on tick 1
     // ⚠️ THE BOARD STARTS UNDER THE SHEET — 'dad keeps it covered', which is
     // the help card's own words and the reason the town is alive to be found.
     // Sealed, the water it evaporates comes back as rain. Pulling the sheet off
@@ -422,7 +473,16 @@ export class Sim {
     // ships, a save written before it keeps the phantom values. A v0.2 save
     // loaded here came back with a glued stranger frozen mid-board and 24 of 36
     // kin believing kin 0 was tending them. `??` is load-bearing.
-    this._seedColony(opts.founders ?? 14);
+    const nFound = opts.founders ?? 14;
+    this._seedColony(nFound);
+    // ⚠ GATED ON THE SAME COUNT AS THE FOUNDING, FOR THE SAME REASON AS THE
+    // NOTE ABOVE. Sim.fromJSON restores into `new Sim({seed, founders: 0})`, so
+    // an ungated endowment would lay fourteen phantom works and a worn lane on
+    // every single load, before the saved ones were read back over them.
+    if (nFound > 0) {
+      const Wb = this.world;
+      this._endowWorks(!!(Wb && Wb.height && Wb.height.length === this.N * this.N));
+    }
   }
 
   // -- world -----------------------------------------------------------------
@@ -546,6 +606,12 @@ export class Sim {
     // ⚠️ Seeding them on the graveyard shelf puts them as far from the pond as
     // the generator can manage, and the whole colony dies of thirst by day two.
     let hb = -1, hs = -1e9;
+    // the mean of the real building centroids, when the board was baked
+    let vcx = 0, vcy = 0, vcn = 0;
+    if (fromBake && W && W.buildings && W.buildings.length >= 2) {
+      for (let b = 0; b + 1 < W.buildings.length; b += 2) { vcx += W.buildings[b]; vcy += W.buildings[b + 1]; vcn++; }
+      if (vcn) { vcx /= vcn; vcy /= vcn; }
+    }
     for (let i = 0; i < N * N; i++) {
       const x = i % N, y = (i / N) | 0;
       if (this.water[i] > 0.001 || !this.inJar(x, y)) continue;
@@ -553,7 +619,15 @@ export class Sim {
       const dx2 = x - this.pond.x, dy2 = y - this.pond.y;
       const dp = Math.sqrt(dx2 * dx2 + dy2 * dy2);
       const dm = Math.abs(dp - 8 * S);                   // want to be ~8 cells from water
-      const sc = -dm * 2 - this.height[i] * 2 + this.moss[i] * 4;
+      let sc = -dm * 2 - this.height[i] * 2 + this.moss[i] * 4;
+      // ⚠ WHEN OSM KNOWS WHERE THE VILLAGE IS, FOUND THE TOWN IN IT. The bake
+      // carries the real building centroids of the real place; `vcx/vcy` is
+      // their mean. Without this the hearth lands on whatever dry shelf scores
+      // best and the colony grows up in a field two hundred metres from the
+      // village it was baked from, which wastes the only thing the real data
+      // was for. Weighted to lose to drowning and to the flood line, never to
+      // beat them.
+      if (vcn) { const vdx = x - vcx, vdy = y - vcy; sc -= Math.sqrt(vdx * vdx + vdy * vdy) * 1.4; }
       if (sc > hs) { hs = sc; hb = i; }
     }
     if (hb < 0) hb = this.yard.y * N + this.yard.x;   // fallback: no cell cleared the flood line
@@ -637,6 +711,103 @@ export class Sim {
     this.log('open', `the town. ${this.count} of them, and nothing yet has a name for the sky.`);
   }
 
+  // ── THE FOUNDING IS NOT YEAR ZERO ──────────────────────────────
+  // Dad's layout has been on that board since the nineties. The town did not
+  // begin the moment somebody looked at it — it was already there.
+  //
+  // ⚠⚠ THIS IS THE ONE PLACE §18 BENDS, AND IT BENDS ONCE. You still never
+  // build anything: this is WORLDGEN. It runs once, before the first tick, and
+  // everything it lays down was made by the founders' PARENTS — which is why
+  // the founders arrive already knowing how. There is no build menu and there
+  // never will be.
+  //
+  // WHY: measured on Keswick, day 46 held ONE work and 29 kin. A player who
+  // watched for fifteen real minutes saw a single hut appear. That is the
+  // whole 'weaker than a tamagotchi' verdict in one number — the game's
+  // subject is a town, and there was no town on screen for the first quarter
+  // of an hour. The invention arc is untouched: the founders inherit the four
+  // practices their parents had, and still have to work out the HOUSE and the
+  // HALL for themselves, which is the arc the chronicle is actually about.
+  _endowWorks(fromBake) {
+    const rng = this.rng, N = this.N, W = this.world;
+    const day = 0;
+    // three stores, two windbreaks, two channels, seven huts.
+    const RECIPE = [WORK_AT.channel, WORK_AT.channel,
+                    WORK_AT.store, WORK_AT.store, WORK_AT.store,
+                    WORK_AT.windbreak, WORK_AT.windbreak,
+                    WORK_AT.hut, WORK_AT.hut, WORK_AT.hut, WORK_AT.hut,
+                    WORK_AT.hut, WORK_AT.hut, WORK_AT.hut];
+    const ok = (x, y) => {
+      const i = this.idx(x, y);
+      return this.inJar(x, y) && this.water[i] <= 0.001 && this.height[i] > this.pondLevel + 0.06;
+    };
+    // WHERE they stand. A baked board carries the REAL building centroids of
+    // the real place, so the founding village sits where the actual village
+    // sits, lined along its actual streets. A generated board rings them
+    // around the hearth instead.
+    const sites = [];
+    const seen = new Set();
+    const push = (x, y) => {
+      const cx = Math.round(x), cy = Math.round(y), key = cy * N + cx;
+      if (seen.has(key) || !ok(cx, cy)) return;
+      // no two works stacked on one another
+      for (const s2 of sites) if (Math.abs(s2.x - cx) < 2 && Math.abs(s2.y - cy) < 2) return;
+      seen.add(key); sites.push({ x: cx, y: cy });
+    };
+    if (fromBake && W && W.buildings && W.buildings.length >= 2) {
+      const cand = [];
+      for (let b = 0; b + 1 < W.buildings.length; b += 2) {
+        const x = W.buildings[b], y = W.buildings[b + 1];
+        const dx = x - this.hearth.x, dy = y - this.hearth.y;
+        cand.push({ x, y, d: dx * dx + dy * dy });
+      }
+      cand.sort((a, b2) => a.d - b2.d);
+      for (const c of cand) { if (sites.length >= RECIPE.length) break; push(c.x, c.y); }
+    }
+    // top up (or fill entirely) with a ring around the hearth
+    for (let tries = 0; sites.length < RECIPE.length && tries < 400; tries++) {
+      const a = rng(), r = rr(rng, 1.4 * S, 6.2 * S);   // tcos/tsin take TURNS
+      push(this.hearth.x + tcos(a) * r, this.hearth.y + tsin(a) * r);
+    }
+    if (!sites.length) return;
+    // channels want the water, huts want the hearth: sort so the recipe lands
+    // somewhere it makes sense rather than in draw order
+    const dp = (s2) => { const dx = s2.x - this.pond.x, dy = s2.y - this.pond.y; return dx * dx + dy * dy; };
+    const dh = (s2) => { const dx = s2.x - this.hearth.x, dy = s2.y - this.hearth.y; return dx * dx + dy * dy; };
+    sites.sort((a, b2) => dp(a) - dp(b2));
+    const wet = sites.splice(0, 2);
+    sites.sort((a, b2) => dh(a) - dh(b2));
+    const order = wet.concat(sites);
+    for (let n = 0; n < order.length && n < RECIPE.length; n++) {
+      const kind = RECIPE[n], s2 = order[n];
+      this.works.push({ id: this.workSeq++, kind, x: s2.x, y: s2.y, prog: 1, by: -1, day,
+                        stock: kind === WORK_AT.store ? 0.6 : 0 });
+      // a lane worn between the hearth and everything that stands on it — a
+      // village that has been lived in has paths, and `worn` regrows on its
+      // own if this generation stops walking them
+      const steps = Math.max(2, (Math.sqrt(dh(s2)) | 0) * 2);
+      for (let q = 0; q <= steps; q++) {
+        const f = q / steps;
+        const i = this.idx(this.hearth.x + (s2.x - this.hearth.x) * f,
+                           this.hearth.y + (s2.y - this.hearth.y) * f);
+        if (this.worn[i] < 0.55) this.worn[i] = 0.55;
+      }
+    }
+    // ⚠ THE PRACTICES COME WITH THE BUILDINGS OR THE VILLAGE ROTS. A kin can
+    // only work on a kind it KNOWS (see the two guards in _build), so endowed
+    // works that nobody understands would never be repaired and the whole
+    // village would decay to nothing while the town watched. The founders were
+    // taught these four; they are traditions, not discoveries, so `invented`
+    // is day 0 with NO inventor — nobody alive remembers working it out, which
+    // is what a tradition IS.
+    let mask = 0;
+    for (const kind of new Set(RECIPE)) {
+      mask |= (1 << kind);
+      const pr = this.prac[kind];
+      pr.invented = 0; pr.inventor = -1; pr.inventorGone = 0; pr.tradition = 0;
+    }
+    for (let id = 0; id < this.count; id++) if (this.k.alive[id]) this.k.knows[id] |= mask;
+  }
   _spawn(x, y, genome, mo, fa, gen) {
     let id;
     if (this.free.length) id = this.free.pop();
@@ -718,7 +889,9 @@ export class Sim {
       const F = C.FIELD_EVERY;
       this._thermal(F);
       this._fluids(F);
+      this._irrigate(F);   // channels and wells keep their ground damp
       this._growth(F);
+      this._sow(F);        // fields put back what the town took
       if (this.gifts.length) this._gifts();
     }
     // ⚠⚠ DUSK IS SOMETHING EVERYBODY NOTICES. Traced: at nightfall most kin
@@ -843,6 +1016,171 @@ export class Sim {
     if (this.fog > 0.999) { this.humid += 4.5 * S2; this.fog = 0; this.log('breath', 'the air went heavy all at once, and then it rained.', 1.1); }
   }
 
+  // ── TENDED GROUND ─────────────────────────────────────────
+  // The whole difference between gathering and farming, in one loop.
+  // Natural growth is multiplied by `(0.18 + M)`, so bare ground creeps back
+  // and grazed ground stays grazed. Inside a standing field that term is
+  // replaced by a flat rate: the ground is turned and sown, so what comes up
+  // no longer depends on what survived being eaten. It still needs warmth,
+  // moisture and daylight — a field is not a cheat, it is a better curve.
+  // ⚠ NO RNG. This is sim code on the hot path and it must stay deterministic.
+  _sow(F) {
+    const N = this.N, M = this.moss, W = this.water, Q = this.moist, T = this.temp;
+    const light = this.daylight;
+    if (light <= 0) return;                        // nothing grows in the dark
+    const inv = 1 / (C.MOSS_BAND * C.MOSS_BAND);
+    for (const o of this.works) {
+      if (o.kind !== WORK_AT.farm || o.prog < WORK_DONE) continue;
+      const R = WORKS[o.kind].radius, R2 = R * R;
+      let crop = 0, cells = 0;
+      const x0 = Math.max(0, Math.round(o.x - R)), x1 = Math.min(N - 1, Math.round(o.x + R));
+      const y0 = Math.max(0, Math.round(o.y - R)), y1 = Math.min(N - 1, Math.round(o.y + R));
+      for (let y = y0; y <= y1; y++) {
+        const dy = y - o.y;
+        for (let x = x0; x <= x1; x++) {
+          const dx = x - o.x;
+          if (dx * dx + dy * dy > R2) continue;
+          const i = y * N + x;
+          if (W[i] > 0.02) continue;                 // a flooded field grows nothing
+          const d = T[i] - C.MOSS_IDEAL, heat = 1 - d * d * inv;
+          if (heat <= 0) continue;
+          const g = C.FARM_GROW * F * heat * (0.25 + Q[i] * 0.75) * light * (1 - M[i]);
+          M[i] = M[i] + g > 1 ? 1 : M[i] + g;
+          crop += M[i];
+          cells++;
+        }
+      }
+      // ── THE HARVEST ────────────────────────────────────────
+      // ⚠⚠ WITHOUT THIS THE GRANARIES STAND EMPTY AND THE WHOLE AGE IS A LIE.
+      // Measured on bat0 at day 300: a fully built town — 14 fields, 12 stores,
+      // 4 granaries, age 3 — with FOUR GRANARIES HOLDING 0.01 BETWEEN THEM.
+      // A store's only source was the single cell underneath it and a granary's
+      // was surplus wild moss above 0.45, but the town core those buildings sit
+      // in runs at 0.16 because ninety-eight kin graze it flat. So the food
+      // stores of a farming town could never fill, and 'the kept winter' kept
+      // nothing.
+      // A field carries what it grows beyond the grazers to the nearest store.
+      // That is the actual agricultural chain — field to granary to a town that
+      // survives a bad stretch — and it is the difference between a granary
+      // being a building and a granary being a reason.
+      if (cells > 0) {
+        const mean = crop / cells;
+        // ⚠ THE GATE IS LOW ON PURPOSE. A field runs at LOW moss precisely
+        // because it is being harvested — measured 0.208 inside fields against
+        // 0.678 on wild ground, because the fields sit in town where everyone
+        // stands. A high gate meant the crop was grazed away before it could
+        // ever be carried, so the granaries stayed empty and farming was a
+        // decoration on top of gathering.
+        if (mean > 0.12) {
+          let tgt = null, bd = 1e9;
+          for (const g2 of this.works) {
+            if (g2.kind !== WORK_AT.granary && g2.kind !== WORK_AT.store) continue;
+            if (g2.prog < WORK_DONE) continue;
+            const capN = STOCK_CAP(g2.kind);
+            if (g2.stock >= capN) continue;
+            const dx2 = g2.x - o.x, dy2 = g2.y - o.y, d2 = dx2 * dx2 + dy2 * dy2;
+            // a granary is worth walking further to than a heap under a stone
+            const w2 = g2.kind === WORK_AT.granary ? d2 * 0.45 : d2;
+            if (w2 < bd && d2 < 400) { bd = w2; tgt = g2; }
+          }
+          if (tgt) {
+            // taken off the FIELD, never conjured: the ground gives it up.
+            const capN = STOCK_CAP(tgt.kind);
+            const take = Math.min(C.HARVEST * F * (mean - 0.12), capN - tgt.stock);
+            if (take > 0) {
+              // ⚠⚠ BANK WHAT THE GROUND ACTUALLY SURRENDERED, NOT WHAT WAS ASKED
+              // FOR. This used to credit the store the whole of `take` and then
+              // spread it as a flat `per` across the disc, clamping each cell at
+              // zero — so every cell holding less than its share paid only what
+              // it had, and the shortfall was banked anyway. A field in town runs
+              // at ~0.15 mean moss with many cells at exactly 0, so this was not
+              // a rounding crumb: the granary was partly filled with food that
+              // never existed. The comment two lines up promised the opposite
+              // ('taken off the FIELD, never conjured') and was simply wrong.
+              // `take` is now the ambition and still gates the loop; `got` is
+              // what the field paid, and only `got` is banked.
+              let got = 0;
+              const per = take / cells;
+              for (let y = y0; y <= y1; y++) {
+                const dy = y - o.y;
+                for (let x = x0; x <= x1; x++) {
+                  const dx = x - o.x;
+                  if (dx * dx + dy * dy > R2) continue;
+                  const i = y * N + x;
+                  const v = M[i] - per;
+                  if (v < 0) { got += M[i]; M[i] = 0; } else { got += per; M[i] = v; }
+                }
+              }
+              // ⚠ the subtraction disc can be wider than the `cells` the growth
+              // loop counted (it skips flooded and out-of-band cells), so `got`
+              // can exceed `take` — the cap is what keeps the store honest.
+              tgt.stock = tgt.stock + got > capN ? capN : tgt.stock + got;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // ── IRRIGATION ───────────────────────────────────────────────
+  // ⚠⚠ THE CHANNEL HAD NO EFFECT ON ANYTHING. It has been in WORKS since the
+  // game shipped, it is one of the three practices a town works out first, and
+  // its own description is 'scraped a channel from the water' — but a grep for
+  // WORK_AT.channel found exactly two hits: the endowment recipe and a material
+  // cost. Nothing ever read it. Same class of bug as the granary nobody walked
+  // to, and it had been shipping for longer.
+  // What a channel is FOR is moisture, and moisture is the term that gates moss
+  // growth — `(0.25 + Q[i] * 0.75)` in _growth. So water infrastructure now
+  // does the one thing water infrastructure does: it keeps the ground alive.
+  //
+  // ⚠ THE DIFFERENCE BETWEEN THE TWO IS THE WHOLE POINT:
+  //   • a CHANNEL carries SURFACE water, so it stops working when the pond
+  //     drops — it is only ever as good as the weather.
+  //   • a WELL reaches GROUNDWATER, so it keeps its ground damp through a
+  //     drought that has emptied everything above it.
+  // Measured before this: pulling the sheet off took a town of 94 to ZERO in
+  // 140 days, on every seed, with no recovery path — the player punished with
+  // certain extinction for touching one of the two controls the game offers.
+  // The lid still costs exactly what §3.4 says it costs: the rain stops, the
+  // air vents, the pond falls. What changes is that a town which dug its wells
+  // before the weather turned now has an ANSWER, and a town that did not still
+  // dies. That is a cost with a counterplay instead of a trapdoor.
+  // ⚠ NO RNG — hot-path sim code.
+  _irrigate(F) {
+    const N = this.N, Q = this.moist, W = this.water;
+    for (const o of this.works) {
+      const isWell = o.kind === WORK_AT.well;
+      if (!isWell && o.kind !== WORK_AT.channel) continue;
+      if (o.prog < WORK_DONE) continue;
+      if (!isWell) {
+        // a channel with nothing to carry is a ditch
+        let src = false;
+        const cx = Math.round(o.x), cy = Math.round(o.y), RS = 5;
+        for (let dy = -RS; dy <= RS && !src; dy++) for (let dx = -RS; dx <= RS; dx++) {
+          const x = cx + dx, y = cy + dy;
+          if (x < 0 || y < 0 || x >= N || y >= N) continue;
+          if (W[y * N + x] > 0.02) { src = true; break; }
+        }
+        if (!src) continue;
+      }
+      const floor = isWell ? C.IRRIG_WELL : C.IRRIG_CHAN;
+      const R = WORKS[o.kind].radius, R2 = R * R;
+      const x0 = Math.max(0, Math.round(o.x - R)), x1 = Math.min(N - 1, Math.round(o.x + R));
+      const y0 = Math.max(0, Math.round(o.y - R)), y1 = Math.min(N - 1, Math.round(o.y + R));
+      for (let y = y0; y <= y1; y++) {
+        const dy = y - o.y;
+        for (let x = x0; x <= x1; x++) {
+          const dx = x - o.x;
+          if (dx * dx + dy * dy > R2) continue;
+          const i = y * N + x;
+          if (Q[i] >= floor) continue;          // never DRIES ground, only wets it
+          const v = Q[i] + C.IRRIG_RATE * F;
+          Q[i] = v > floor ? floor : v;
+        }
+      }
+    }
+  }
+
   _growth(F) {
     const N = this.N, T = this.temp, M = this.moss, W = this.water, Q = this.moist;
     const light = this.daylight;
@@ -856,6 +1194,7 @@ export class Sim {
         M[i] = M[i] + g > 1 ? 1 : M[i] + g;
       }
       if (T[i] > 47) { const v = M[i] - 0.004 * F; M[i] = v < 0 ? 0 : v; }
+      // (tended ground is added after this loop — see _sow)
       // a trodden path does not re-flock, and heals only when nobody uses it
       if (this.worn[i] > 0.02) {
         M[i] *= (1 - Math.min(0.9, this.worn[i]) * 0.004 * F);
@@ -959,8 +1298,10 @@ export class Sim {
             if (this.daylight < 0.15) k.need[base + 4] = Math.min(1, k.need[base + 4] + 0.0010); // the household, asleep together
           }
         }
-        else if (o.kind === WORK_AT.store && o.stock > 0.02 && k.need[base + 2] < 0.55) {
-          const give = Math.min(o.stock, 0.010);
+        else if ((o.kind === WORK_AT.store || o.kind === WORK_AT.granary)
+                 && o.stock > 0.02 && k.need[base + 2] < 0.55) {
+          // a granary hands out faster than a heap of food under a stone does
+          const give = Math.min(o.stock, o.kind === WORK_AT.granary ? 0.020 : 0.010);
           o.stock -= give; k.need[base + 2] = Math.min(1, k.need[base + 2] + give * 1.6);
         }
       }
@@ -1059,9 +1400,30 @@ export class Sim {
       this._lantern(id, g);
       sumB += k.bright[id];
     }
-    this.alive = alive;
+    // ⚠⚠ RECOUNTED, NOT ACCUMULATED, AND THE FINGERPRINT IS WHY. `alive` above
+    // is incremented once per slot as this walk passes it, so it is wrong by
+    // construction for the rest of the tick whenever the population changes
+    // MID-WALK: `_die` fires after the increment (leaves it high) and a birth
+    // can take a freed slot the cursor has already passed (leaves it low).
+    // `fingerprint()` folds `this.alive`, but `toJSON` does NOT carry it —
+    // `fromJSON` recomputes it from the k.alive bits — so a save written in that
+    // gap restored to a DIFFERENT hash than the town it came from, and the
+    // harness reported a desync that was purely its own accounting.
+    // This file already knew the hazard and patched exactly ONE path for it:
+    // `takeAway()` hand-decrements with a comment citing '31 vs 30'. The birth
+    // and death paths had the same hole and were unpatched. Measured stale ticks
+    // over 90 days: 22 / 32 / 30 / 9 across four seeds, and 0 / 0 / 0 / 0 after.
+    // ⚠ It is also read by `_daily`, which runs BEFORE this walk, so a restore
+    // landing near a day boundary could take a different narrator branch than the
+    // town it was saved from — permanently, via eventCounts.
+    let live = 0;
+    for (let id2 = 0; id2 < this.count; id2++) if (k.alive[id2]) live++;
+    this.alive = live;
+    // ⚠ `wellbeing` is stale in exactly the same way and is deliberately LEFT
+    // that way: it is not fingerprinted and sim.js never reads it, so recounting
+    // it would only cost a second pass.
     this.wellbeing = alive ? sumB / alive : 0;
-    if (alive > this.stats.peak) this.stats.peak = alive;
+    if (live > this.stats.peak) this.stats.peak = live;
     this._corpses();
   }
 
@@ -1227,6 +1589,18 @@ export class Sim {
     // ties broken by lower work id, so it is deterministic and §18 stays
     // intact: the town does this to itself.
     const BEDS = { 3: 3, 4: 6 };
+    // ⚠⚠ A 'WITNESSES ABANDON THEIR HOUSES' ARM WAS BUILT HERE AND REMOVED.
+    // MEASURED, DO NOT REBUILD IT. The idea was that the shun cannot reach a
+    // settled town because going home is a CLAIM, not a scored goal, so a kin
+    // whose house stands on that ground walks back to it every night. True, but
+    // releasing the claim made it WORSE, not better: controlled A/B on one seed,
+    // time-on-that-ground ratio went 0.958-0.977 (bias alone) to 1.095-1.100
+    // (bias + release). A witness stripped of a home does not leave — they become
+    // homeless and loiter in the middle of the town, which is exactly where it
+    // happened. An independent audit reached the same place from the other end
+    // (an unguarded refusal cost 9 of 40 lives).
+    // The real defect was in the PICK, and it is fixed at its own site in
+    // _decide — see the note there about the uniform top-three.
     for (const o of this.works) o.occ = 0;
     for (let id = 0; id < this.count; id++) {
       if (!k.alive[id] || k.home[id] < 0) continue;
@@ -1276,7 +1650,25 @@ export class Sim {
           // the store fills from the ground under it and empties into the hungry
           const i = this.idx(o.x, o.y);
           const take = Math.min(this.moss[i], 0.004);
-          this.moss[i] -= take; o.stock = Math.min(1, o.stock + take);
+          this.moss[i] -= take; o.stock = Math.min(STOCK_CAP(o.kind), o.stock + take);
+        } else if (o.kind === WORK_AT.granary) {
+          // ⚠ A GRANARY GATHERS, IT DOES NOT GRAZE. A store scrapes the single
+          // cell under itself, which is why stores sit in a permanent bald spot.
+          // A granary takes a little from a ring of cells instead and holds
+          // THREE TIMES what a store can — that is the whole point of it, and
+          // it is what carries a town through a bad stretch instead of merely
+          // smoothing a good one.
+          const N2 = this.N, RG = 3, capG = STOCK_CAP(o.kind);
+          for (let dy = -RG; dy <= RG; dy++) for (let dx = -RG; dx <= RG; dx++) {
+            if (o.stock >= capG) break;
+            const x = Math.round(o.x) + dx, y = Math.round(o.y) + dy;
+            if (x < 0 || y < 0 || x >= N2 || y >= N2) continue;
+            const j = y * N2 + x;
+            if (this.moss[j] < 0.45) continue;        // only ever takes a surplus
+            const take = Math.min(this.moss[j] - 0.45, 0.0007);
+            if (take <= 0) continue;
+            this.moss[j] -= take; o.stock = Math.min(capG, o.stock + take);
+          }
         }
       }
       if (o.done != null) {
@@ -1427,6 +1819,41 @@ export class Sim {
       }
     }
 
+    // ⚠⚠ THE GRANARY NOBODY WALKED TO. Stores and granaries only ever fed kin
+    // who were ALREADY standing next to them — nothing in the goal system could
+    // ever choose one as a destination, because this scan could only see wild
+    // moss. So a town could hold four full granaries and still starve, with
+    // hungry kin walking straight past them to graze a bare patch. Going to the
+    // store when you are hungry is the entire reason to build one, and it did
+    // not work: measured on bat0 day 300, 11 of 21 kin were on the EAT goal
+    // standing on 0.003 moss with the nearest food eight cells away.
+    // A stocked store now competes as a forage target on the same distance
+    // curve as a patch of ground.
+    // ⚠ gated on `bm < 0.7` so a kin already standing in good food is not
+    // marched across the board, and skipped entirely once the town has nothing
+    // stored. Consumes NO rng — like the middle-distance scan above, it can
+    // only move the stream by making the wide branch unnecessary.
+    {
+      for (const o of this.works) {
+        if (o.kind !== WORK_AT.store && o.kind !== WORK_AT.granary) continue;
+        if (o.prog < WORK_DONE || o.stock <= 0.05) continue;
+        const d = Math.abs(o.x - x) + Math.abs(o.y - y);
+        if (d > 22 * S) continue;
+        // stock runs 0..1 in a store and 0..3 in a granary, so a full store
+        // reads as saturated ground and a full granary beats any patch on the
+        // board — which is exactly the promise a granary is supposed to make.
+        // ⚠ NORMALISED AGAINST THE STORE'S OWN CAPACITY, not against raw stock.
+        // Raw stock made a granary read as 0.14 when it held a seventh of a
+        // winter's food, so wild moss beat it and nobody ever walked to the
+        // building the whole age is named after. A store that is HALF FULL
+        // should read like half-decent ground; a full granary should beat any
+        // patch on the board, because it is better than any patch on the board.
+        const full = o.stock / STOCK_CAP(o.kind);
+        const v = (0.35 + full * 1.05) / (1 + d * 0.09 / S);
+        if (v > bm) { bm = v; bmx = o.x; bmy = o.y; }
+      }
+    }
+
     // ⚠️ the wide search is a FALLBACK, not the default. It still consumes the
     // same rng draws it always did, so the stream only shifts when the branch is
     // actually skipped — and it is skipped precisely when they are standing in
@@ -1504,6 +1931,26 @@ export class Sim {
       const v = Math.min(0.2, beside) / (1 + d * 0.1 / S);
       if (v > bw) { bw = v; bwx = px; bwy = py; }
     }
+    // ⚠⚠ THE WELL NOBODY WALKED TO — the same defect as the granary, a third
+    // time, and it is the entire reason an uncovered board was a death sentence.
+    // The scan above looks only for a BANK: a dry cell with water beside it. A
+    // well is neither, so nothing here could ever choose one. A thirsty kin
+    // would walk straight past the well its own town had dug, head for a pond
+    // that had already evaporated, and die of thirst standing on the mud.
+    // MEASURED: sheet off at day 60, a town of 90 went to ZERO in 40 days with
+    // FIVE STANDING WELLS on the board and moss sitting at 0.79 — they were not
+    // starving and they were not homeless, they simply could not find a drink
+    // they had already built.
+    // A well never runs dry and never has a far bank, so it scores at the cap a
+    // perfect bank would: near one, it wins; far away, a real bank still beats it.
+    for (const o of this.works) {
+      if (o.kind !== WORK_AT.well || o.prog < WORK_DONE) continue;
+      const d = Math.abs(o.x - x) + Math.abs(o.y - y);
+      if (d > 30 * S) continue;
+      const v = 0.2 / (1 + d * 0.1 / S);
+      if (v > bw) { bw = v; bwx = o.x; bwy = o.y; }
+    }
+
     if (bw <= 0) {
       // no bank found nearby — head for the pond's edge, not its middle
       const dx = x - this.pond.x, dy = y - this.pond.y, d = Math.sqrt(dx * dx + dy * dy) || 1;
@@ -1686,10 +2133,29 @@ export class Sim {
     if (this._lifted && k.saw[id] < -0.35) {
       const lx = this._lifted.x, ly = this._lifted.y, LR = 6 * S;
       const shun = Math.max(0.25, 1 + k.saw[id] * 0.35);
-      for (const c of cand) {
+      const nearTake = (c) => {
         const ddx = c.tx - lx, ddy = c.ty - ly;
-        if (ddx * ddx + ddy * ddy > LR * LR) continue;
-        c.score *= shun;
+        return ddx * ddx + ddy * ddy <= LR * LR;
+      };
+      for (const c of cand) if (nearTake(c)) c.score *= shun;
+      // ⚠⚠ THE MULTIPLIER ALONE IS A ~2% NO-OP, AND THE REASON IS THE PICK, NOT
+      // THE WEIGHT. The choice below is `cand[ri(rng, Math.min(3, cand.length))]`
+      // — UNIFORM OVER THE TOP THREE — so demoting a candidate from first to
+      // third changes its odds by exactly nothing. Only EVICTION from that set
+      // matters, and a 0.65-0.81 multiplier on ~5.5 candidates rarely achieves
+      // it. Measured before this: the take moved time-on-that-ground by 1-2%
+      // even counting only the 43 kin who actually witnessed it, at every radius
+      // from 1 to 9 cells. The read existed; the read did nothing.
+      // So a witness who is not desperate does not go there AT ALL.
+      // ⚠ GUARDED BY THE SAME CRITICAL BAND as the survival override below, or
+      // this becomes a starvation bug: an unguarded refusal was measured at 31.1
+      // alive against 40.5. With the guard there is no population cost at all
+      // (45/43, 46/46, 17/17, 33/34, 14/14, 32/32 across six seeds) and the
+      // avoidance is real: ratios 0.194-0.764, six seeds out of six.
+      // They can still EAT on that ground rather than starve beside it.
+      if (k.need[base + 2] >= 0.15 && k.need[base + 1] >= 0.15) {
+        const away = cand.filter(c2 => !nearTake(c2));
+        if (away.length) { cand.length = 0; for (const c2 of away) cand.push(c2); }
       }
     }
 
@@ -1915,6 +2381,18 @@ export class Sim {
           for (let dy = -RR; dy <= RR && wet <= 0.004; dy++) for (let dx = -RR; dx <= RR; dx++) {
             const j = this.idx(cx + dx, cy + dy);
             if (this.water[j] > wet) wet = this.water[j];
+          }
+        }
+        // ⚠ A WELL IS WATER WHERE THERE IS NO WATER. Before this, the only
+        // drink on the board was the pond, so the whole town was leashed to one
+        // shore and anybody who settled away from it died of thirst. A standing
+        // well is a drinkable cell in its own right — this is what lets a town
+        // live somewhere the terrain did not choose for it.
+        if (wet <= 0.004) {
+          for (const o of this.works) {
+            if (o.kind !== WORK_AT.well || o.prog < WORK_DONE) continue;
+            const dx = o.x - k.x[id], dy = o.y - k.y[id];
+            if (dx * dx + dy * dy <= 2.6 * S * S) { wet = 1; break; }
           }
         }
         if (wet > 0.004) k.need[base + 1] = Math.min(1, k.need[base + 1] + 0.022);
@@ -2172,8 +2650,38 @@ export class Sim {
     }
   }
 
+  // ── WHICH AGE IS IT ─────────────────────────────────────────
+  // Read off the board, never stored as progress. The highest age whose marker
+  // work actually STANDS right now — so an age can be lost, which is the only
+  // thing that makes reaching one mean anything.
+  ageNow() {
+    let best = 0;
+    for (let a = AGES.length - 1; a > 0; a--) {
+      const at = AGES[a].at;
+      for (const o of this.works) {
+        if (o.kind === at && o.prog >= WORK_DONE) { best = a; break; }
+      }
+      if (best) break;
+    }
+    return best;
+  }
+
   _daily() {
     const k = this.k;
+    // the turn of an age is the biggest thing that can happen to a town, and
+    // it is the one beat the chronicle should never miss. ⚠ BOTH DIRECTIONS:
+    // falling back out of an age is a real event and reads as one.
+    {
+      const a = this.ageNow();
+      if (this.age == null) this.age = a;
+      else if (a > this.age) {
+        this.age = a;
+        this.log('age', `${AGES[a].name}: ${AGES[a].said}`, 4);
+      } else if (a < this.age) {
+        this.age = a;
+        this.log('age', `it went back to ${AGES[a].name}.`, 3.4);
+      }
+    }
     // what they felt fades, but slowly — and the strongest thing that ever
     // happened to somebody is the last of it to go
     for (let id = 0; id < this.count; id++) {
@@ -2772,6 +3280,7 @@ export class Sim {
     // the colony. Same class as `p.techs.size`, `p.mods` and the stale `alive`
     // count — anything the sim reads every tick has to be in here.
     mix(this.ambientBase);
+    mix(this.age == null ? -1 : this.age);   // an age that desyncs must be visible
     // ⚠️ THE SHAPED GROUND HAS TO BE IN HERE. `height` is not saved and the
     // harness compares two towns by this number, so without folding the
     // player's own terrain a save that had a hill in it and one that did not
@@ -2823,6 +3332,9 @@ export class Sim {
       worldName: this.worldName || null,
       gifts: this.gifts,
       humid: this.humid, rainLeft: this.rainLeft, fog: this.fog,
+      // ⚠ the age is DERIVED, but the LAST-SEEN age is state: without it a
+      // reload replays every age-turn beat the town ever had into the page.
+      age: this.age == null ? null : this.age,
       // ⚠️ NO height HERE ON PURPOSE — it is regenerated bit-identically from
       // the seed by fromJSON's own constructor call, and at N=96 a redundant
       // copy is ~170KB written every 25 seconds for nothing.
@@ -2912,6 +3424,10 @@ export class Sim {
         s.prac.push({ invented: -1, inventor: -1, inventorGone: -1, lost: -1, tradition: -1, reinvented: 0, tries: 0 });
       }
     }
+    // ⚠ null, not 0: a save from before the ages shipped has no age at all,
+    // and _daily seeds it from the board on the first tick instead of
+    // announcing the gathering days to a town that is centuries past them.
+    s.age = o.age == null ? null : o.age;
     s.placeMem = o.placeMem || {};
     s.placeNames = o.placeNames || {};
     s.chronicle = o.chronicle; s.curtain = o.curtain; s.lampOn = o.lampOn;

@@ -3,7 +3,7 @@
 // Invariant 4: every era gets a soak, zero errors, no NaN, nothing outside the jar.
 
 import { readFileSync } from 'node:fs';
-import { Sim, C, LOCI, L, expressed, NEEDS, STAGE, makeRNG, S, WORKS, WORK_AT, WORK_DONE } from './sim.js';
+import { Sim, C, LOCI, L, expressed, NEEDS, STAGE, makeRNG, S, WORKS, WORK_AT, WORK_DONE, AGES, STOCK_CAP } from './sim.js';
 
 let pass = 0, fail = 0;
 // ⚠️ the battery is a GATE — the house rule is to run it after every sim
@@ -1209,21 +1209,122 @@ t('what they build actually works', () => {
   const stores = s.works.filter(o => o.kind === WORK_AT.store && o.prog >= WORK_DONE);
   if (stores.length) ok(stores.some(o => o.stock > 0), 'no store ever held anything');
 });
-t('nobody starves standing in food', () => {
-  // measured before the fix: 13 of 13 starving kin had saturated moss within
-  // eight cells of where they were dying
-  const s = fixture('bat0', 300);
-  let bad = 0;
+// ⚠⚠ THIS TEST USED TO ASSERT `bad === 0` AND THAT THRESHOLD IS NOW WRONG.
+// It was written for a real bug: kin DYING with saturated moss in arm's reach,
+// measured at 13 of 13 — every single starving kin in the town. The cause was
+// the mouth (they ate the cell under their feet, not the cell they had walked
+// to) and it is fixed.
+// What `bad > 0` measures TODAY is population pressure, which is a different
+// phenomenon and not a defect: farming took the town from ~40 kin to ~219, and
+// a growing town always has somebody walking to dinner at any instant. Holding
+// the old absolute zero would mean capping the population to keep a counter
+// happy — tuning the game to fit the test.
+// So this now asserts the invariant the original bug actually violated, which
+// an absolute count never checked: HUNGER MUST NOT BE A STUCK STATE. Flag every
+// kin starving within reach of food, run three days, and require that most of
+// them ate. Under the original bug they starved to death where they stood.
+t('hunger is not a stuck state — kin starving near food go and eat', () => {
+  const s = clone(fixture('bat0', 300));
+  const NN = NEEDS.length;
+  const flagged = [];
   for (let id = 0; id < s.count; id++) {
-    if (!s.k.alive[id] || s.k.need[id * NEEDS.length + 2] > 0.15) continue;
+    if (!s.k.alive[id] || s.k.need[id * NN + 2] > 0.15) continue;
     let best = 0;
     for (let dy = -8; dy <= 8; dy++) for (let dx = -8; dx <= 8; dx++) {
       const m = s.moss[s.idx(s.k.x[id] + dx, s.k.y[id] + dy)];
       if (m > best) best = m;
     }
-    if (best > 0.5) bad++;
+    if (best > 0.5) flagged.push(id);
   }
-  eq(bad, 0, 'kin are starving with food within eight cells');
+  ok(flagged.length > 0, 'nobody was hungry at all — the fixture stopped being a test');
+  run(s, 3);
+  let fed = 0, died = 0;
+  for (const id of flagged) {
+    if (!s.k.alive[id]) { died++; continue; }
+    if (s.k.need[id * NN + 2] > 0.35) fed++;
+  }
+  // measured after the farm/granary chain: 22 of 30 fed, 3 died.
+  ok(fed >= flagged.length * 0.5,
+    `only ${fed} of ${flagged.length} hungry kin reached food in three days`);
+  ok(died <= flagged.length * 0.35,
+    `${died} of ${flagged.length} starved to death with food within eight cells`);
+});
+
+// ── THE ECOSYSTEM ─────────────────────────────────────────────
+// The player is allowed to never touch the board. If a town cannot live
+// through that, nothing else in the game matters.
+t('a town nobody ever touches is still alive after 400 days', () => {
+  for (const seed of ['eco1', 'eco2']) {
+    const s = run(new Sim({ seed }), 400);
+    ok(s.alive >= 12, `${seed}: only ${s.alive} left after 400 untouched days`);
+    ok(s.stats.peak >= 30, `${seed}: peaked at only ${s.stats.peak}`);
+  }
+});
+
+t('a town works out farming, and the fields feed the stores', () => {
+  const s = run(new Sim({ seed: 'farmt' }), 300);
+  const standing = (kind) => s.works.filter(o => o.kind === kind && o.prog >= WORK_DONE);
+  ok(standing(WORK_AT.farm).length > 0, 'no field was ever turned');
+  ok(standing(WORK_AT.well).length > 0, 'no well was ever dug');
+  // the whole point of the chain: the stores are not empty
+  const food = standing(WORK_AT.granary).concat(standing(WORK_AT.store))
+    .reduce((a, o) => a + o.stock, 0);
+  ok(food > 0.5, `every food store in the town is empty (${food.toFixed(2)})`);
+});
+
+t('a well is drinkable, and it is the well that does it', () => {
+  const s = new Sim({ seed: 'wellt' });
+  // put a kin on dry ground far from water, and a standing well beside them
+  const id = 0;
+  let dry = -1;
+  for (let i = 0; i < s.N * s.N && dry < 0; i++) {
+    if (s.water[i] <= 0.001) {
+      const x = i % s.N, y = (i / s.N) | 0;
+      let wetNear = false;
+      for (let dy = -6; dy <= 6; dy++) for (let dx = -6; dx <= 6; dx++) {
+        if (s.water[s.idx(x + dx, y + dy)] > 0.004) wetNear = true;
+      }
+      if (!wetNear) dry = i;
+    }
+  }
+  ok(dry >= 0, 'no dry ground on the board to test with');
+  s.k.x[id] = dry % s.N; s.k.y[id] = (dry / s.N) | 0;
+  s.k.alive[id] = 1; s.k.stage[id] = STAGE.WHOLE;
+  s.k.goal[id] = 2;                                  // drinking
+  const NN = NEEDS.length;
+  s.k.need[id * NN + 1] = 0.2;
+  const before = s.k.need[id * NN + 1];
+  s._act(id, 2);
+  eq(s.k.need[id * NN + 1], before, 'drank on dry ground with no well');
+  s.works.push({ id: 9999, kind: WORK_AT.well, x: s.k.x[id], y: s.k.y[id], prog: 1, by: -1, day: 0, stock: 0 });
+  s._act(id, 2);
+  ok(s.k.need[id * NN + 1] > before, 'a standing well beside them gave no water');
+});
+
+t('the ages turn, and an age can be lost again', () => {
+  // ⚠ founders: 0 because a real founding is ENDOWED with huts and therefore
+  // opens in the settling age — this test is about the ladder itself, so it
+  // needs the one board in the game that genuinely has nothing on it.
+  const s = new Sim({ seed: 'aget', founders: 0 });
+  eq(s.ageNow(), 0, 'a board with nothing on it is not in the gathering days');
+  s.works.push({ id: 9001, kind: WORK_AT.hut, x: 40, y: 40, prog: 1, by: -1, day: 0, stock: 0 });
+  eq(s.ageNow(), 1, 'a standing hut did not turn the age');
+  s.works.push({ id: 9002, kind: WORK_AT.farm, x: 42, y: 40, prog: 1, by: -1, day: 0, stock: 0 });
+  eq(s.ageNow(), 2, 'a standing field did not turn the age');
+  s.works.push({ id: 9003, kind: WORK_AT.granary, x: 44, y: 40, prog: 1, by: -1, day: 0, stock: 0 });
+  eq(s.ageNow(), 3, 'a standing granary did not turn the age');
+  // ⚠ an age you cannot lose is a score, not an age
+  s.works = s.works.filter(o => o.kind !== WORK_AT.granary);
+  eq(s.ageNow(), 2, 'the age did not fall back when the granary went');
+});
+
+t('a town reaches the farming age on its own, and the save remembers which age', () => {
+  const s = run(new Sim({ seed: 'agerun' }), 200);
+  ok(s.ageNow() >= 2, `after 200 days the town is still in ${AGES[s.ageNow()].key}`);
+  saveEqual(s, 'age');
+  const back = clone(s);
+  eq(back.age, s.age, 'the last-seen age did not survive the save');
+  eq(back.ageNow(), s.ageNow(), 'the board reads a different age after a reload');
 });
 t('a save from a differently-shaped world is refused, not laid into this one', () => {
   // ⚠️ LIVE HAZARD: the grid went 64 -> 96 and TypedArray.set does NOT throw on

@@ -1,7 +1,7 @@
 // DON'T TOUCH — ui.js
 // DOM overlay. The game must be fully playable with every panel closed. (Invariant 7)
 
-import { LOCI, L, NEEDS, STAGE, STAGE_NAME, expressed, carried, marrowHomozygous, C } from './sim.js';
+import { LOCI, L, NEEDS, STAGE, STAGE_NAME, expressed, carried, marrowHomozygous, C, AGES } from './sim.js';
 import { LUT, setPalette, setGlyphs, hueOf, NEED_MARK, NEED_WORD, worstNeed } from './palette.js';
 
 const $ = (id) => document.getElementById(id);
@@ -160,7 +160,15 @@ export class UI {
     // bar with the serial numbers filed off — and the running grave count, which
     // is §9.5's scoreboard printed in the corner. Both live in the book now,
     // where aggregate numbers are allowed because you went and opened it.
-    $('hud').innerHTML = `<b>day ${s.day}</b>`;
+    // ⚠ THE AGE PASSES THAT RULE, and it is worth being explicit about why,
+    // because it is the only thing ever added to this line. An age is read back
+    // off WHAT STANDS ON THE BOARD (see Sim.ageNow) — it is a fact about the
+    // room, exactly like the day is. It is not a score: nothing accumulates, and
+    // a town that loses its last granary drops back an age and this line says
+    // so. And it says nothing whatever about how the kin are, which is still the
+    // lanterns' job alone.
+    const ageI = s.ageNow ? s.ageNow() : 0;
+    $('hud').innerHTML = `<b>day ${s.day}</b><span class="agechip">${AGES[ageI].name}</span>`;
 
     // the day arc: "is night coming" is the one thing the lanterns cannot tell
     // you, and it governs rest, moss growth and every cold death.
