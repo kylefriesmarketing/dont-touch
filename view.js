@@ -699,7 +699,34 @@ export class View {
     }
 
     g.traverse(o2 => { o2.castShadow = true; o2.receiveShadow = true; });
-    g.rotation.y = rnd() * 6.283;
+    // ── WHICH WAY A BUILDING FACES ───────────────────────────────
+    // This was `rnd() * 6.283`. Fifteen pitched roofs at fifteen unrelated
+    // angles does not read as a village — it reads as scattered rubble, which
+    // is exactly what the town looked like from the default camera.
+    // Real buildings face the road. When the board was baked from
+    // OpenStreetMap we have the real road network, so we find the nearest real
+    // road cell and turn the front of the building toward it — the village
+    // lines its street the way the actual village does. Generated boards have
+    // no roads and fall back to a shared axis with a little jitter: still a
+    // village, just an unplanned one.
+    // ⚠ the rnd() draw is CONSUMED on both paths so the view's stream does not
+    // shift depending on which world happens to be loaded.
+    const jit = (rnd() - 0.5) * 0.55;
+    let yaw = jit;
+    const RDW = this.sim.world && this.sim.world.road ? this.sim.world.road : null;
+    if (RDW) {
+      const NW = this.sim.N;
+      let bd = 1e9, bx = 0, by = 0;
+      for (let dy = -7; dy <= 7; dy++) for (let dx = -7; dx <= 7; dx++) {
+        const x = o.x + dx, y = o.y + dy;
+        if (x < 0 || y < 0 || x >= NW || y >= NW) continue;
+        if (RDW[y * NW + x] <= 0.05) continue;
+        const d = dx * dx + dy * dy;
+        if (d < bd) { bd = d; bx = dx; by = dy; }
+      }
+      if (bd < 1e9) yaw = Math.atan2(bx, by) + jit * 0.3;
+    }
+    g.rotation.y = yaw;
     g.scale.setScalar(S);          // everything above is written at the 64-grid scale
     return g;
   }
@@ -714,7 +741,14 @@ export class View {
       // it RISES as it is made — half-built is half out of the ground
       const f = Math.min(1, o.prog);
       g.position.set(p[0], p[1] - (1 - f) * 0.045, p[2]);
-      g.scale.setScalar(0.55 + f * 0.45);
+      // ⚠⚠ THIS WAS setScalar(0.55 + f * 0.45), WHICH OVERWROTE THE S THAT
+      // _buildWorkView had just set — an assignment, not a multiply. Every work
+      // in the game therefore rendered at 1/S (66.7% at N=96) of the size it was
+      // authored at, which is most of why the town read as a scattering of
+      // pebbles. The FOOTPRINT now always sits at full authored scale and only
+      // the HEIGHT ramps, so a half-built work is a half-raised frame instead of
+      // a shrunken finished one.
+      g.scale.set(S, S * (0.55 + f * 0.45), S);
       g.visible = f > 0.04;
     }
     for (const [o, g] of this.workViews) {
@@ -2106,9 +2140,13 @@ export class View {
         for (const [lx, ly, lz] of spots) {
           // group-local offset through the group's own yaw, or windows float
           // off the corners of every rotated building
-          v3.set(lx, ly, lz).applyAxisAngle({ x: 0, y: 1, z: 0 }, g.rotation.y);
+          // ⚠ authored in group-local units, so they must pass through the
+          // group's SCALE before its yaw — otherwise every window sinks into
+          // the wall the moment the building is not sitting at scale 1.
+          v3.set(lx, ly, lz).multiply(g.scale).applyAxisAngle({ x: 0, y: 1, z: 0 }, g.rotation.y);
           v3.add(g.position);
           e.set(0, g.rotation.y, 0); q.setFromEuler(e);
+          sc.setScalar(g.scale.x);
           m4.compose(v3, q, sc);
           this.windowIM.setMatrixAt(n++, m4);
         }
@@ -2124,6 +2162,7 @@ export class View {
         g.traverse(m => {
           if (!m.userData.chimney) return;
           wv.copy(m.position); wv.y += m.userData.chimney / 2;
+          wv.multiply(g.scale);   // ⚠ same reason as the windows above
           wv.applyAxisAngle({ x: 0, y: 1, z: 0 }, g.rotation.y);
           wv.add(g.position);
           this._stacks.push([wv.x, wv.y, wv.z]);
