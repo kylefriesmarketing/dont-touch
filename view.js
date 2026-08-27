@@ -1561,16 +1561,40 @@ export class View {
       // rate would make the whole colony's phase jump every time somebody's
       // day went badly.
       const wb = k.bright[id];
-      let amp = 0.7 + wb * 0.5;
+      // ⚠⚠⚠ THE DYING USED TO RENDER AS PERFECTLY HEALTHY. Every wellbeing
+      // channel below keyed off `bright`, which is 0.12 + MEAN(all six needs)
+      // * 0.88 (sim.js) — and a mean cannot fall. One need at zero moves it by
+      // at most 1/6 * 0.88 = 0.147, so the thresholds were unreachable BY
+      // ARITHMETIC. Measured over 2,647,972 sampled kin-frames (3 seeds, 240
+      // days): the droop fired on 0.038% of frames and the shiver fired ZERO
+      // TIMES, EVER. `bright` never went below 0.4085 against a 0.42 droop
+      // threshold, so the largest forward lean any creature ever expressed was
+      // 0.73 DEGREES.
+      // Meanwhile `k.strain` is the actual 0..1 death clock — it climbs at
+      // dt/3.2 hungry, dt/1.6 thirsty, dt/0.9 cold, dt/0.35 hot, dt/0.09
+      // drowning, and at 1.0 the kin dies — and grep for `strain` in this file
+      // returned exactly ONE hit, inside the word "constraint" in a comment.
+      // At the literal instant of a strain death, 98.8% of the dying rendered
+      // as fine. That is most of what "there are no stakes" meant: you could
+      // not see anybody suffering, because nothing on screen was looking.
+      // ⚠️ PURE READ. `strain` is already in `k`, already round-trips through
+      // the save, and is already folded into fingerprint() — this changes
+      // nothing about the simulation, only what the player is shown.
+      const ail = st === STAGE.EGG ? 0 : k.strain[id];
+      // a failing body moves less, and moves worse
+      let amp = (0.7 + wb * 0.5) * (1 - ail * 0.6);
       if (st === STAGE.RIME) amp *= 0.6;
 
       // body paint: the same hue the lantern used to carry, worn as PAINT.
       // Saturation drops and the whole figure dims as wellbeing falls, so the
       // colony still reads at a glance — a struggling quarter of town goes
       // grey-dim while the healthy stay vivid. Palette-remapped like the tip.
+      // ⚠️ saturation and lightness now carry `ail` too, so a failing toy
+      // visibly drains toward grey while the healthy stay vivid. This is the
+      // at-a-glance read the comment above always claimed and never delivered.
       this._col.setHSL(hueOf(k.hue[id]) / 360,
-        st === STAGE.EGG ? 0.10 : 0.30 + wb * 0.34,
-        st === STAGE.EGG ? 0.62 : 0.26 + wb * 0.26);
+        st === STAGE.EGG ? 0.10 : (0.30 + wb * 0.34) * (1 - ail * 0.7),
+        st === STAGE.EGG ? 0.62 : (0.26 + wb * 0.26) * (1 - ail * 0.35));
       // rime: the paint itself goes a third of the way to bone — the last
       // stage reads at a glance even when the figure is standing still
       if (st === STAGE.RIME) this._col.lerp(this._rimeC, 0.35);
@@ -1579,7 +1603,10 @@ export class View {
       // posture: a failing kin DROOPS — pitched forward, sagging. This is the
       // distance read that replaces the dimming lantern, and it costs a pitch
       // term in the same quaternion the yaw already used.
-      const droop = st === STAGE.EGG ? 0 : Math.max(0, 0.42 - wb) * 1.1;
+      // ⚠️ `ail * 0.55` is 0.55 rad — 31.5 degrees — at death's door, where the
+      // old term topped out at 0.73 degrees. The bright term is kept so a
+      // merely miserable toy still sags a little before the clock starts.
+      const droop = st === STAGE.EGG ? 0 : ail * 0.55 + Math.max(0, 0.42 - wb) * 1.1;
 
       // the one who stays never bobs and never turns — they are stuck fast,
       // and the stillness is the tell before you ever open the inspector
@@ -1635,7 +1662,10 @@ export class View {
         : Math.atan2(k.tx[id] - k.x[id], k.ty[id] - k.y[id]);
       // the shiver: a kin at the bottom of its wellbeing cannot hold still.
       // Jitter, not gait — this one may run off this.t directly.
-      if (wb < 0.25 && st !== STAGE.EGG) face += Math.sin(this.t * 31 + id) * 0.03;
+      // ⚠️ keyed off the death clock, not the mean. `wb < 0.25` never once
+      // happened in 2.6 million frames; `ail > 0.45` is roughly the last third
+      // of a dying toy's life.
+      if (ail > 0.45 && st !== STAGE.EGG) face += Math.sin(this.t * 31 + id) * 0.03;
       // a moving kin leans INTO the walk a little; a failing one sags the same
       // way, further — one axis, two readings, both honest
       const lean = tPitch + droop + (moving ? 0.14 + Math.sin(ph * 2) * 0.05 : 0);
