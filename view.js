@@ -19,6 +19,12 @@ const EDGE_Y = 0.035;   // the lip where the fascia meets the terrain
 // no bare plywood to look at, because you are never outside the layout. The
 // basement, the sawhorses and the bulb belong to THE ROOM hub, not to the game.
 const BOARD = GR * 1.035;
+const APRON = 7;              // half-widths of scenery land past the board
+const APRON_GR = GR * APRON;  // ...and how far that reaches, for the fit solve
+// ⚠ THE CAMERA STAYS CLOSE ON PURPOSE. With the apron there is no void to stop
+// you, so the fit solve would happily let you pull back until the whole layout
+// is a postage stamp — and the whole point of the walk is that you go and look.
+const ZOOM_OUT_MAX = 1.35;
 // ⚠️⚠️ THE FLOOR IS NOW A FUNCTION OF ZOOM, AND THAT IS THE POINT.
 // EL_MIN was a flat 0.92 — 53 degrees above the horizon, "bird's eye only" —
 // and the stated reason is real: at a shallow angle you see past the edge of
@@ -366,6 +372,91 @@ export class View {
     this.ground.receiveShadow = true;
     this.jar.add(this.ground);
 
+    // ── THE APRON — THE WORLD DOES NOT END AT THE BOARD ─────────────────
+    // Kyle, three times: "it should be endless and fill the screen and you
+    // should be able to see everything using WASD".
+    // ⚠⚠ WITHOUT THIS, SCROLLING IS THE THING THAT CANNOT WORK. A tilted camera
+    // sees ahead of itself, so walking toward any edge brings the void past it
+    // into frame — which is why the no-void solve could only ever allow the
+    // camera to reach 27-59% of the way to the rim (measured across zooms and
+    // angles). No clamp can fix that: the board is finite and the fix has to be
+    // that it stops LOOKING finite.
+    // The same ground texture, tiled outward and dimmed with distance, so the
+    // land keeps going and falls away into the dark of the room rather than
+    // stopping at a line. The play area is unchanged — this is scenery, it has
+    // no cells, and the sim has never heard of it.
+    {
+      // ⚠⚠ A FLAT AVERAGED COLOUR, NOT THE TILED GROUND TEXTURE. Tiling the
+      // ground map outward was tried and photographed twice: at seven repeats
+      // each tile is board-sized, so the tile beside the board is a MIRROR of
+      // the board and matches it nowhere — it put a hard diagonal colour break
+      // right along the edge, which reads as an edge just as plainly as the void
+      // it replaced. Competing detail cannot be made to line up; no detail can.
+      // The apron is the ground's own average colour, dimmed toward the rim, and
+      // the miniature blur does the rest.
+      const AP = 7;                       // half-widths of land in every direction
+      let ar = 90, ag = 105, ab = 70;
+      try {
+        const sc = document.createElement('canvas'); sc.width = sc.height = 16;
+        const sg = sc.getContext('2d');
+        sg.drawImage(this.groundTex.image, 0, 0, 16, 16);
+        const d = sg.getImageData(0, 0, 16, 16).data;
+        let r2 = 0, g2 = 0, b2 = 0;
+        for (let i = 0; i < d.length; i += 4) { r2 += d[i]; g2 += d[i + 1]; b2 += d[i + 2]; }
+        const nn = d.length / 4;
+        ar = r2 / nn; ag = g2 / nn; ab = b2 / nn;
+      } catch (e) { /* an unready canvas must not stop the world being built */ }
+      const ageo = new THREE.PlaneGeometry(GR * 2 * AP, GR * 2 * AP, AP * 4, AP * 4);
+      ageo.rotateX(-Math.PI / 2);
+      // dim it toward the rim so the layout stays the bright thing in the room
+      const col = [];
+      const pos = ageo.attributes.position;
+      for (let i = 0; i < pos.count; i++) {
+        const dx = pos.getX(i) / (GR * AP), dz = pos.getZ(i) / (GR * AP);
+        const r = Math.min(1, Math.sqrt(dx * dx + dz * dz));
+        // ⚠ gentle, and it starts at FULL brightness. A strong vignette put a
+        // hard tonal line right where the board meets the apron, which reads as
+        // an edge just as plainly as the void did — the thing this exists to
+        // remove. It only really darkens past halfway out, where the miniature
+        // blur is already carrying it.
+        const f = Math.max(0.10, 1 - Math.pow(r, 2.6) * 0.95);
+        col.push(f, f, f);
+      }
+      ageo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+      // ⚠ CLAMPED, NOT TILED — this is what makes the join invisible. The UVs are
+      // built so the board's own square maps to [0,1] and everything beyond it
+      // falls outside; with ClampToEdgeWrapping the outside is the board's EDGE
+      // PIXEL smeared outward, so the colour at the seam matches the board
+      // exactly by construction instead of by luck. A repeat or a mirror cannot
+      // do that — both put a different part of the map against the edge.
+      const auv = [];
+      for (let i = 0; i < pos.count; i++) {
+        auv.push(0.5 + pos.getX(i) / (GR * 2), 0.5 - pos.getZ(i) / (GR * 2));
+      }
+      ageo.setAttribute('uv', new THREE.Float32BufferAttribute(auv, 2));
+      const aedge = this.groundTex.clone();
+      aedge.needsUpdate = true;
+      aedge.wrapS = aedge.wrapT = THREE.ClampToEdgeWrapping;
+      const amat = new THREE.MeshStandardMaterial({
+        map: aedge, color: new THREE.Color(0xffffff),
+        vertexColors: true, roughness: 1, metalness: 0,
+      });
+      this.apron = new THREE.Mesh(ageo, amat);
+      // ⚠ SAMPLED FROM THE BOARD'S OWN RIM, not guessed. At a guessed 0.16 the
+      // apron sat below the terrain edge (measured rim 0.18-0.25) and the step
+      // between them was a hard diagonal line across the screen.
+      let rim = 0, rn = 0;
+      for (let c = 0; c < N; c += 4) {
+        rim += this.cellToLocal(c, 0, 0)[1] + this.cellToLocal(c, N - 1, 0)[1];
+        rim += this.cellToLocal(0, c, 0)[1] + this.cellToLocal(N - 1, c, 0)[1];
+        rn += 4;
+      }
+      this.apron.position.y = rn ? rim / rn - 0.012 : 0.16;
+      this.apron.renderOrder = -1;
+      this.apron.receiveShadow = false;
+      this.jar.add(this.apron);
+    }
+
     // ⚠️ PICKING GETS ITS OWN LOW-RES MESH. Raycasting the display terrain is
     // ~110k triangles per pointermove while the finger is down. This one is the
     // sim's own 64x64 and never renders.
@@ -438,6 +529,12 @@ export class View {
     ]) {
       const m = new THREE.Mesh(new THREE.BoxGeometry(w, lip, dd), this.fasciaMat);
       m.position.set(sx, BASE + lip / 2, sz);
+      // ⚠ THE PLYWOOD LIP IS OFF WHILE THE LAND IS ENDLESS. It is the edge of a
+      // finite board, and with the apron behind it it reads as a wall standing
+      // in the middle of a field. Kept in the tree (and in `this.fascia`) so the
+      // finite-board look is one flag away if the fiction wants it back.
+      m.visible = false;
+      (this.fascia || (this.fascia = [])).push(m);
       this.jar.add(m);
     }
     const under = new THREE.Mesh(
@@ -2385,7 +2482,7 @@ export class View {
         if (ray.y >= -1e-6) return false;          // that corner is the horizon
         const tt = -camY / ray.y;
         const hx = camX + ray.x * tt, hz = camZ + ray.z * tt;
-        if (hx < -GR || hx > GR || hz < -GR || hz > GR) return false;
+        if (hx < -APRON_GR || hx > APRON_GR || hz < -APRON_GR || hz > APRON_GR) return false;
       }
       return true;
     };
@@ -2400,7 +2497,9 @@ export class View {
       if (!covers(d, EL_MAX, this.orbit.az)) break;
       best = d;
     }
-    this.maxDist = best;
+    // ⚠ capped: the apron means 'no void' no longer limits anything, so without
+    // this the far stop drifts out to wherever the maths allows.
+    this.maxDist = Math.min(best, ZOOM_OUT_MAX);
     this._fitCovers = covers;
     this.panLimit = this.solvePanLimit(this.orbit.dist);
     return best;
@@ -2439,7 +2538,17 @@ export class View {
     return this.panLimit || 0;
   }
 
+  // ⚠⚠ THE WALK REACHES THE WHOLE LAYOUT NOW, and that is the point of the
+  // apron. This used to solve for 'how far before the void shows', which
+  // measured 27-59% of the way to the rim depending on zoom and angle — so the
+  // corners of the player's own town were literally unreachable. With land past
+  // the board there is nothing to protect against, so the bound is simply the
+  // board itself, plus enough margin to stand at its edge and look in.
   solvePanLimit(dist) {
+    return GR * 1.06;
+  }
+
+  _solvePanLimitVoid(dist) {
     const covers = this._fitCovers;
     if (!covers) return 0;
     const az = this.orbit.az;
