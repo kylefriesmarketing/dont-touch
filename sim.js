@@ -1509,6 +1509,20 @@ export class Sim {
       const dx = x - this.pond.x, dy = y - this.pond.y, d = Math.sqrt(dx * dx + dy * dy) || 1;
       bwx = this.pond.x + (dx / d) * 6 * S; bwy = this.pond.y + (dy / d) * 6 * S; bw = 0.09;
     }
+    // ⚠️⚠️ A REACHABILITY GATE WAS TRIED HERE AND REMOVED. MEASURED, DO NOT
+    // REBUILD IT WITHOUT READING THIS. The idea was sound — `_move` walks a
+    // straight line with no pathfinder, so a bank across a lake is not a bank —
+    // and it failed in both directions, 4 seeds x 120 days:
+    //   HEAD (no gate)   Central Park 236 alive / 109 standing, 11 drowned,  0 thirst
+    //   hard gate        Central Park 171 alive /  90 standing,  0 drowned,  4 thirst
+    //   soft gate (x0.25) Central Park 232 alive / 103 standing,  1 drowned, 13 thirst
+    // The hard gate rejected the only bank on a map that is mostly reservoir and
+    // cost SIXTY-FIVE kin. Softening it to a preference gave the population back
+    // and then converted the drownings into MORE thirst deaths than the drownings
+    // it prevented. Neither beat doing nothing.
+    // The real defect was never target CHOICE, it was that `_move` would wade
+    // into water that kills — which is fixed in `_move` itself, locally, and
+    // costs nothing. Fix the walk, not the wanting.
     push(2, bwx, bwy, deficit(1) * (0.9 + bw * 8));
 
     // warmth: sample for a cell inside the comfort band
@@ -1793,6 +1807,33 @@ export class Sim {
     const gx = this.eff(this.idx(k.x[id] + 1, k.y[id])) - this.eff(this.idx(k.x[id] - 1, k.y[id]));
     const gy = this.eff(this.idx(k.x[id], k.y[id] + 1)) - this.eff(this.idx(k.x[id], k.y[id] - 1));
     const slide = 2.4;
+    // ⚠️⚠️⚠️ THEY WALK STRAIGHT THROUGH LAKES AND SOMETIMES DROWN. THAT IS
+    // KNOWN, IT IS REAL, AND THREE FIXES FOR IT ALL MEASURED WORSE THAN LEAVING
+    // IT ALONE. Read this before writing the fourth.
+    //
+    // The bug: `_move` goes in a straight line at tx,ty. There is no pathfinder
+    // and the project has always refused one. It never mattered while water
+    // could not kill — deepest water on a generated world, sampled for 300 days,
+    // is 0.1034 against a lethal 0.14. Two things shipped in 2026-08 that make
+    // real depth reachable: baked real worlds have real lakes (Central Park
+    // peaks at 0.1671 untouched) and the player has a shovel (digging the pond
+    // out reached 0.2264). Measured: NINE drownings in 60 unattended days on
+    // Central Park, every one on `flee` or `wander`, and not one of them aimed
+    // at a target that was itself lethal water. They were crossing the reservoir.
+    //
+    // Central Park, 4 seeds x 120 days, alive / standing / drowned / thirst:
+    //   do nothing                        236 / 109 / 11 /  0
+    //   refuse steps into water > 0.10     246 /  92 /  0 / 11
+    //   ...plus reject targets across water 171 /  90 /  0 /  4
+    //   ...same but as a x0.25 preference   232 / 103 /  1 / 13
+    //   refuse steps into water > 0.125     175 / 102 /  1 / 48
+    //
+    // Doing nothing and the best guard have the SAME ELEVEN water deaths; the
+    // guard only relabels drowning as thirst, because a local refusal makes them
+    // dither on a shore instead of crossing. Raising the threshold toward lethal
+    // made it far worse, not better. Rejecting unreachable targets cost 65 kin.
+    // A real fix is a real pathfinder, which is a different and much larger
+    // decision than this comment. Until then the lake is honestly dangerous.
     k.x[id] += (dx / d) * sp - gx * slide * sp;
     k.y[id] += (dy / d) * sp - gy * slide * sp;
     this._keepIn(id);
@@ -2344,6 +2385,13 @@ export class Sim {
     }
     return seen;
   }
+
+  // ⚠️ THERE WAS A `_walkable(x0,y0,x1,y1)` LINE-OF-SIGHT HELPER HERE and it is
+  // gone deliberately, not by accident. It sampled the straight line to a
+  // candidate and rejected anything across deep water — which sounds obviously
+  // right and measured worse than doing nothing, in both its strict and its
+  // lenient form. The numbers and the reasoning are written at the water
+  // candidate in `_decide`; read them before writing this function again.
 
   // —— THE SEED ————————————————————————————————————
   //

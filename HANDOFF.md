@@ -1119,4 +1119,60 @@ now decrements it, by the same rule `_kin` counts with.
 
 ---
 
+## ⚠️⚠️ A NEGATIVE RESULT: THE DROWNING FIX THAT ISN'T (2026-08-27)
+
+**Do not "fix" kin drowning in lakes without reading this. Three attempts, all
+measured, all worse than leaving it alone.**
+
+### The bug is real
+`_move` walks a STRAIGHT LINE at `tx,ty`. There is no pathfinder and the project
+has always refused one. It never mattered while water could not kill — deepest
+water on a generated world, sampled across 300 days, is **0.1034** against a
+lethal `water > 0.14`, and tilting the whole board for forty days only reached
+0.0932. **Drowning was mathematically unreachable.**
+
+Two things shipped in v0.8–0.9 made real depth reachable for the first time:
+- a **baked real world** has real lakes — Central Park peaks at **0.1671** untouched;
+- the player has a **shovel** — digging the pond out took a generated world to **0.2264**.
+
+Measured on Central Park, 60 unattended days: **nine drownings**, every one on
+`flee` or `wander`, and **not one** aimed at a target that was itself lethal
+water. They were crossing the reservoir in a straight line.
+
+### Every fix measured worse than nothing
+Central Park, 4 seeds × 120 days:
+
+| build | alive | standing | drowned | thirst |
+|---|---|---|---|---|
+| **do nothing** | 236 | **109** | 11 | 0 |
+| refuse steps into water > 0.10 | **246** | 92 | 0 | 11 |
+| ...plus reject targets across water | 171 | 90 | 0 | 4 |
+| ...same, as a ×0.25 preference | 232 | 103 | 1 | 13 |
+| refuse steps into water > 0.125 | 175 | 102 | 1 | 48 |
+
+- **Doing nothing and the best guard have the SAME ELEVEN water deaths.** The
+  guard only relabels drowning as thirst: a local refusal makes them dither on a
+  shore instead of crossing.
+- **Raising the threshold toward lethal made it far worse** (48 thirst deaths at
+  0.125), which is the opposite of the intuition that sent me there.
+- **Rejecting unreachable targets cost 65 kin** on the map it was meant to help,
+  because Central Park is mostly reservoir and nearly every bank is across water
+  from somewhere.
+- On a *generated* world every variant is inert or near-inert — max depth 0.1034
+  is below every threshold tried. The 0.125 build reproduced HEAD exactly:
+  166 alive / 73 standing / 0 drowned / 1 thirst.
+
+**Verdict: reverted to HEAD behaviour.** `sim.js` carries the numbers in `_move`
+and nothing else changed. A real fix is a real pathfinder, which is a much larger
+decision than a movement guard. Until then the lake is honestly dangerous, which
+is arguably the better fiction anyway: this is the first hazard in the game that
+the world itself can inflict.
+
+⚠️ The general lesson, and it is the third time this project has learned it:
+**a local guard on a global problem trades one death for another.** The same
+shape as the starvation-emergency disaster in v0.7 and the famine-weight in the
+same batch. Measure the death CAUSES, not just the population.
+
+---
+
 *Dirty Boy Devs. The jar runs, the tests are green, and nobody has told the player what they were.*
