@@ -1496,3 +1496,78 @@ Two of the seven mattered enough to record, because both sounded right:
 **The meta-lesson: a finding that names a real code shape can still be wrong about
 its consequence.** Both of these correctly described the code and both were wrong
 about what it costs. Measure the consequence, not the shape.
+
+## 🎥 THE CAMERA WALKS, THE BOARD FILLS THE SCREEN, AND WATER WORKS (2026-08-27)
+
+Three playtest reports from Kyle, all real, all view/input only — `sim.js` untouched.
+
+### ⚠️⚠️ 1. "once i click on a button the water button stops working"
+
+Not the button, and not the click. **`pourAt` was set ONLY in `pointermove`**, so
+pressing and holding perfectly still poured **nothing, forever**. Measured: hold with
+no movement = **0.0** water; move a **single pixel** = 6.56. The verb worked only if
+your hand happened to jitter — which is exactly how a player experiences "it stops
+working sometimes".
+
+⚠️ **The same defect silently broke DAD'S CORNER.** `shapeAt` was set the same way, so
+raise/hollow — the one permanent act in the game — moved no ground at all under a
+thumb held still (0.0 → 2.167 after the fix). Both verbs are deliberately HELD rather
+than tapped; the hold just has to *start* where you put it. Both now seed from the
+press.
+
+**The lesson: a "held" gesture must act on the press, not on the first move.** Grep for
+any other `mode = X; this.someAt = null` pair before adding a third.
+
+### 2. There was no way to move across the board at all
+
+You could orbit it, zoom it and tilt it, and the only thing that ever chose *where* you
+were looking was the town itself (`lookAtTown`, every two seconds). WASD + arrows now
+walk the camera.
+- ⚠️ A held key needs a **Set read by the frame loop**, not a keydown handler — that
+  handler returns early on `e.repeat`, and must, or every verb would fire on
+  auto-repeat.
+- ⚠️ **Camera-relative**, so W means "away from me" whichever way the board is turned.
+- ⚠️ It moves `center` **and** `centerTo` together. The frame lerps one toward the
+  other, so writing only one springs straight back and the keys read as broken.
+- ⚠️ The walk sets `view.panHold = 4`, which suppresses the auto-aim — otherwise the
+  town yanks the camera back mid-stride.
+- ⚠️ **Clamped as a RADIUS, not per axis.** The walk is diagonal in world space, so a
+  per-axis clamp let the true distance reach `LIM·√2` and the board came off the edge
+  of the screen at full stick. Measured centre (0.308, −0.308) = radius 0.436 against
+  an axis limit of 0.308.
+
+### ⚠️⚠️ 3. "the map should take up the whole screen, no grey space"
+
+The zoom-out limit was a flat **2.75**, and at 2.75 the board covers only **6–86% of
+the width**. The rest is the 60×60 basement floor plane — real scenery, but dead screen.
+
+⚠️ **A CONSTANT CANNOT FIX THIS.** The furthest zoom that still covers the frame depends
+hard on the window's aspect: measured **2.2 on a tall 5:4, 1.8 on 16:9, 1.2 on a 21:9
+ultrawide**. Any single number either leaves grey on the wide monitors or robs the tall
+ones of most of their view. It is solved per window in `fitLimits()`.
+
+⚠️⚠️ **THE COVERAGE TEST TOOK THREE ATTEMPTS, AND THE FIRST TWO LOOKED RIGHT.**
+1. *Project the four board corners, check their BOUNDING BOX contains the screen.*
+   Not sufficient — the board is a **square** and the camera is **orbited**, so a
+   rotated quad's bbox can cover the screen while its own edges cut the screen's top
+   corners. Photographed: dark wedges top-left and top-right while the test said pass.
+2. *Test the projected quad itself.* **Worse.** A corner outside the frustum projects
+   to meaningless NDC — measured **(−12.15, 38.97)** for one board corner — which
+   scrambles the winding and makes the polygon test nonsense. It collapsed `maxDist` to
+   the minimum on every aspect.
+3. **Go the other way, which is numerically stable:** fire a ray through each corner of
+   the **screen**, meet the ground plane, and ask whether that point is on the board. A
+   ray that never comes down is the horizon, which is the worst case there is.
+
+⚠️ **Pulling back now RAISES the angle** (`minElFor`) rather than showing the floor. A
+steeper look fits more board on screen — **0.85 at the low elevation floor against 1.20
+looking almost straight down** — so solving `maxDist` at the *worst* angle (the first
+version) threw away 40% of the view for nothing. Zoom in and you get the low angle where
+the faces are; pull back and the room tips toward a plan view of the whole layout.
+
+⚠️ Both solves are **cached on the zoom** (`panLimitNow`, `_elFit`): ~240 projections is
+nothing on a wheel event and far too much every frame.
+
+**Verified live:** no void at any zoom (0.60 through the 1.20 stop) or at full walk in
+all four directions; the wheel stops at the computed limit and the angle follows; water
+and raise both act from a still press; natural boot fills the window; console clean.
