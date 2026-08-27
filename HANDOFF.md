@@ -1175,4 +1175,34 @@ same batch. Measure the death CAUSES, not just the population.
 
 ---
 
+## 🐛 THE ROOM'S OWN TEMPERATURE WAS NOT IN THE FINGERPRINT (2026-08-27)
+
+`ambientBase` is what every one of the 9,216 cells relaxes toward. It is a live
+knob, it round-trips through the save, and it was **the only room control missing
+from `fingerprint()`** — the sheet (`lid`), the bulb (`lampOn`), the window
+(`curtain`) and the damp (`humid`, `rainLeft`) were all folded.
+
+So two colonies, one in a 19° room and one in a 42° room, **hashed EQUAL**.
+Measured on seed 3 from day 100, thirty days later:
+
+| ambientBase | alive | deaths |
+|---|---|---|
+| 19.0 (the value that never moves) | 26 | hunger 19 |
+| 30 | 11 | hunger 31 |
+| 42 | **0** | **heat 16**, hunger 14 |
+| 8 | 7 | cold 6, hunger 28 |
+| 2 | 3 | **cold 21** |
+
+The save round-trip test would have passed while the room reset underneath the
+colony. Same class as `p.techs.size`, `p.mods` and the stale `alive` count.
+**Anything the sim reads every tick has to be in `fingerprint()`.**
+
+⚠️ This is also the prerequisite for the one design finding that survived
+adversarial review: **the room is the antagonist.** `ambientBase` has never
+moved in play, and the table above is what happens when it does — the deaths
+sort by bloodline, because each hide has its own comfort band. Any threat built
+on it would have been invisible to the harness until now.
+
+---
+
 *Dirty Boy Devs. The jar runs, the tests are green, and nobody has told the player what they were.*

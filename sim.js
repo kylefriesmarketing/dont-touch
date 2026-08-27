@@ -2761,6 +2761,17 @@ export class Sim {
     for (const p of this.prac) { mix(p.invented); mix(p.lost); mix(p.tradition); mix(p.reinvented); }
     for (const key of Object.keys(this.placeNames).sort()) mix(key.length + this.placeNames[key].length);
     mix(this.humid); mix(this.rainLeft); mix(this.curtain); mix(this.lid ? 1 : 0); mix(this.lampOn ? 1 : 0);
+    // ⚠️⚠️ THE ROOM'S OWN TEMPERATURE. Every other control in this room was
+    // folded — the sheet, the bulb, the window, the damp — and `ambientBase`,
+    // which is the one every single cell of the board relaxes toward, was not.
+    // It round-trips through the save (toJSON/fromJSON both carry it) so the
+    // hole was invisible: two colonies, one in a 19° room and one in a 42° room,
+    // hashed EQUAL. Measured on seed 3 from day 100, thirty days later: the 19°
+    // town has 26 alive and the 42° town has NONE, sixteen of them dead of heat.
+    // The save round-trip test would have passed while the room reset underneath
+    // the colony. Same class as `p.techs.size`, `p.mods` and the stale `alive`
+    // count — anything the sim reads every tick has to be in here.
+    mix(this.ambientBase);
     // ⚠️ THE SHAPED GROUND HAS TO BE IN HERE. `height` is not saved and the
     // harness compares two towns by this number, so without folding the
     // player's own terrain a save that had a hill in it and one that did not

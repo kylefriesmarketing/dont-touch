@@ -592,6 +592,35 @@ t('homes round-trip and hold determinism', () => {
   eq(b.fingerprint(), s.fingerprint(), 'they drifted after the doors were claimed');
 });
 
+t('the room temperature is in the fingerprint', () => {
+  // ⚠⚠ IT WAS NOT, AND THE HOLE WAS INVISIBLE. `ambientBase` is what every
+  // cell of the board relaxes toward, it round-trips through the save, and it
+  // was the ONLY room control missing from fingerprint() -- the sheet, the
+  // bulb, the window and the damp were all folded. Two colonies, one in a 19
+  // degree room and one in a 42 degree room, hashed EQUAL. Measured on seed 3
+  // from day 100: thirty days later the 19 degree town has 26 alive and the 42
+  // degree town has NONE, sixteen of them dead of heat.
+  const a = fixture('room', 20);
+  const b = clone(a);
+  eq(b.fingerprint(), a.fingerprint(), 'the clone did not start equal');
+  b.ambientBase = 42;
+  ok(b.fingerprint() !== a.fingerprint(), 'a room 23 degrees hotter hashed the same');
+  // and it still restores exactly
+  const c = Sim.fromJSON(JSON.parse(JSON.stringify(b.toJSON())));
+  eq(c.fingerprint(), b.fingerprint(), 'the hot room did not restore identically');
+});
+
+t('the room can actually kill, which is what makes it worth hashing', () => {
+  const s2 = fixture('room', 20);
+  const hot = clone(s2);
+  hot.ambientBase = 44;
+  run(hot, 25);
+  const cool = clone(s2);
+  run(cool, 25);
+  ok(hot.alive < cool.alive,
+    'a 44 degree room killed nobody: hot ' + hot.alive + ' vs cool ' + cool.alive);
+});
+
 // --- a real place ----------------------------------------------------------
 console.log('somewhere real');
 
