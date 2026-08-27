@@ -84,6 +84,10 @@ class App {
     // gesture nobody can see is not a feature — shipped without this, the honest
     // verdict on playing it was "there are no powers or way to interact".
     this.armed = 'rest';
+    // held movement keys. ⚠ a Set, not the keydown event: keydown returns early
+    // on e.repeat (and must, or every verb would fire on auto-repeat), so a HELD
+    // key can only drive anything if the frame loop reads its state.
+    this.panKeys = new Set();
   }
 
   async boot() {
@@ -359,14 +363,26 @@ class App {
       // possible gift; holding is what lets you overfill one spot and drown
       // somebody, so the danger is in the gesture and not in a number.
       if (this.armed === 'water') {
-        mode = 'water'; this.pourAt = null; return;
+        // ⚠⚠ SEED IT FROM THE PRESS, NOT FROM THE FIRST MOVE. `pourAt` used to be
+        // set ONLY in pointermove, so pressing and holding perfectly still poured
+        // NOTHING — forever. Measured: hold with no movement = 0.0 water; move a
+        // single pixel = 6.56. The verb worked only if your hand happened to
+        // jitter, which is exactly how a player experiences 'the water button
+        // stops working sometimes'. Holding is still what overfills a spot; the
+        // hold just has to start where you put it.
+        const h0 = v.pickGround(nx, ny);
+        mode = 'water'; this.pourAt = h0 ? h0.cell : null; return;
       }
       // ⚠️ SO IS THE GROUND. A tap that moved terrain would make the one
       // permanent act in the game the cheapest gesture in it. Holding means a
       // hill is something you lean on until it is the size you wanted, and the
       // shape follows the pointer, so you draw a ridge rather than stamp dots.
       if (this.armed === 'raise' || this.armed === 'lower') {
-        mode = 'shape'; this.shapeAt = null; this.shapeDir = this.armed === 'raise' ? 1 : -1;
+        // ⚠ same defect as the pour above, and it silently broke DAD'S CORNER:
+        // a thumb held still moved no ground at all.
+        const h0 = v.pickGround(nx, ny);
+        mode = 'shape'; this.shapeAt = h0 ? h0.cell : null;
+        this.shapeDir = this.armed === 'raise' ? 1 : -1;
         return;
       }
       if (this.armed === 'seed') {
@@ -595,7 +611,11 @@ class App {
       // ⚠️ the near limit is 0.60, not 0.75: at 0.75 you can never get low
       // enough to watch one person do one thing, which is the whole appeal of
       // a town this size. The far limit still shows the whole board.
-      v.orbit.tDist = Math.max(0.60, Math.min(2.75, v.orbit.tDist + Math.sign(e.deltaY) * 0.16));
+      // ⚠ the far limit is COMPUTED from the window's aspect (view.fitLimits),
+      // not the flat 2.75 this used to be — at 2.75 the board covered only 6-86%
+      // of the width and the rest was dead grey.
+      const far = v.maxDist || 1.6;
+      v.orbit.tDist = Math.max(0.60, Math.min(far, v.orbit.tDist + Math.sign(e.deltaY) * 0.16));
     }, { passive: false });
 
     addEventListener('keydown', (e) => {
@@ -618,6 +638,15 @@ class App {
         return;
       }
       this.sfx.start();
+      // ── WALKING THE CAMERA ─────────────────────────────────────
+      // There was no way to move across the board at all: you could orbit it,
+      // zoom it and tilt it, and the only thing that ever chose WHERE you were
+      // looking was the town itself (lookAtTown, every two seconds). On a board
+      // this size that means most of it was somewhere you could not go.
+      if (k === 'w' || k === 'a' || k === 's' || k === 'd' ||
+          k === 'arrowup' || k === 'arrowdown' || k === 'arrowleft' || k === 'arrowright') {
+        e.preventDefault(); this.panKeys.add(k); return;
+      }
       if (k === ' ') { e.preventDefault(); this.breathing = true; }
       else if (k === 'l') { s.setLid(!s.lid); this.sfx.lid(); this.ui.sync(); }
       else if (k === 'k') { s.setLamp(!s.lampOn); this.sfx.touch(); this.ui.sync(); }
@@ -632,9 +661,14 @@ class App {
       else if (k === 'b') this.ui.showPage();
       else if (k === '?' || k === '/') this.ui.showBox(document.getElementById('boxWrap').classList.contains('hide'));
     });
-    addEventListener('keyup', (e) => { if (e.key === ' ') this.breathing = false; });
+    addEventListener('keyup', (e) => {
+      if (e.key === ' ') this.breathing = false;
+      this.panKeys.delete(e.key.toLowerCase());
+    });
     // a tab switch while breathing used to leave the town under a held breath
-    addEventListener('blur', () => { this.breathing = false; });
+    // ⚠ a tab switch mid-stride used to leave a held breath; a held ARROW would
+    // leave the camera sliding away with nothing to stop it.
+    addEventListener('blur', () => { this.breathing = false; this.panKeys.clear(); });
   }
 
   // the tap you should not do — the whole colony hears it
@@ -657,6 +691,51 @@ class App {
   // pouring runs on the FRAME clock, not on pointer events: a still hand over
   // one spot must keep filling it (that is how you drown somebody on purpose),
   // and a moving one must lay a wet trail.
+  // Camera-RELATIVE, because the board is orbited: W has to mean 'away from me'
+  // whichever way round you have turned it, not 'north'.
+  // ⚠ It moves `center` AND `centerTo` together. The frame code lerps center
+  // toward centerTo every frame, so writing only one of them makes the camera
+  // spring straight back and the keys read as broken.
+  _pan(dt) {
+    if (this.phase !== 'play' || !this.panKeys.size) return;
+    const v = this.view, o = v.orbit;
+    let fx = 0, fz = 0;
+    if (this.panKeys.has('w') || this.panKeys.has('arrowup')) fz -= 1;
+    if (this.panKeys.has('s') || this.panKeys.has('arrowdown')) fz += 1;
+    if (this.panKeys.has('a') || this.panKeys.has('arrowleft')) fx -= 1;
+    if (this.panKeys.has('d') || this.panKeys.has('arrowright')) fx += 1;
+    if (!fx && !fz) return;
+    const m = Math.sqrt(fx * fx + fz * fz); fx /= m; fz /= m;
+    // scaled by zoom so one press crosses the same fraction of what you can see
+    const sp = 0.85 * o.dist * dt;
+    const ca = Math.cos(o.az), sa = Math.sin(o.az);
+    const wx = (fx * ca + fz * sa) * sp;
+    const wz = (fz * ca - fx * sa) * sp;
+    // ⚠ CLAMPED TO THE BOARD. Without this you can walk the camera off into the
+    // dark and lose the town with no way back but a reload.
+    // ⚠ CLAMPED BY HOW MUCH SLACK THE CURRENT ZOOM ACTUALLY HAS. Walking to the
+    // rim shows the dark past the board exactly as zooming out does, and it was
+    // the first thing that happened once these keys existed. Zoomed right in
+    // there is plenty of room to roam; zoomed out to the fit limit there is
+    // none, because the whole board is already on screen.
+    const LIM = v.panLimitNow ? v.panLimitNow() : 0;
+    // ⚠ CLAMPED AS A RADIUS, NOT PER AXIS. This walk is camera-relative, so one
+    // key moves the centre diagonally in world space; clamping x and z
+    // separately let the real distance reach LIM*root2 and the board came off
+    // the edge of the screen at full stick.
+    const put = (vec) => {
+      let nx = vec.x + wx, nz = vec.z + wz;
+      const r = Math.sqrt(nx * nx + nz * nz);
+      if (r > LIM && r > 0) { const k2 = LIM / r; nx *= k2; nz *= k2; }
+      vec.x = nx; vec.z = nz;
+    };
+    put(v.centerTo); put(v.center);
+    // ⚠ AND STOP THE AUTO-AIM FIGHTING YOU. lookAtTown() re-centres on the town
+    // every two seconds; without this the camera snaps back mid-walk and the
+    // keys feel broken rather than absent. It resumes once you stop.
+    v.panHold = 4;
+  }
+
   _pour(dt) {
     if (!this.pourAt) return;
     this.pourT = (this.pourT || 0) + dt;
@@ -777,6 +856,7 @@ class App {
     this.last = now;
 
     this._pushHand(dt);
+    this._pan(dt);
     if (this.phase === 'play') { this._pour(dt); this._shape(dt); this._moveTag(); }
 
     // ⚠️ breathe/ventFog sit OUTSIDE the paused guard below, so without the

@@ -89,6 +89,8 @@ export class View {
     // two frames. "Where are the buildings and civilisation" was answered by a
     // number in this line, not by the art and not by the pacing.
     this.orbit = { az: 0.35, el: 1.16, dist: 1.25, tAz: 0.35, tEl: 1.16, tDist: 1.25 };
+    this.panHold = 0;      // seconds the player's own camera walk owns the view
+    this.GR = GR;          // the board half-width, so the pan can clamp to it
     // 'jar' by history: this group is THE BOARD — everything that lifts
     // together when you tilt one edge of the plywood off the sawhorses.
     this.jar = new THREE.Group();
@@ -2033,7 +2035,18 @@ export class View {
     if (!n) return;
     cx /= n; cy /= n;
     const N = s.N;
-    this.centerTo.set((cx / (N - 1) - 0.5) * GR * 2, 0.06, (cy / (N - 1) - 0.5) * GR * 2);
+    // ⚠ HELD TO THE SAME SLACK THE WALK IS. Without this the auto-aim can put
+    // the camera somewhere the player is not allowed to walk to — which both
+    // shows the dark past the rim and makes the two clamps fight each frame,
+    // reading as a jitter. When the board already fills the screen the slack is
+    // zero and the camera simply stays centred, which is correct: there is
+    // nothing off-centre to go and look at.
+    const lim = this.panLimitNow();
+    let tx = (cx / (N - 1) - 0.5) * GR * 2, tz = (cy / (N - 1) - 0.5) * GR * 2;
+    // ⚠ clamped as a RADIUS, not per axis — see the note in solvePanLimit
+    const rr2 = Math.sqrt(tx * tx + tz * tz);
+    if (rr2 > lim && rr2 > 0) { const k2 = lim / rr2; tx *= k2; tz *= k2; }
+    this.centerTo.set(tx, 0.06, tz);
   }
 
   // — what dad dropped. One group of small crumbs; a gift shrinks as it is
@@ -2315,6 +2328,142 @@ export class View {
     this.scene.add(this.dust);
   }
 
+  // ── THE BOARD FILLS THE SCREEN ─────────────────────────────────
+  // Kyle: "the map should take up the whole screen and be endless, no grey
+  // space". The zoom-out limit was a flat 2.75, and at 2.75 the board covers
+  // only 6-86% of the width — dead room down both sides.
+  // ⚠⚠ A CONSTANT CANNOT FIX THIS, WHICH IS WHY IT IS COMPUTED. The furthest
+  // zoom that still covers the frame depends on the window's ASPECT, hard:
+  // measured 2.2 on a tall 5:4, 1.8 on 16:9, and 1.2 on a 21:9 ultrawide. Any
+  // single number either leaves grey on the wide monitors or robs the tall ones
+  // of most of their view. So we solve for it whenever the window changes.
+  // ⚠ Scanned across the WHOLE legal elevation range, not just the current one:
+  // the player can tilt freely once they are there, and which elevation is worst
+  // flips with the aspect (on ultrawide the mid angle is the worst, not the low
+  // one). We take the tightest.
+  // Uses a scratch camera and touches no live state.
+  fitLimits() {
+    try { return this._fitLimits(); }
+    catch (e) { this.maxDist = this.maxDist || 1.6; this.panLimit = this.panLimit || 0; return this.maxDist; }
+  }
+
+  _fitLimits() {
+    const cam = this._fitCam || (this._fitCam = this.camera.clone());
+    cam.aspect = this.camera.aspect;
+    cam.fov = this.camera.fov; cam.near = this.camera.near; cam.far = this.camera.far;
+    cam.updateProjectionMatrix();
+    const corners = [[0, 0], [this.sim.N - 1, 0], [0, this.sim.N - 1], [this.sim.N - 1, this.sim.N - 1]]
+      .map(([cx, cy]) => this.cellToLocal(cx, cy, 0));
+    const p = new THREE.Vector3();
+    // ⚠⚠ CAST THE SCREEN ONTO THE BOARD, DO NOT PROJECT THE BOARD ONTO THE
+    // SCREEN. Two earlier versions of this test projected the four board corners
+    // and both were wrong. The bounding box of those corners containing the
+    // screen is not sufficient — the board is a SQUARE and the camera is orbited,
+    // so a rotated quad's bbox can cover the screen while its own edges cut the
+    // screen's top corners (photographed: dark wedges top-left and top-right).
+    // And testing the quad itself is WORSE, because a corner outside the frustum
+    // projects to meaningless NDC — measured (-12.15, 38.97) for one board corner
+    // — which scrambles the winding and makes the polygon test nonsense.
+    // Going the other way is stable: fire a ray through each corner of the
+    // screen, meet the ground plane, and ask whether that point is on the board.
+    // A ray that never comes down is the horizon, which is the worst case there
+    // is.
+    const NDC = [[-1, -1], [1, -1], [-1, 1], [1, 1]];
+    const ray = new THREE.Vector3();
+    const covers = (dist, el, az, ox, oz) => {
+      ox = ox || 0; oz = oz || 0;
+      const cy2 = Math.cos(el), sy2 = Math.sin(el);
+      const camX = ox + Math.sin(az) * cy2 * dist;
+      const camY = sy2 * dist + 0.10;
+      const camZ = oz + Math.cos(az) * cy2 * dist;
+      cam.position.set(camX, camY, camZ);
+      cam.lookAt(ox, 0.06, oz);
+      cam.updateMatrixWorld(true);
+      for (const [nx2, ny2] of NDC) {
+        ray.set(nx2, ny2, 0.5).unproject(cam);
+        ray.x -= camX; ray.y -= camY; ray.z -= camZ;
+        if (ray.y >= -1e-6) return false;          // that corner is the horizon
+        const tt = -camY / ray.y;
+        const hx = camX + ray.x * tt, hz = camZ + ray.z * tt;
+        if (hx < -GR || hx > GR || hz < -GR || hz > GR) return false;
+      }
+      return true;
+    };
+    // ⚠ THE BEST ANY LEGAL ANGLE CAN DO, not the worst. A steeper look fits more
+    // board on the screen — measured 0.85 at the low floor against 1.20 looking
+    // almost straight down — so taking the worst angle threw away 40% of the view
+    // for nothing. The angle is then RAISED to suit the zoom in applyCamera
+    // (see minElFor), which is also how it should look: pull back and the room
+    // tips toward a plan view of the whole layout.
+    let best = 0.60;
+    for (let d = 0.60; d <= 3.0; d += 0.05) {
+      if (!covers(d, EL_MAX, this.orbit.az)) break;
+      best = d;
+    }
+    this.maxDist = best;
+    this._fitCovers = covers;
+    this.panLimit = this.solvePanLimit(this.orbit.dist);
+    return best;
+  }
+
+  // The shallowest angle that still keeps the board over the whole screen at
+  // this zoom. Pulling back forces the look steeper rather than showing the
+  // basement floor around the layout.
+  minElFor(dist) {
+    const covers = this._fitCovers;
+    if (!covers) return EL_MIN;
+    for (let el = EL_MIN; el <= EL_MAX; el += (EL_MAX - EL_MIN) / 12) {
+      if (covers(dist, el, this.orbit.az, 0, 0)) return el;
+    }
+    return EL_MAX;
+  }
+
+  // ── HOW FAR THE WALK MAY STRAY ────────────────────────────────
+  // Walking to the rim shows the dark past the board exactly as zooming out
+  // does, so the walk needs a bound too — but it is NOT a fixed fraction of the
+  // zoom. This used to be a guess, `(maxDist - dist) * 0.55 * GR`, which gave a
+  // quarter of the board at the default zoom while the board was in fact
+  // over-filling the screen with room to spare. Solve it the same way maxDist is
+  // solved: push the centre out until a corner of the frame stops being board,
+  // in the worst direction and at the worst legal elevation.
+  // ⚠ Zoomed all the way out the answer is legitimately ~0: the whole board is
+  // already on screen, so there is nowhere to go and nothing to see by moving.
+  // ⚠ CACHED ON THE ZOOM. The solve is ~240 projections — nothing at all when
+  // the wheel moves, far too much every frame. Recomputed only when the zoom has
+  // actually changed enough to matter.
+  panLimitNow() {
+    const d = this.orbit.dist;
+    if (this._plD === undefined || Math.abs(d - this._plD) > 0.02) {
+      this._plD = d; this.panLimit = this.solvePanLimit(d);
+    }
+    return this.panLimit || 0;
+  }
+
+  solvePanLimit(dist) {
+    const covers = this._fitCovers;
+    if (!covers) return 0;
+    const az = this.orbit.az;
+    // ⚠ DIAGONALS TOO. The walk is camera-relative, so pressing one key moves
+    // the centre diagonally in world space — a limit solved only on the axes is
+    // exceeded by a factor of root two on the diagonal, and the board came off
+    // the edge of the screen. Measured: walking right put the centre at
+    // (0.308, -0.308), radius 0.436, against an axis limit of 0.308.
+    const q = Math.SQRT1_2;
+    const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1], [q, q], [q, -q], [-q, q], [-q, -q]];
+    let lo = 0, hi = GR;
+    const okAt = (r) => {
+      for (const [dx, dz] of dirs) {
+        for (let el = EL_MIN; el <= EL_MAX + 1e-6; el += (EL_MAX - EL_MIN) / 4) {
+          if (!covers(dist, el, az, dx * r, dz * r)) return false;
+        }
+      }
+      return true;
+    };
+    if (!okAt(0)) return 0;
+    for (let i = 0; i < 12; i++) { const mid = (lo + hi) / 2; if (okAt(mid)) lo = mid; else hi = mid; }
+    return lo;
+  }
+
   // -- frame -----------------------------------------------------------------
   resize() {
     const w = this.canvas.clientWidth || window.innerWidth;
@@ -2323,6 +2472,10 @@ export class View {
     if (this.post) this.post.setSize(Math.max(2, w | 0), Math.max(2, h | 0));
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+    this.fitLimits();
+    // a window that just got narrower can leave you already too far out
+    if (this.orbit.tDist > this.maxDist) this.orbit.tDist = this.maxDist;
+    if (this.orbit.dist > this.maxDist) this.orbit.dist = this.maxDist;
   }
 
   render(dt) {
@@ -2339,8 +2492,17 @@ export class View {
     // relaxes to EL_NEAR once you are zoomed in past EL_NEAR_DIST, because at
     // that range the board fills the frame and there is no horizon to protect
     // — and it is the only angle from which these creatures have faces.
-    const elFloor = o.dist < EL_NEAR_DIST ? EL_NEAR : EL_MIN;
+    let elFloor = o.dist < EL_NEAR_DIST ? EL_NEAR : EL_MIN;
+    // ⚠ and never shallower than the zoom can afford. Cached on the zoom for the
+    // same reason panLimitNow is — the solve is far too much for every frame.
+    if (o.dist >= EL_NEAR_DIST) {
+      if (this._elD === undefined || Math.abs(o.dist - this._elD) > 0.02) {
+        this._elD = o.dist; this._elFit = this.minElFor(o.dist);
+      }
+      if (this._elFit > elFloor) elFloor = this._elFit;
+    }
     o.el = Math.max(elFloor, Math.min(EL_MAX, o.el));
+    if (o.tEl < elFloor) o.tEl = elFloor;   // or the ease fights the clamp forever
     // ⚠️ AFTER the clamp, not before. These used to be computed from the
     // UNCLAMPED elevation, so the frame you actually saw was always one behind
     // the limit — most visible as a shimmer when you drag into the stop.
@@ -2352,7 +2514,12 @@ export class View {
     // entry drifts off it within days and you are back to watching empty board.
     // Slow on purpose: this is the LOOK target, not the orbit, so the player
     // still owns the camera and this only keeps the crowd in frame.
-    if ((this._aimT = (this._aimT || 0) + dt) > 2) { this._aimT = 0; this.lookAtTown(); }
+    // ⚠ THE PLAYER OUTRANKS THE AUTO-AIM. `panHold` is set by the WASD walk in
+    // main.js; while it is running the town does not get to pull the camera back
+    // onto itself mid-stride, which would read as the keys being broken. It ticks
+    // down so following the town resumes on its own a moment after you stop.
+    if (this.panHold > 0) this.panHold -= dt;
+    else if ((this._aimT = (this._aimT || 0) + dt) > 2) { this._aimT = 0; this.lookAtTown(); }
     this.center.lerp(this.centerTo, Math.min(1, dt * 0.8));
     this.camera.position.set(
       this.center.x + Math.sin(o.az) * cy * o.dist,
