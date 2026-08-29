@@ -1571,3 +1571,76 @@ nothing on a wheel event and far too much every frame.
 **Verified live:** no void at any zoom (0.60 through the 1.20 stop) or at full walk in
 all four directions; the wheel stops at the computed limit and the angle follows; water
 and raise both act from a still press; natural boot fills the window; console clean.
+
+## 🎨 THE HIGGSFIELD PASS (2026-08-29) — 4 credits of a 100 budget, and why not more
+
+Kyle: *"do you think giving this game a higgsfield pass could help? lets start with
+a budget of 100 tokens and see what you do."*
+
+**Short answer: for exactly one thing, yes. For most of what generation is good at,
+this game cannot use it.**
+
+### ⚠️⚠️ 3D GENERATION IS ARCHITECTURALLY IMPOSSIBLE HERE — CHECK BEFORE SPENDING
+
+`image_to_3d` bills a flat **~30cr per model** and its output is a GLB. The vendored
+`lib/three.module.js` contains `TextureLoader`, `ImageLoader` and `FileLoader` — and
+**no `GLTFLoader`**, because GLTFLoader lives in three's `examples/`, which this
+project bans by rule ("core only, no examples modules"). So a generated model cannot
+be loaded at all without changing the engine's founding constraint.
+**One un-checked `image_to_3d` call would have burned 30% of the budget on a file the
+game physically cannot open.** Verify the loader exists before buying the asset.
+
+### ⚠️ THE TURF MAP: BOUGHT, WIRED IN, MEASURED, REMOVED
+
+The most promising-looking target was `uDetail` — a procedurally drawn canvas tiled
+30× across the whole ground, multiplied into the diffuse. A pluggable slot that
+already existed, affecting every square inch of the board.
+A 2k macro of model-railway static grass flock was generated (2cr), converted to
+greyscale (the shader reads **only the red channel**), downsized to 512, and levelled
+so its mean was **0.502** — a true drop-in, because `0.46 + det.r * 1.08` is neutral
+at 0.5. It loaded, it was mirrored-wrapped so 30 tiles could not seam, and it was
+verified live in the shader.
+
+**It changed nothing anybody could see.**
+- matched pair at the closest zoom, drawn canvas vs photographed turf: indistinguishable
+- detail scale 30 vs 12 vs 6: indistinguishable
+- as a **bump map** with `bumpScale` exaggerated 4× *and the lamp on* — the best case
+  for surface relief that exists in this game: still indistinguishable
+
+The cause is structural rather than a bad texture: this ground is always seen through
+the **tilt-shift defocus**, at night, under a low-poly silhouette language. Fibre-scale
+detail sits below the threshold the look can carry. **Any** material map here is
+decoration, and the free drawn canvas does the same job. Reverted, and the note is
+left at the call site so nobody re-buys it.
+
+### ✅ THE ONE THAT LANDED: TITLE KEY ART (`assets/keyart.jpg`, 2cr, 231KB)
+
+The game opened on a near-black screen with a pull-chain. It now opens on a painted
+basement: the layout on plywood sawhorses, the bare bulb, the dust sheet pulled half
+off one edge, and the kin scattered across it carrying coloured lanterns.
+It is worth noting *why* this one works when the turf did not: **it is UI.** It is
+seen at full resolution, unblurred, with nothing competing — the exact opposite of a
+material sampled at 1/30th scale through a defocus.
+- ⚠️ The art is a layer UNDER the existing radial vignette (`::before` for the
+  painting, `::after` for the wash), not a replacement for it. Showing the art
+  without the wash left the title and the chain floating on a busy background.
+- ⚠️ It degrades on its own: if the file is missing the layer paints nothing and the
+  solid `#04060a` plus the wash is exactly what shipped before. Nothing gates the
+  title on a file arriving.
+- The prompt carried the game's own vocabulary — sawhorses, dust sheet, one bulb,
+  lantern colours in the need-hue palette — which is why it reads as this game and
+  not as generic cosy art.
+
+### The rule this pass suggests for the project
+
+**Spend on what is seen at full resolution and unblurred; do not spend on what the
+miniature look is going to defocus away.** That means UI, title art, share cards and
+briefing plates are worth buying; ground materials, prop textures and anything sampled
+small are not. It also means the 100-credit budget was never the constraint — at 2cr
+an image the constraint is how few places in this particular game can actually show a
+generated image off.
+
+Spent: **4 of 100**. The remaining 96 has nowhere to go that would survive measurement.
+
+⚠️ `serve.mjs` did not know `.jpg` and served the art as `application/octet-stream`
+(browsers sniff it, so it worked, but it is wrong); jpg/jpeg/webp added.

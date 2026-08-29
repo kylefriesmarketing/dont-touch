@@ -32,9 +32,22 @@
   /* ============ THE TITLE — the board, covered, in the dark ============= */
   #title{position:fixed;inset:0;z-index:35;display:flex;flex-direction:column;
     align-items:center;justify-content:center;text-align:center;padding:24px;
-    background:radial-gradient(ellipse 62% 56% at 50% 44%,
-      rgba(6,8,12,.26),rgba(4,6,9,.86) 68%,#04060a 100%);
+    background:#04060a;
     transition:opacity .9s ease}
+  /* ⚠ THE PAINTING SITS BEHIND THE VIGNETTE, NOT INSTEAD OF IT. The radial wash
+     is what keeps the title and the chain legible; dropping it to show the art
+     made both float on a busy background. So the art is its own layer under the
+     wash, and the wash is the same shape it always was — just carried by a
+     pseudo-element now that there are two things stacked here.
+     ⚠ It degrades to the old look on its own: if assets/keyart.jpg is missing
+     the layer paints nothing and the solid #04060a plus the wash is exactly
+     what shipped before. Nothing gates the title on a file arriving. */
+  #title::before{content:'';position:absolute;inset:0;z-index:-2;
+    background:url('assets/keyart.jpg') center/cover no-repeat;
+    opacity:.72;filter:saturate(.86)}
+  #title::after{content:'';position:absolute;inset:0;z-index:-1;
+    background:radial-gradient(ellipse 62% 56% at 50% 44%,
+      rgba(6,8,12,.26),rgba(4,6,9,.86) 68%,#04060a 100%)}
   #title.going{opacity:0;pointer-events:none}
   #title h1{font:300 clamp(30px,8.4vw,58px)/1 Georgia,serif;letter-spacing:.34em;
     margin:0 0 8px;text-indent:.34em;color:#e9eef6;

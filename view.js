@@ -340,6 +340,23 @@ export class View {
     detail.wrapS = detail.wrapT = THREE.RepeatWrapping;
     this.detailTex = detail;
 
+    // ⚠⚠ A PHOTOGRAPHED TURF MAP WAS BOUGHT, WIRED IN AND REMOVED. MEASURED,
+    // DO NOT RE-BUY IT. A 2k macro shot of model-railway static grass flock was
+    // generated, levelled to mean 0.502 so it was a true drop-in for the canvas
+    // above (the shader does 0.46 + det.r * 1.08, so 0.5 is neutral), and
+    // loaded as both the detail multiply and the bump map. It changed nothing
+    // anybody could see:
+    //   - matched pair at the closest zoom, canvas vs turf: indistinguishable
+    //   - detail scale 30 vs 12 vs 6: indistinguishable
+    //   - as a bump map with bumpScale exaggerated 4x AND the lamp on (the best
+    //     case for relief there is): still indistinguishable
+    // The reason is structural, not a bad texture: this ground is always seen
+    // through the tilt-shift defocus, at night, under a low-poly silhouette
+    // language. Fibre-scale detail is below the threshold the look can carry, so
+    // ANY material map here is decoration. The drawn canvas is free and does the
+    // same job. Spend the credits on things seen at full resolution instead —
+    // the title art is the one that landed.
+
     // ---- the mesh. SUB× denser than the sim grid, sampled smoothly, so the
     // hills are hills instead of 63 folded plates.
     const SUB = N >= 96 ? 2 : 3, M = (N - 1) * SUB + 1;
