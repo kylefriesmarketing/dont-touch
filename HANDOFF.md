@@ -1644,3 +1644,69 @@ Spent: **4 of 100**. The remaining 96 has nowhere to go that would survive measu
 
 ⚠️ `serve.mjs` did not know `.jpg` and served the art as `application/octet-stream`
 (browsers sniff it, so it worked, but it is wrong); jpg/jpeg/webp added.
+
+## 🚉 THE STATION — the one GLB in the game, and the rules that let it in (2026-08-29)
+
+Kyle: *"what about some GLBs??"* — after the Higgsfield pass had already ruled 3D
+out on loader grounds. The honest answer was not "no", it was "one, under rules."
+Total spend this pass: 36 of the 100-credit budget (2 turf + 2 keyart + 2 station
+image + 30 bake).
+
+### The three walls, and how each one actually fell
+
+1. **No loader.** GLTFLoader lives in three's `examples/`, which this project bans.
+   The wall fell by NOT vendoring it: **`glb.js`** is our own ~150-line reader —
+   GLB container, accessors, baseColor materials, node TRS, nothing else. A plain
+   unskinned uncompressed GLB is just a header, a JSON chunk and a BIN chunk; the
+   rule "core three only, everything else is our code" survives intact.
+2. **Mesh weight.** `tools/glb-diet.mjs` (bake-time only, never shipped, uses the
+   permanent kit at `C:\Users\kylef\tools\gltf-kit`): decompress, strip every
+   texture slot but baseColor, dedup+weld+prune, texture → 1024 JPEG.
+   Raw bake 5.5MB → **1.7MB, 27,852 tris**.
+3. **Style clash — the wall that stays up for everything else.** The turf pass
+   proved generated MATERIAL cannot survive the miniature look. A baked MODEL is
+   admissible in exactly one case: an object that is **fictionally a plastic kit**,
+   because an image_to_3d bake looks like molded, hand-painted plastic. The kin,
+   the huts, the trees are toy-language and would clash. A model-railway station
+   IS a kit. **The medium and the fiction coincide, and nowhere else in this game
+   do they.** That sentence is the admission test for any future GLB.
+
+### Where it stands
+
+At **a0 = 2.35** — the exact angle where the 6:15 has been stopped since the train
+shipped ("stopped where dad left it, never fixed"). The train was always stopped
+THERE; now there is a *there*. Just OUTSIDE the loop, on the strip between the
+rails and the board edge — where a station goes when the board is already full.
+Scenery like the train: the sim has never heard of it.
+
+### ⚠️ The load contract (violate = the model silently refuses to load)
+
+`glb.js` reads **no Draco/meshopt/quantization, no skins, no animations, no
+sparse accessors**. The diet guarantees its output is inside the contract and
+prints `extensions: none` as proof. A file outside it console.errors a named
+message and resolves null; `_station()` treats null as "no station" — the keyart
+degradation pattern. Verified live: file renamed away → no station, zero uncaught
+errors, game runs.
+
+### ⚠️ Traps hit on the way
+
+- **sharp passes a smoke test and dies in the real pipeline.** A trivial
+  `sharp().jpeg().toBuffer()` under the portable node printed "sharp OK"; the
+  moment the diet actually loaded it, ERR_DLOPEN_FAILED (win32-x64 binding vs
+  node 24 — the same breakage the AoT bible recorded in July). The texture step
+  shells out to PowerShell/System.Drawing instead, which already shipped the
+  title art. **Do not put `textureCompress` back without running the diet end to
+  end — a smoke test proves nothing here.**
+- glTF UVs need `texture.flipY = false` and `SRGBColorSpace`, or the bake wears
+  its own texture upside-down and washed out.
+- The bake normalizes to an arbitrary scale: `_station()` measures the bbox and
+  scales the longest side to 0.11 world units (hall 0.115, house ~0.07), then
+  seats `box.min.y` on `_surfaceY` — centroid-seating half-buries a model whose
+  origin is mid-wall.
+
+### Verified
+
+Parser loads the shipped file first try (1 textured mesh, 27,852 tris, 0 errors);
+photographed beside the 6:15 at night — palette (cream plaster / dark timber /
+terracotta) lands inside the game's own house language; missing-file degradation;
+0 uncaught errors across the run. sim.js untouched — the 111-test gate stands.

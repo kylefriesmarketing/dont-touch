@@ -9,6 +9,7 @@ import { STAGE, NEEDS, LANTERN_HUE, LOCI, L, expressed, S, C } from './sim.js';
 import { Post } from './post.js';
 import { Vfx } from './vfx.js';
 import { hueOf } from './palette.js';
+import { loadGLB } from './glb.js';
 
 const R = 1.0;
 const GR = R * 0.94;    // half-width of the scenery — the heightfield is square
@@ -108,6 +109,7 @@ export class View {
     this._groundCover();
     this._works();
     this._track();
+    this._station();
     this._scenery();
     this._water();
     this._kin();
@@ -1132,6 +1134,59 @@ export class View {
       car.rotation.y = -a - Math.PI / 2;
       this.jar.add(car);
     }
+  }
+
+  // ── THE STATION ────────────────────────────────────────────────────────
+  // The one baked model in the game, and the reasoning that let it in — read
+  // this before adding a second one.
+  // The turf experiment proved generated MATERIAL cannot survive the miniature
+  // look (defocus eats fibre-scale detail; see the note in _ground). A baked
+  // MODEL is different in exactly one case: an object that is fictionally a
+  // plastic kit. An image_to_3d bake looks like molded, hand-painted plastic —
+  // for the kin or the huts that is a style clash, but a model-railway station
+  // IS a molded, hand-painted plastic kit. The medium and the fiction coincide,
+  // and nowhere else in this game do they.
+  // It stands at a0 = 2.35 — the angle where the 6:15 has been stopped since
+  // the train shipped. The train was always stopped THERE; now there is a
+  // there. Nothing in the sim knows about it (scenery, like the train).
+  // ⚠️ Async and optional, the keyart pattern: no file, no station, no error,
+  // and the world never waits on it.
+  _station() {
+    loadGLB('assets/station.glb', THREE).then((model) => {
+      if (!model) return;
+      // normalize whatever scale the bake arrived at: longest horizontal side
+      // becomes STL world units. Measured against the game's own buildings —
+      // hall 0.115, house ~0.07 — a station at 0.11 is grand but not a giant.
+      const STL = 0.11;
+      const box = new THREE.Box3().setFromObject(model);
+      const size = box.getSize(new THREE.Vector3());
+      const k = STL / Math.max(size.x, size.z);
+      model.scale.setScalar(k);
+      // re-measure after scaling: sit the BASE on the ground, not the centroid
+      box.setFromObject(model);
+      const mid = box.getCenter(new THREE.Vector3());
+      const a = 2.35 + 0.075;                        // mid-train, platform facing it
+      // just OUTSIDE the loop — the strip between the rails and the board edge,
+      // which is where a station goes when the board is already full. The rails
+      // sit at RT±0.019; the near platform edge clears the outer one.
+      const halfDepth = (box.max.z - box.min.z) / 2;
+      const r = RT + 0.028 + halfDepth;
+      const wx = Math.cos(a) * r, wz = Math.sin(a) * r;
+      const N = this.sim.N;
+      const cx = (wx / (GR * 2) + 0.5) * (N - 1), cy = (wz / (GR * 2) + 0.5) * (N - 1);
+      const y = this._surfaceY(cx, cy);
+      model.position.set(wx - mid.x, y - box.min.y, wz - mid.z);
+      // long axis along the track, front toward the rails — same convention as
+      // the train cars one screen up
+      const pivot = new THREE.Group();
+      pivot.position.set(wx, 0, wz);
+      model.position.set(-mid.x, y - box.min.y, -mid.z);
+      pivot.add(model);
+      pivot.rotation.y = -a + Math.PI / 2;
+      model.traverse(o2 => { if (o2.isMesh) { o2.castShadow = true; o2.receiveShadow = true; } });
+      this.jar.add(pivot);
+      this.station = pivot;
+    });
   }
 
   _scenery() {
