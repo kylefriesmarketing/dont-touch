@@ -1710,3 +1710,73 @@ Parser loads the shipped file first try (1 textured mesh, 27,852 tris, 0 errors)
 photographed beside the 6:15 at night — palette (cream plaster / dark timber /
 terracotta) lands inside the game's own house language; missing-file degradation;
 0 uncaught errors across the run. sim.js untouched — the 111-test gate stands.
+
+## 🚂 HIGGSFIELD PASS TWO (2026-08-29) — 66 of 100, all inside the admission tests
+
+Kyle: *"lets keep improving the visuals using higgs in the best way possible -
+100 token limit."* Everything bought passed one of the two tests pass one
+established: **full-resolution UI** or **fictionally a plastic kit**. Spend:
+tower image 2 + tower bake 30 + loco image 2 + loco bake 30 + paper 2 = **66**.
+The og card was free (it is the keyart we already own).
+
+### The 6:15 is a real engine now (`assets/loco.glb`, 1.65MB, 29,817 tris)
+
+The most story-loaded object on the board was three painted boxes. A locomotive
+passes the kit test better than anything in the game — and the bake even came
+out DUSTY, which is the fiction verbatim ("stopped where dad left it").
+- ⚠️ The baked engine drops INTO the procedural car's group and the boxes go
+  `visible = false` — it inherits the exact ring position and curve rotation,
+  and no file → boxes stay visible → exactly what shipped before.
+- ⚠️ The two wagons stay procedural ON PURPOSE: a rigid baked 3-car consist
+  would chord across the curve, and dad mixing a bought engine with home-made
+  stock is what layouts actually look like. Do not bake the wagons.
+- Axis dance for any future vehicle bake: rotate longest-axis onto local X,
+  re-measure, scale to 0.112, rotate π for nose direction (photograph to
+  verify; flip the constant if a re-bake faces the other way), seat min.y.
+
+### The water tower (`assets/tower.glb`, 1.8MB) — and THE CORNER RULE
+
+The board's first skyline spike (height-normalized to 0.17; trees run
+0.10–0.15). Generalized `_placeKit(url, angle, sizeMode, target, name)` —
+station sized by footprint, tower by height, because a tower's footprint is
+all legs and air.
+
+⚠️⚠️ **THE STRIP BESIDE THE TRACK CANNOT HOLD A DEEP KIT.** Rails-to-board-edge
+is ~0.046 world; a height-normalized tower's footprint is ~0.09. The first
+placement computed r = 0.948 on a board that ends at 0.94 and the tower HUNG
+OVER THE APRON — legs in mid-air, photographed from underneath, seated on
+nothing. Every gate said fine (it loaded, no errors, bbox looked sane).
+**The board is SQUARE and the track is a CIRCLE: the corners outside the loop
+run to r = GR·√2 ≈ 1.33.** All deep kits go in corners. The tower stands on
+the exact diagonal (π·0.75) directly behind the station — which is also just
+where a yard water tower belongs. Verified seated: base-to-ground gap 0.000.
+
+⚠️ A raycast census along the ring (43 hits at a=1.75 rising monotonically to
+86 at 3.05 on Keswick) is the cheap way to find clear ground — but remember it
+counts fog/cover/ground-cover layers too; only the TREND is meaningful.
+
+### Dad's planning pad (`assets/pagepaper.jpg`, 111KB)
+
+The chronicle page ("the page" — the town's book) now sits on a scan of dark
+engineering graph paper with erased pencil ghosts and a coffee ring. Model
+railways are planned on graph paper; the coffee ring is dad's.
+- ⚠️ The BOX keeps the plain panel on purpose — the page is the town's book,
+  the box is a settings tray; same skin would blur which one you are holding.
+- ⚠️ `background-attachment: local`, or the paper pins while entries scroll
+  and reads as a rendering bug. Gradient rides on top at .82/.88 alpha —
+  text legibility outranks texture. No file → opaque gradient → old look.
+
+### The share card (free)
+
+og:title/description/image + twitter:card wired to the existing keyart.
+⚠️ og:image must be ABSOLUTE — scrapers do not resolve relative URLs.
+
+### Verified
+
+All three kits load and seat (loco swap `[false,false,false,true]`, tower gap
+0.000); missing-file degradation re-confirmed on the loco (the 404 path ran
+for real while only station+tower existed); ensemble photographed — loco at
+the platform, tower rising behind the station roof. sim.js untouched; the
+111-test gate stands. ⚠️ The console buffer showed the loco 404 from a PREVIOUS
+navigation after the swap had succeeded — the buffer-lies-across-navigations
+trap, again. Believe the live scene graph, not the buffer.

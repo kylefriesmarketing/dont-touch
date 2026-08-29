@@ -1133,7 +1133,40 @@ export class View {
       car.position.set(p[0], p[1] + 0.008, p[2]);
       car.rotation.y = -a - Math.PI / 2;
       this.jar.add(car);
+      if (ci === 0) this._loco = car;
     }
+
+    // ── the 6:15 itself ─────────────────────────────────────────────────
+    // The engine is the most story-loaded object on the board and it was three
+    // painted boxes. A locomotive passes the kit admission test better than
+    // anything else here — it IS a kit, dust and all. The baked engine drops
+    // INTO the procedural car's group, so it inherits the exact position and
+    // curve rotation; the boxes just go invisible. The two wagons stay
+    // procedural ON PURPOSE: dad mixing a bought engine with home-made rolling
+    // stock is what layouts actually look like, and a rigid baked 3-car consist
+    // would chord across the curve. No file → the boxes stay visible → exactly
+    // what shipped before.
+    loadGLB('assets/loco.glb', THREE).then((model) => {
+      if (!model || !this._loco) return;
+      const box = new THREE.Box3().setFromObject(model);
+      const size = box.getSize(new THREE.Vector3());
+      // the group's local X runs along the track (BoxGeometry long side)
+      if (size.z > size.x) model.rotation.y = Math.PI / 2;
+      box.setFromObject(model);
+      const k = 0.112 / (box.max.x - box.min.x);
+      model.scale.setScalar(k);
+      box.setFromObject(model);
+      const mid = box.getCenter(new THREE.Vector3());
+      // nose forward, away from the wagons — flip here if a re-bake faces the
+      // other way down its own X axis; this one photographs correctly.
+      model.rotation.y += Math.PI;
+      box.setFromObject(model);
+      mid.copy(box.getCenter(mid));
+      model.position.set(-mid.x, 0.002 - box.min.y, -mid.z);
+      model.traverse(o2 => { if (o2.isMesh) { o2.castShadow = true; o2.receiveShadow = true; } });
+      for (const c of this._loco.children) c.visible = false;
+      this._loco.add(model);
+    });
   }
 
   // ── THE STATION ────────────────────────────────────────────────────────
@@ -1151,33 +1184,30 @@ export class View {
   // there. Nothing in the sim knows about it (scenery, like the train).
   // ⚠️ Async and optional, the keyart pattern: no file, no station, no error,
   // and the world never waits on it.
-  _station() {
-    loadGLB('assets/station.glb', THREE).then((model) => {
+  // seat one baked kit beside the track: angle along the ring, size, and how
+  // to read "size" (a station is sized by FOOTPRINT so it hugs the ground; a
+  // tower is sized by HEIGHT because its footprint is all legs and air).
+  _placeKit(url, a, sizeMode, target, name) {
+    loadGLB(url, THREE).then((model) => {
       if (!model) return;
-      // normalize whatever scale the bake arrived at: longest horizontal side
-      // becomes STL world units. Measured against the game's own buildings —
-      // hall 0.115, house ~0.07 — a station at 0.11 is grand but not a giant.
-      const STL = 0.11;
       const box = new THREE.Box3().setFromObject(model);
       const size = box.getSize(new THREE.Vector3());
-      const k = STL / Math.max(size.x, size.z);
+      const k = target / (sizeMode === 'height' ? size.y : Math.max(size.x, size.z));
       model.scale.setScalar(k);
       // re-measure after scaling: sit the BASE on the ground, not the centroid
       box.setFromObject(model);
       const mid = box.getCenter(new THREE.Vector3());
-      const a = 2.35 + 0.075;                        // mid-train, platform facing it
       // just OUTSIDE the loop — the strip between the rails and the board edge,
-      // which is where a station goes when the board is already full. The rails
-      // sit at RT±0.019; the near platform edge clears the outer one.
+      // which is where the kits go when the board is already full. The rails
+      // sit at RT±0.019; the near edge clears the outer one.
       const halfDepth = (box.max.z - box.min.z) / 2;
       const r = RT + 0.028 + halfDepth;
       const wx = Math.cos(a) * r, wz = Math.sin(a) * r;
       const N = this.sim.N;
       const cx = (wx / (GR * 2) + 0.5) * (N - 1), cy = (wz / (GR * 2) + 0.5) * (N - 1);
       const y = this._surfaceY(cx, cy);
-      model.position.set(wx - mid.x, y - box.min.y, wz - mid.z);
       // long axis along the track, front toward the rails — same convention as
-      // the train cars one screen up
+      // the train cars
       const pivot = new THREE.Group();
       pivot.position.set(wx, 0, wz);
       model.position.set(-mid.x, y - box.min.y, -mid.z);
@@ -1185,8 +1215,27 @@ export class View {
       pivot.rotation.y = -a + Math.PI / 2;
       model.traverse(o2 => { if (o2.isMesh) { o2.castShadow = true; o2.receiveShadow = true; } });
       this.jar.add(pivot);
-      this.station = pivot;
+      this[name] = pivot;
     });
+  }
+
+  _station() {
+    // the railway ensemble, all at the 6:15's end of the loop. Station sized by
+    // footprint (hall 0.115, house ~0.07 — 0.11 is grand but not a giant);
+    // water tower by height (the board's one skyline spike: trees run
+    // ~0.10-0.15, so 0.17 clears them without becoming a lighthouse). The
+    // tower stands a little further down the line, the way they actually do.
+    this._placeKit('assets/station.glb', 2.35 + 0.075, 'footprint', 0.11, 'station');
+    // ⚠⚠ THE TOWER LIVES IN THE BOARD'S CORNER, AND IT HAS TO. The strip
+    // between the rails and the board edge is ~0.046 world units wide; a
+    // height-normalized tower's footprint is ~0.09, so on the straightaways it
+    // physically does not fit — the first placement (1.85) computed r = 0.948
+    // on a board that ends at 0.94 and HUNG OVER THE APRON, legs in the air,
+    // photographed from underneath. But the board is SQUARE and the track is a
+    // CIRCLE: the corners outside the loop run to r = GR·√2 ≈ 1.33, acres of
+    // scenery ground. 2.356 rad is the exact diagonal of the corner directly
+    // behind the station — which is also just where a yard water tower stands.
+    this._placeKit('assets/tower.glb', Math.PI * 0.75, 'height', 0.17, 'tower');
   }
 
   _scenery() {

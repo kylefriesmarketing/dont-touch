@@ -4,6 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#06080c">
+<!-- the share card is the title painting — already ours, costs nothing.
+     ⚠️ og:image must be an ABSOLUTE url; scrapers do not resolve relative paths. -->
+<meta property="og:title" content="DON'T TOUCH">
+<meta property="og:description" content="Dad's model town has been alive since the nineties. You are the second pair of hands it has ever known.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://kylefriesmarketing.github.io/dont-touch/">
+<meta property="og:image" content="https://kylefriesmarketing.github.io/dont-touch/assets/keyart.jpg">
+<meta name="twitter:card" content="summary_large_image">
 <title>DON'T TOUCH — a Dirty Boy Devs game</title>
 <style>
   :root{
@@ -231,6 +239,18 @@
   #page,#boxin{width:min(580px,94vw);max-height:86vh;overflow:auto;
     background:linear-gradient(#101520,#0a0e15);border:1px solid var(--edge);
     border-radius:14px;padding:28px 30px}
+  /* ⚠ the PAGE gets dad's graph paper; the BOX stays a plain panel on purpose —
+     the page is the town's book, the box is a settings tray, and giving them
+     the same skin blurs which one you are holding. The gradient rides ON TOP
+     at high alpha so the paper is a presence, not a background image — text
+     legibility outranks texture, in that order.
+     ⚠ background-attachment:local, or the paper pins to the panel while the
+     entries scroll and reads as a rendering bug. It degrades on its own: no
+     file, no layer, and the opaque gradient is exactly what shipped before. */
+  #page{background:
+    linear-gradient(rgba(16,21,32,.82),rgba(10,14,21,.88)),
+    url('assets/pagepaper.jpg') center top/100% auto repeat-y;
+    background-attachment:local,local}
   #page h2,#boxin h2{font:600 27px/1.2 Georgia,serif;margin:0 0 4px}
   #page .sub,#boxin .sub{color:var(--faint);font-size:12.5px;margin-bottom:18px}
   #page ol{list-style:none;padding:0;margin:0}
