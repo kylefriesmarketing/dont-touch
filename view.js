@@ -953,7 +953,11 @@ export class View {
     // village, just an unplanned one.
     // ⚠ the rnd() draw is CONSUMED on both paths so the view's stream does not
     // shift depending on which world happens to be loaded.
-    const jit = (rnd() - 0.5) * 0.55;
+    // ⚠ the jitter narrows as the town learns order — sampled at BUILD time
+    // and never retro-fitted, so the old quarter stays crooked while the new
+    // streets come in straight. The same law as _siteWork, seen from above.
+    const orderliness = this.sim.ageNow ? Math.min(1, this.sim.ageNow() / 5) : 0;
+    const jit = (rnd() - 0.5) * 0.55 * (1 - orderliness * 0.75);
     let yaw = jit;
     const RDW = this.sim.world && this.sim.world.road ? this.sim.world.road : null;
     if (RDW) {

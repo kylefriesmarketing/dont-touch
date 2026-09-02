@@ -842,6 +842,75 @@ export class Sim {
     }
     for (let id = 0; id < this.count; id++) if (this.k.alive[id]) this.k.knows[id] |= mask;
   }
+  // ── WHERE A NEW WORK STANDS ──────────────────────────────
+  // Kyle: 'the buildings and civilizations look so close and mushed together —
+  // have them start like that but as the civilization evolves so does
+  // organization.' Works used to land at the INVENTOR'S FEET, and inventors
+  // cluster at the hearth, so the town was a pile at every age.
+  // Organization now grows with the age the town has actually reached:
+  //   · the gap between walls widens as the ages climb (huddle → breathing
+  //     room), and it is FOOTPRINT-AWARE — a hall needs more air than a hut.
+  //   · from 'the kept winter' (age 3) the near-kinds start settling onto a
+  //     village lattice anchored at the hearth: streets emerge, because the
+  //     candidate scoring starts paying for distance from the grid.
+  //   · buildings keep the yaw and position they were BUILT with, so the old
+  //     quarter stays crooked while the new streets come in straight — the
+  //     town's history stays legible in its shape.
+  // ⚠ NO RNG. A fixed spiral scan with deterministic argmax — the stream must
+  // not shift with geography. Falls back to the inventor's feet if nothing
+  // within reach passes, so a founding act is never blocked.
+  // ⚠ store/windbreak/channel keep small gaps and NEVER take the lattice: a
+  // channel belongs at the water it was scraped from, not on a street.
+  _siteWork(wi, x0, y0) {
+    const HALF = [1.0, 1.2, 1.0, 1.6, 2.0, 3.2, 2.2, 0.8, 2.4, 1.4, 1.7, 2.0, 1.6];
+    const age = this.ageNow();
+    // ⚠ the gap stops growing at 1.6: at 2.0 a house-house pair needed 6.0
+    // cells while the streets are 5.6 apart, so the grid and the gap rule
+    // fought and buildings lost — pushed off-grid AND far away, and the town
+    // paid in lives (measured alive 98 vs 171 at day 300).
+    const gap = age <= 1 ? 0.4 : age === 2 ? 1.0 : 1.6;
+    const useLattice = age >= 3 && WORKS[wi].near;
+    // ⚠ PITCH must EXCEED the widest common spacing need (house+house+gap =
+    // 5.6) or adjacent street corners are illegal and the whole lattice is
+    // unusable — the first pitch (4.2) did exactly that.
+    const PITCH = 5.6;
+    const ok = (x, y) => {
+      const i = this.idx(x, y);
+      if (!this.inJar(x, y) || this.water[i] > 0.001) return false;
+      if (this.height[i] < this.pondLevel + 0.06) return false;
+      for (const o of this.works) {
+        const need = HALF[wi] + (HALF[o.kind] || 1.2) + gap;
+        const dx = o.x - x, dy = o.y - y;
+        if (dx * dx + dy * dy < need * need) return false;
+      }
+      return true;
+    };
+    let bx = x0, by = y0, bs = -1e9, found = false;
+    for (let dy = -8; dy <= 8; dy++) for (let dx = -8; dx <= 8; dx++) {
+      const x = Math.round(x0 + dx), y = Math.round(y0 + dy);
+      if (!ok(x, y)) continue;
+      // ⚠ when the lattice applies, nearness to the inventor matters LESS —
+      // order is worth walking a few doors for. Unweighted, the distance term
+      // drowned the grid: measured mean lattice offset 1.15 cells vs 1.6
+      // random, i.e. streets you could not see.
+      let sc = -Math.sqrt(dx * dx + dy * dy) * (useLattice ? 0.75 : 1);
+      if (useLattice) {
+        const lx = (x - this.hearth.x) / PITCH, ly = (y - this.hearth.y) / PITCH;
+        const off = Math.hypot(lx - Math.round(lx), ly - Math.round(ly)) * PITCH;
+        sc -= off * (age >= 5 ? 2.8 : 2.0);
+      }
+      if (sc > bs) { bs = sc; bx = x; by = y; found = true; }
+    }
+    if (found && useLattice) {
+      if (this._beat == null) this._beat = {};
+      if (this._beat.rows == null) {
+        this._beat.rows = this.day;
+        this.log('rows', 'they built to a line, for the first time.', 5.5);
+      }
+    }
+    return [bx, by];
+  }
+
   // ── SET OUT NEW FIGURES ────────────────────────────────────
   // Real loss, and what comes after it. When the last kin dies the town is
   // allowed to be OVER — that is the stakes working — but the LAYOUT is still
@@ -1687,7 +1756,9 @@ export class Sim {
       // KNOWLEDGE, not another pile — somebody looked at a thing nobody
       // understood any more and understood it
       if (mine < W.cap) {
-        this.works.push({ id: this.workSeq++, kind: wi, x: wx, y: wy, prog: 0, by: k.nameId[best], day, stock: 0 });
+        // sited by the age's own sense of order — see _siteWork
+        const [sx2, sy2] = this._siteWork(wi, wx, wy);
+        this.works.push({ id: this.workSeq++, kind: wi, x: sx2, y: sy2, prog: 0, by: k.nameId[best], day, stock: 0 });
       }
 
       const nm = this._name(best, `who first made ${W.name}`);

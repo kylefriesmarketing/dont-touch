@@ -1914,3 +1914,44 @@ worth carving:
 - **`ageBest`** tracks the historic peak (saved/restored/fingerprinted, reset to
   `ageNow()` on refound): the last page credits what the town REACHED, because
   ruins decay and the present board understates the dead.
+
+## 🏘️ v1.2 — ORGANIZATION GROWS WITH THE AGE (2026-08-30)
+
+Kyle: *"the buildings and civilizations look so close and mushed together — have
+them start like that but as the civilization evolves so does organization."*
+
+**The cause**: works were placed at THE INVENTOR'S FEET (`k.x[best]` at the one
+`works.push` funnel), and inventors cluster at the hearth — a pile at every age.
+(A `near:1` inventor-spacing gate existed, but it throttled WHO invents, not
+where the building lands, and near:0 kinds stacked freely.)
+
+**`_siteWork(wi, x0, y0)`** — the age's own sense of order, at the single
+placement funnel:
+- **Footprint-aware gaps that widen with age**: required distance = halfFoot[a]
+  + halfFoot[b] + gap(age), gap 0.4 (huddle) → 1.0 → 1.6. A hall needs more air
+  than a hut.
+- **From 'the kept winter' (age 3), near-kinds settle onto a street lattice**
+  anchored at the hearth. Measured at day 300 across two seeds: mean lattice
+  offset 1.32–1.48 cells vs ~2.1 random, 39–47% of late buildings on street
+  corners, spacing 3.42 → 4.49 cells early→late — with alive at 228/215 and
+  both towns reaching the little lights.
+- **The old quarter stays crooked**: position and yaw are fixed at BUILD time,
+  so history stays legible in the town's shape. The view narrows roof-yaw
+  jitter by age at build (×(1−age/5·0.75)) — new streets come in straight.
+- One chronicle beat, once: *"they built to a line, for the first time."*
+
+⚠️⚠️ **THE PITCH/GAP WAR — the tuning lesson worth the entry.** First tuning:
+lattice weight up + distance weight halved → streets appeared AND the town
+died (alive 98 vs 171, stalled at wheel). Cause: at pitch 4.2 **adjacent street
+corners were closer than the spacing rule allowed** (hut-hut needs 4.8), so the
+grid and the gap rule fought — buildings pushed off-grid AND far from services.
+PITCH must EXCEED the widest common spacing need (house+house+gap = 5.6 →
+pitch 5.6), and the gap stops growing at 1.6 for the same reason. **When two
+placement constraints share a length scale, check they are jointly satisfiable
+before tuning either.**
+
+⚠️ `_siteWork` consumes NO rng (fixed spiral scan, deterministic argmax) — the
+stream must not shift with geography; a 50-draw parity test pins it. Falls back
+to the inventor's feet if nothing within 8 cells passes, so a founding act is
+never blocked. store/windbreak/channel never take the lattice — a channel
+belongs at the water it was scraped from.
