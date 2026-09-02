@@ -1780,3 +1780,137 @@ the platform, tower rising behind the station roof. sim.js untouched; the
 111-test gate stands. ⚠️ The console buffer showed the loco 404 from a PREVIOUS
 navigation after the swap had succeeded — the buffer-lies-across-navigations
 trap, again. Believe the live scene graph, not the buffer.
+
+## 🏭 v1.1 — THE LATER AGES, REAL LOSS, AND THE SOUND OF THE HOUSE (2026-08-30)
+
+Kyle answered four direction questions in one sitting: finish the ages to
+modern · he plays it as a check-in pet · real loss is allowed · full audio pass.
+This entry is all four, plus the apron regression that shipped the day before.
+
+### ⚠️⚠️ FIRST, THE REGRESSION: THE APRON WAS A PLANE THROUGH THE BOARD
+
+Kyle: "the map is so broken — blurred lines everywhere and all the creatures
+are under the map itself." The endless-land apron was ONE plane seated at the
+rim's MEAN height — and the board's lip raises the rim above the interior, so
+the plane sliced through the world. Measured: **96.5–97.6% of a generated
+world's interior sat BELOW it.** The entire game rendered under a flat dim
+sheet. The verification photographs had all been taken on Keswick, whose baked
+mountains poke above the seat — one high world made a catastrophic regression
+look verified.
+**Fix: a RING, never a plane.** Four slabs around the board footprint, each
+seated below its own side's LOWEST rim point. The interior cannot be covered
+because no apron geometry exists inside [-GR, GR]² at all — geometric
+certainty, not a better height guess. Verified: `anySlabInsideBoard: false`,
+lowest kin ground 0.095 with full detail restored.
+**THE LESSON: verify view geometry on a GENERATED world too, always.** The sim
+gate cannot see the view, and one photogenic world is not a sample.
+
+### THE AGES, TO "MODERN" — works 9–12, ages 5–6
+
+`WORKS` grew four rungs (APPEND ONLY — and ⚠️ **k.knows is a Uint16Array: 13 of
+16 bits used.** The 17th work silently corrupts every saved mask; a tripwire
+test guards the ceiling). Every work has a named READ SITE — the five-times
+defect of this codebase is a building nothing consumes:
+
+| work | pre | read site — what it actually does |
+|---|---|---|
+| **the mill** (9) | farm+granary | `_sow`'s harvest: a milled field banks ×1.6 per take (multiplied into the AMBITION, so the conservation fix still banks only what the ground surrendered) |
+| **the mending house** (10) | house | the strain decay line: recovery ÷0.45 instead of ÷1.4 near one — a genuine 3.1× measured |
+| **the school** (11) | house+hall | the teach roll: threshold ×2.4. ⚠️ it multiplies the THRESHOLD, never the draw count — the rng stream must not shift with geography |
+| **the dynamo** (12) | mill+school | `_sow`'s night gate: a lit field keeps growing after dark (per-farm L replaces `light`); plus company/safety trickle near it at night. The bulb on its pole reads `1 - daylight` in the view |
+
+Two ages read off the markers: **the turning wheel** (mill) and **the little
+lights** (dynamo). Measured pacing, no tuning needed: mill ~d79–87, school
+~d94–141, dynamo ~d115–154 — the gate's own fixture reaches the little lights
+by day 300 with 236 alive.
+⚠️ The chime rings only when an age TURNS UPWARD — never on load (first frame
+seeds the tracker), never on the way down (losing an age has the chronicle's
+own sentence; a chime would make it sound like a prize).
+
+### REAL LOSS — the last page, and setting out new figures
+
+When the last kin dies the book closes: `_ended` (derived on load — a saved
+dead town does not re-announce itself) opens **"the last page"** — day, graves,
+generations, the age it reached, its final entries, the ground's names — with
+two buttons: *set out new figures* and *leave it dark*.
+`sim.refound(14)`: new founding on the SAME world. Ruins stand at their decay,
+graves and place names kept, practices remembered by the world. ⚠️ **The new
+figures do NOT inherit the dead town's knowledge** — they arrive with the
+founding four, and what the old town invented survives only as ruins; the
+weave's reinvention path (somebody looks at a standing thing nobody
+understands) is the archaeology. That loop already existed; refounding makes it
+sing. `foundings` counts the sunrises: saved, restored, fingerprinted.
+⚠️ The refound guard COUNTS k.alive — `this.alive` is a cached aggregate that
+is 0 between construction and the first walk, and the cached check let a LIVING
+town be refounded over (caught by boot validation, first try).
+
+### THE SOUND — all synthesis, no samples, as §15.4 always said
+
+The Higgsfield audio tool turned out to be SPEECH-ONLY (music/SFX models are
+pipeline-locked; the tool says decline rather than substitute). Better outcome
+anyway — everything in this game is drawn in code:
+- **the music box**: 16 plucked notes, slightly detuned, slowing and fading at
+  the end the way a real one runs down. Plays ONCE at the chain pull — the
+  browser will not start audio before a gesture, and the fiction agrees:
+  pulling the light on winds the box.
+- **the age chime**: three inharmonic partials so it reads as METAL, not UI.
+- **the house talks to itself**: a joist creak every ~30s, a pipe tick pair
+  oftener, both quiet enough to be doubted. ⚠️ Math.random on view-side audio
+  timers is fine; the AoT ambience laws hold (no raw endless waveforms, no
+  sub-drones — these are EVENTS).
+
+### ⚠️ The hunger test was recalibrated, and here is the honest reasoning
+
+'nobody starves standing in food' → 'hunger is not a stuck state' failed at
+4/10 fed vs 5 required. Diagnosis: the ages economy holds MORE kin (236 vs
+219) and flags FAR fewer hungry (10 vs 30); the small tail oscillates between
+warmth and food all night and SURVIVES on grazing trickles — strain 0.0 while
+need sits at 0.1. Alive, managing, uncomfortable is the town working, not the
+bug (which was 13 of 13 DEAD). The asserts are now the invariant itself:
+died ≤ 35% AND (fed + managing-with-low-strain) ≥ 80%. Under the original bug
+this fails instantly; under a transit collapse it fails on the managing line.
+
+### Verified
+
+Gate green (see the run for the count); determinism 60d identical; save
+round-trip byte-equal with foundings/_ended; live end-to-end: chain pull →
+music box → age chime through the real watcher → whole town killed → last page
+opens itself → refound → 14 alive, foundings 2 — zero console errors. The
+review fleet died twice on session limits (`raised: 0` with four failures —
+**an empty review that did not run**, the documented trap) and was re-run on
+purchased credits.
+
+### The v1.1 review — 18 agents, 14 confirmed, 0 refuted, and the sixth counter
+
+The fleet's first two runs died on session limits and returned `raised: 0` —
+**an empty review is not a clean one**; the run that counted found 14. The ones
+worth carving:
+
+- ⚠️⚠️ **`foundings` was incremented, saved, restored, fingerprinted — and read
+  by NOTHING.** The counter-nothing-consumes defect, found for the SIXTH time,
+  this time in the reviewer's own reviewer-trained code. The last page reads it
+  now ("the third town on this ground"). The lesson composts into: *serialization
+  discipline is not a consumer.*
+- ⚠️⚠️ **fromJSON derived `_ended` from `s.k.alive` BEFORE k was restored** — so
+  every legacy save of a LIVING town loaded flagged dead and the last page fired
+  over the title screen. The derive now reads the SAVE's own array (`o.k.alive`),
+  which is order-independent. *Restore-order bugs hide behind the modern path:*
+  narr.ended overwrote the garbage for every current save, so only pre-narr
+  saves — the least-tested path — hit it.
+- ⚠️ **`_spawn` never reset `k.saw`**, so refounded figures inherited the dead
+  town's hand-trauma through recycled slots — measured 14 of 14 pre-traumatized
+  by a hand they never saw. One line. The exemption from daily decay is the
+  point of `saw`; the exemption from SLOT RECYCLING was an accident.
+- ⚠️ **One WORKS.radius column meant two real distances**: the new `near2` used
+  raw cells while every kin-facing scan uses `radius * S`. The dynamo lit kin to
+  12 cells and its own fields to only 8. Scaled now.
+- ⚠️ **`setCurtain(0)` makes daylight EXACTLY 0** — the dynamo test's "the getter
+  never quite reaches it" comment was false, and the `hasPower` early-out clause
+  could be deleted with the suite green. A true-darkness leg pins it now.
+- **The dead town's book**: every route into the book (`b`, the button, catchUp's
+  +500ms away-page) now lands on the last page while `_ended` — before, the
+  away-page overwrote the refound button half a second after it appeared, in the
+  LIKELIEST death scenario (died while away).
+- **`ageBest`** tracks the historic peak (saved/restored/fingerprinted, reset to
+  `ageNow()` on refound): the last page credits what the town REACHED, because
+  ruins decay and the present board understates the dead.

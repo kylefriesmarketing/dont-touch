@@ -244,6 +244,10 @@ class App {
   enter(fresh) {
     if (this.phase === 'play') return;
     this.phase = 'play';
+    // the chain pull is the browser's audio gesture, so this is the first
+    // moment sound CAN start — and the fiction agrees: pulling the light on
+    // winds the music box. Once per session, by design.
+    this.sfx.start(); this.sfx.musicBox();
     const t = document.getElementById('title');
     t.classList.add('going');
     setTimeout(() => t.classList.add('hide'), 950);

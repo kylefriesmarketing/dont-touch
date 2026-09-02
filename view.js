@@ -405,74 +405,67 @@ export class View {
     // stopping at a line. The play area is unchanged — this is scenery, it has
     // no cells, and the sim has never heard of it.
     {
-      // ⚠⚠ A FLAT AVERAGED COLOUR, NOT THE TILED GROUND TEXTURE. Tiling the
-      // ground map outward was tried and photographed twice: at seven repeats
-      // each tile is board-sized, so the tile beside the board is a MIRROR of
-      // the board and matches it nowhere — it put a hard diagonal colour break
-      // right along the edge, which reads as an edge just as plainly as the void
-      // it replaced. Competing detail cannot be made to line up; no detail can.
-      // The apron is the ground's own average colour, dimmed toward the rim, and
-      // the miniature blur does the rest.
+      // ⚠⚠ A RING, NEVER A PLANE. The first apron was one huge plane seated at
+      // the rim's MEAN height — and the lip raises the rim above the interior,
+      // so the plane sliced straight through the board. Measured: 96.5-97.6% of
+      // a generated world's interior sat BELOW it. The whole game rendered
+      // under a flat dim sheet — Kyle's report verbatim: 'blurred lines
+      // everywhere, all the creatures are under the map'. The Keswick
+      // verification photos survived only because its baked mountains poke
+      // above the seat — one high world made a catastrophic regression look
+      // verified. VERIFY VIEW GEOMETRY ON A GENERATED WORLD TOO, ALWAYS.
+      // Four slabs around the board footprint, each seated below its own
+      // side's LOWEST rim point: the interior cannot be covered because no
+      // apron geometry exists inside [-GR, GR]² at all.
       const AP = 7;                       // half-widths of land in every direction
-      let ar = 90, ag = 105, ab = 70;
-      try {
-        const sc = document.createElement('canvas'); sc.width = sc.height = 16;
-        const sg = sc.getContext('2d');
-        sg.drawImage(this.groundTex.image, 0, 0, 16, 16);
-        const d = sg.getImageData(0, 0, 16, 16).data;
-        let r2 = 0, g2 = 0, b2 = 0;
-        for (let i = 0; i < d.length; i += 4) { r2 += d[i]; g2 += d[i + 1]; b2 += d[i + 2]; }
-        const nn = d.length / 4;
-        ar = r2 / nn; ag = g2 / nn; ab = b2 / nn;
-      } catch (e) { /* an unready canvas must not stop the world being built */ }
-      const ageo = new THREE.PlaneGeometry(GR * 2 * AP, GR * 2 * AP, AP * 4, AP * 4);
-      ageo.rotateX(-Math.PI / 2);
-      // dim it toward the rim so the layout stays the bright thing in the room
-      const col = [];
-      const pos = ageo.attributes.position;
-      for (let i = 0; i < pos.count; i++) {
-        const dx = pos.getX(i) / (GR * AP), dz = pos.getZ(i) / (GR * AP);
-        const r = Math.min(1, Math.sqrt(dx * dx + dz * dz));
-        // ⚠ gentle, and it starts at FULL brightness. A strong vignette put a
-        // hard tonal line right where the board meets the apron, which reads as
-        // an edge just as plainly as the void did — the thing this exists to
-        // remove. It only really darkens past halfway out, where the miniature
-        // blur is already carrying it.
-        const f = Math.max(0.10, 1 - Math.pow(r, 2.6) * 0.95);
-        col.push(f, f, f);
+      const sideMin = { n: 1e9, s: 1e9, w: 1e9, e: 1e9 };
+      for (let c = 0; c < N; c++) {
+        sideMin.n = Math.min(sideMin.n, this.cellToLocal(c, 0, 0)[1]);
+        sideMin.s = Math.min(sideMin.s, this.cellToLocal(c, N - 1, 0)[1]);
+        sideMin.w = Math.min(sideMin.w, this.cellToLocal(0, c, 0)[1]);
+        sideMin.e = Math.min(sideMin.e, this.cellToLocal(N - 1, c, 0)[1]);
       }
-      ageo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
-      // ⚠ CLAMPED, NOT TILED — this is what makes the join invisible. The UVs are
-      // built so the board's own square maps to [0,1] and everything beyond it
-      // falls outside; with ClampToEdgeWrapping the outside is the board's EDGE
-      // PIXEL smeared outward, so the colour at the seam matches the board
-      // exactly by construction instead of by luck. A repeat or a mirror cannot
-      // do that — both put a different part of the map against the edge.
-      const auv = [];
-      for (let i = 0; i < pos.count; i++) {
-        auv.push(0.5 + pos.getX(i) / (GR * 2), 0.5 - pos.getZ(i) / (GR * 2));
-      }
-      ageo.setAttribute('uv', new THREE.Float32BufferAttribute(auv, 2));
+      // ⚠ CLAMPED, NOT TILED — the board's own square maps to [0,1] in UV, so
+      // everything beyond it samples the board's EDGE PIXEL smeared outward and
+      // the colour at the seam matches by construction. (Tiling was tried and
+      // photographed twice; a board-sized mirror tile matches nowhere.)
       const aedge = this.groundTex.clone();
       aedge.needsUpdate = true;
       aedge.wrapS = aedge.wrapT = THREE.ClampToEdgeWrapping;
       const amat = new THREE.MeshStandardMaterial({
-        map: aedge, color: new THREE.Color(0xffffff),
-        vertexColors: true, roughness: 1, metalness: 0,
+        map: aedge, vertexColors: true, roughness: 1, metalness: 0,
       });
-      this.apron = new THREE.Mesh(ageo, amat);
-      // ⚠ SAMPLED FROM THE BOARD'S OWN RIM, not guessed. At a guessed 0.16 the
-      // apron sat below the terrain edge (measured rim 0.18-0.25) and the step
-      // between them was a hard diagonal line across the screen.
-      let rim = 0, rn = 0;
-      for (let c = 0; c < N; c += 4) {
-        rim += this.cellToLocal(c, 0, 0)[1] + this.cellToLocal(c, N - 1, 0)[1];
-        rim += this.cellToLocal(0, c, 0)[1] + this.cellToLocal(N - 1, c, 0)[1];
-        rn += 4;
-      }
-      this.apron.position.y = rn ? rim / rn - 0.012 : 0.16;
-      this.apron.renderOrder = -1;
-      this.apron.receiveShadow = false;
+      this.apron = new THREE.Group();
+      const AGR = GR * AP;
+      const slab = (x0, x1, z0, z1, y) => {
+        const w = x1 - x0, d = z1 - z0;
+        const sx = Math.max(2, Math.round(w / GR * 3)), sz = Math.max(2, Math.round(d / GR * 3));
+        const geo = new THREE.PlaneGeometry(w, d, sx, sz);
+        geo.rotateX(-Math.PI / 2);
+        const p = geo.attributes.position, uv = [], col = [];
+        const cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
+        for (let i = 0; i < p.count; i++) {
+          const wx = p.getX(i) + cx, wz = p.getZ(i) + cz;
+          uv.push(0.5 + wx / (GR * 2), 0.5 - wz / (GR * 2));
+          // full brightness against the board, falling away only well out — a
+          // strong vignette at the seam reads as an edge, the thing this removes
+          const r = Math.min(1, Math.sqrt(wx * wx + wz * wz) / AGR);
+          const f = Math.max(0.10, 1 - Math.pow(r, 2.6) * 0.95);
+          col.push(f, f, f);
+        }
+        geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+        geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+        const m = new THREE.Mesh(geo, amat);
+        m.position.set(cx, y, cz);
+        m.renderOrder = -1;
+        m.receiveShadow = false;
+        this.apron.add(m);
+      };
+      const M2 = 0.015;
+      slab(-AGR, AGR, -AGR, -GR, sideMin.n - M2);   // north, full width (owns its corners)
+      slab(-AGR, AGR, GR, AGR, sideMin.s - M2);     // south, full width
+      slab(-AGR, -GR, -GR, GR, sideMin.w - M2);     // west band
+      slab(GR, AGR, -GR, GR, sideMin.e - M2);       // east band
       this.jar.add(this.apron);
     }
 
@@ -865,6 +858,70 @@ export class View {
       const step = new THREE.Mesh(new THREE.BoxGeometry(w * 0.30, 0.008, 0.010), M.stone);
       step.position.set(0, 0.004, d * 0.52); g.add(step);
 
+    } else if (o.kind === 9) {                           // THE MILL
+      const tower = new THREE.Mesh(new THREE.CylinderGeometry(0.020, 0.030, 0.062, 8), M.plasterB);
+      tower.position.y = 0.031; g.add(tower);
+      const cap = new THREE.Mesh(new THREE.ConeGeometry(0.024, 0.020, 8), M.slate);
+      cap.position.y = 0.070; g.add(cap);
+      // the sails: a hub group tagged for _paintWorks, which turns it while
+      // the mill stands. Absolute angle from view time — no per-frame drift.
+      const sails = new THREE.Group();
+      sails.position.set(0, 0.058, 0.030);
+      for (let s5 = 0; s5 < 4; s5++) {
+        const blade = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.052, 0.003), M.timber);
+        blade.position.y = 0.026;
+        const arm = new THREE.Group(); arm.add(blade);
+        arm.rotation.z = s5 * Math.PI / 2;
+        sails.add(arm);
+      }
+      g.add(sails); g.userData.sails = sails;
+
+    } else if (o.kind === 10) {                          // THE MENDING HOUSE
+      const w = 0.058, d = 0.046, wh = 0.030;
+      const body = new THREE.Mesh(new THREE.BoxGeometry(w, wh, d), M.plasterC);
+      body.position.y = wh / 2; g.add(body);
+      // the wide door — a bed goes through it. That is the whole facade.
+      const door = new THREE.Mesh(new THREE.BoxGeometry(0.020, 0.022, 0.004), M.cut);
+      door.position.set(0, 0.011, d / 2 + 0.001); g.add(door);
+      const rf = roof(w * 1.14, d * 1.14, 0.020, M.slate);
+      rf.position.y = wh; g.add(rf);
+      g.add(chimney(-w * 0.32, d * 0.2, wh + 0.026, 0.008));
+
+    } else if (o.kind === 11) {                          // THE SCHOOL
+      const w = 0.064, d = 0.048, wh = 0.034;
+      const body = new THREE.Mesh(new THREE.BoxGeometry(w, wh, d), M.plasterA);
+      body.position.y = wh / 2; g.add(body);
+      const rf = roof(w * 1.14, d * 1.14, 0.026, M.tile);
+      rf.position.y = wh; g.add(rf);
+      // the bell gable: two posts, a wee roof, and the bell that calls them in
+      for (const sx of [-1, 1]) {
+        const post = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.018, 0.004), M.timber);
+        post.position.set(sx * 0.008, wh + 0.026 + 0.009, 0); g.add(post);
+      }
+      const belfry = roof(0.026, 0.020, 0.010, M.slate);
+      belfry.position.y = wh + 0.044; g.add(belfry);
+      const bell = new THREE.Mesh(new THREE.CylinderGeometry(0.0035, 0.005, 0.007, 6), M.cut);
+      bell.position.y = wh + 0.036; g.add(bell);
+
+    } else if (o.kind === 12) {                          // THE DYNAMO
+      const w = 0.050, d = 0.040, wh = 0.028;
+      const body = new THREE.Mesh(new THREE.BoxGeometry(w, wh, d), M.brick);
+      body.position.y = wh / 2; g.add(body);
+      const rf = roof(w * 1.12, d * 1.12, 0.016, M.slate);
+      rf.position.y = wh; g.add(rf);
+      g.add(chimney(w * 0.3, -d * 0.2, wh + 0.030, 0.007));
+      // the pole, the crossarm, and the first electric light the town has
+      // ever made. The bulb is tagged: _paintWorks drives its glow from the
+      // sim's own daylight, so it comes on when the dark does.
+      const pole = new THREE.Mesh(new THREE.BoxGeometry(0.005, 0.075, 0.005), M.timber);
+      pole.position.set(w * 0.95, 0.0375, 0); g.add(pole);
+      const arm2 = new THREE.Mesh(new THREE.BoxGeometry(0.020, 0.004, 0.004), M.timber);
+      arm2.position.set(w * 0.95, 0.070, 0); g.add(arm2);
+      const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.0055, 8, 6),
+        new THREE.MeshStandardMaterial({ color: 0xfff2cc, emissive: 0xffdf8a, emissiveIntensity: 0 }));
+      bulb.position.set(w * 0.95, 0.062, 0); g.add(bulb);
+      g.userData.bulb = bulb;
+
     } else {                                             // THE HALL
       const w = 0.115, d = 0.075, wh = 0.048;
       const body = new THREE.Mesh(new THREE.BoxGeometry(w, wh, d), M.plasterA);
@@ -935,6 +992,12 @@ export class View {
       // a shrunken finished one.
       g.scale.set(S, S * (0.55 + f * 0.45), S);
       g.visible = f > 0.04;
+      // the mill turns while it stands; the angle is absolute view-time, so a
+      // reload never jumps and a paused frame never drifts
+      if (g.userData.sails && f >= 0.98) g.userData.sails.rotation.z = this.t * 0.85;
+      // the dynamo's bulb reads the sim's own daylight — the first light on
+      // the board the room did not provide
+      if (g.userData.bulb) g.userData.bulb.material.emissiveIntensity = f >= 0.98 ? (1 - s.daylight) * 2.2 : 0;
     }
     for (const [o, g] of this.workViews) {
       if (live.has(o)) continue;
@@ -2432,7 +2495,9 @@ export class View {
         // trailing `else` below hands out the HALL's three-window row — so the
         // moment the farming age shipped, every field on the board lit three
         // windows in mid-air at night and every well lit three more.
-        if (o.kind < 3 || o.kind === 6 || o.kind === 7 || o.prog < 0.98 || n >= 158) continue;
+        // ⚠ mill(9) has no window; the dynamo(12) glows through its own bulb
+        // in _paintWorks, so the window pass skips both.
+        if (o.kind < 3 || o.kind === 6 || o.kind === 7 || o.kind === 9 || o.kind === 12 || o.prog < 0.98 || n >= 158) continue;
         // ⚠️ OUTSIDE the deepest wall, or the quad sits inside the box and the
         // depth test hides it — 7 windows rendered invisible on the first pass
         // because a house body can be 0.062 deep and the quad sat at z 0.023.
@@ -2440,6 +2505,9 @@ export class View {
           : o.kind === 4 ? [[-0.014, 0.019, 0.038], [0.014, 0.019, 0.038]]
           // a granary is a store, not a home: one lamp over the loading step
           : o.kind === 8 ? [[0, 0.040, 0.033]]
+          // the mending house keeps one lamp lit all night; the school two
+          : o.kind === 10 ? [[0, 0.016, 0.025]]
+          : o.kind === 11 ? [[-0.014, 0.018, 0.026], [0.014, 0.018, 0.026]]
           : [[-0.030, 0.027, 0.048], [0, 0.027, 0.048], [0.030, 0.027, 0.048]];
         for (const [lx, ly, lz] of spots) {
           // group-local offset through the group's own yaw, or windows float

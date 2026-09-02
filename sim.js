@@ -88,6 +88,10 @@ export const C = {
   // should have — it rescues exhausted ground, it does not carpet the board.
   FARM_GROW: 0.00030,    // per tick inside a standing field
   HARVEST: 0.200,        // per tick, per unit of field surplus, into a store
+  MILL_MULT: 1.6,        // a milled harvest banks this much more per take
+  MEND_RATE: 0.45,       // strain recovery divisor near a mending house (vs 1.4)
+  SCHOOL_BOOST: 2.4,     // teach-roll threshold multiplier near a school
+  DYNAMO_LIGHT: 0.55,    // the light a dynamo holds its fields at after dark
   IRRIG_WELL: 0.70,      // moisture a well holds its ground at (groundwater)
   IRRIG_CHAN: 0.86,      // ...and a channel, while its source still has water
   IRRIG_RATE: 0.0016,    // per tick, toward that floor
@@ -264,6 +268,23 @@ export const WORKS = [
     made: 'dug until the water came up to meet them', pre: 0b1000, preN: 1, near: 1 },
   { key: 'granary', name: 'the granary', need: 2, pressure: 0.28, effort: 980, radius: 9.0, cap: 4, per: 26,
     made: 'built a store that could hold a whole winter', pre: 0b1000000, preN: 1, near: 1 },
+  // --- and then the work starts doing itself -------------------------------
+  // ⚠⚠ THE 16-BIT CEILING: k.knows is a Uint16Array, so WORKS may never
+  // exceed 16 entries without widening it AND migrating every saved mask.
+  // 13 of 16 used. APPEND ONLY — inserting shifts every pre: bitmask and
+  // corrupts every saved k.knows (the standing law since the ladder shipped).
+  // Every entry here has a named READ SITE — the five-times-found defect of
+  // this codebase is a building nothing consumes. mill → the harvest chain in
+  // _sow; mend → the strain decay in the service loop; school → the teach
+  // roll threshold; dynamo → _sow's night gate + the night service trickle.
+  { key: 'mill', name: 'the mill', need: 2, pressure: 0.30, effort: 1500, radius: 6.5, cap: 6, per: 26,
+    made: 'set the wind to grinding', pre: 0b101000000, preN: 2, near: 1 },
+  { key: 'mend', name: 'the mending house', need: 5, pressure: 0.30, effort: 1100, radius: 6.0, cap: 4, per: 30,
+    made: 'made a bed for the hurt to lie in', pre: 0b10000, preN: 1, near: 1 },
+  { key: 'school', name: 'the school', need: 4, pressure: 0.28, effort: 1400, radius: 7.0, cap: 3, per: 36,
+    made: 'sat the young down to be told', pre: 0b110000, preN: 2, near: 1 },
+  { key: 'dynamo', name: 'the dynamo', need: 0, pressure: 0.26, effort: 2400, radius: 8.0, cap: 3, per: 44,
+    made: 'bottled the lightning and hung it from a pole', pre: 0b101000000000, preN: 2, near: 1 },
 ];
 export const WORK_AT = {}; WORKS.forEach((w, i) => WORK_AT[w.key] = i);
 // ⚠ ONE definition of how much a food store holds. This is read by the fill,
@@ -288,6 +309,10 @@ export const AGES = [
     said: 'they stopped going to find their food, and made it come to them.' },
   { key: 'keep', name: 'the kept winter', at: 8,
     said: 'they put away more than they needed, and stopped being afraid of the cold months.' },
+  { key: 'wheel', name: 'the turning wheel', at: 9,
+    said: 'they stopped doing with their own hands what the wind would do for them.' },
+  { key: 'light', name: 'the little lights', at: 12,
+    said: 'the dark stopped telling them when the day was over.' },
 ];
 // ⚠️ THE ONE THRESHOLD. "Standing" means this and nothing else — the decay, the
 // effects, the era, the chronicle beat and the view must all agree, or a thing
@@ -414,6 +439,10 @@ export class Sim {
     this.humid = 5.0 * S2;     // suspended water in the sealed air
     this.rainLeft = 0;         // water still to fall from the current cloud
     this.age = null;           // last-seen age; null = ask the board on tick 1
+    this.foundings = 1;        // how many times dad has set figures out here
+    this.ageBest = 0;          // the highest age THIS town ever reached — the
+                               // last page reads it, because ruins decay and
+                               // ageNow() would understate the dead's history
     // ⚠️ THE BOARD STARTS UNDER THE SHEET — 'dad keeps it covered', which is
     // the help card's own words and the reason the town is alive to be found.
     // Sealed, the water it evaporates comes back as rain. Pulling the sheet off
@@ -708,7 +737,12 @@ export class Sim {
       this.k.age[g] = Math.max(C.HALF_DAYS + 1, this.k.lifespan[g] * 0.22);
     }
     for (const id of born) this._name(id, id === g ? 'who has never once moved' : 'founder');
-    this.log('open', `the town. ${this.count} of them, and nothing yet has a name for the sky.`);
+    // ⚠ born.length, never this.count — count is the slot high-water mark and
+    // includes every kin that ever died, so a refounding announced 'the town.
+    // 121 of them' after dad set out 14. And a refounded ground HAS names.
+    this.log('open', this.foundings > 1
+      ? `the town again. ${born.length} of them, on ground that already had its names.`
+      : `the town. ${born.length} of them, and nothing yet has a name for the sky.`);
   }
 
   // ── THE FOUNDING IS NOT YEAR ZERO ──────────────────────────────
@@ -808,6 +842,53 @@ export class Sim {
     }
     for (let id = 0; id < this.count; id++) if (this.k.alive[id]) this.k.knows[id] |= mask;
   }
+  // ── SET OUT NEW FIGURES ────────────────────────────────────
+  // Real loss, and what comes after it. When the last kin dies the town is
+  // allowed to be OVER — that is the stakes working — but the LAYOUT is still
+  // on the table, so dad can set out new figures. The new town starts on the
+  // old one's ground: works standing at whatever decay, graves kept, place
+  // names kept, practices remembered by the world.
+  // ⚠ THE NEW FIGURES DO NOT INHERIT THE DEAD TOWN'S KNOWLEDGE. They arrive
+  // with the founding four, like every founding — what the old town invented
+  // survives only as RUINS, and the weave's reinvention path (somebody looks
+  // at a standing thing nobody understands and understands it) is the
+  // archaeology. That loop already existed; refounding is what makes it sing.
+  // ⚠ _seedColony picks a NEW glued figure among the born — correct: dad set
+  // out new figures and put a drop of glue under one of them.
+  refound(n2 = 14) {
+    // ⚠ COUNT, don't trust `this.alive` — it is a cached aggregate that is 0
+    // between construction and the first _kin walk, so the cached check let a
+    // LIVING town be refounded (caught by the boot validation, first try).
+    // Same failure family as the stale-alive fingerprint hole.
+    let pre = 0;
+    for (let id = 0; id < this.count; id++) if (this.k.alive[id]) pre++;
+    if (pre > 0) return false;
+    this.foundings++;
+    this._ended = false;
+    this.log('open', 'dad set out new figures. the old town was still there.', 9);
+    this._seedColony(n2);
+    const mask = 0b1111;
+    for (let id = 0; id < this.count; id++) if (this.k.alive[id]) this.k.knows[id] |= mask;
+    // ⚠ and the founding four arrive as TRADITIONS, exactly like _endowWorks
+    // grants them at genesis. The dead town's weave flagged everything `lost`;
+    // left that way, the next roll narrated 'worked out the channel again,
+    // from nothing' for knowledge every figure was carrying — and `relearning`
+    // bypassed the room cap. prac[4+] stays lost ON PURPOSE: that is the
+    // archaeology.
+    for (let q = 0; q < 4; q++) {
+      const pr = this.prac[q];
+      pr.lost = -1; pr.invented = 0; pr.inventor = -1; pr.inventorGone = 0; pr.tradition = 0;
+    }
+    // the new town's register starts from what its ground still shows
+    this.ageBest = this.ageNow();
+    // recount NOW — the fingerprint folds `alive`, and waiting for the next
+    // _kin walk leaves a save written in between hashing as a dead town
+    let liv = 0;
+    for (let id = 0; id < this.count; id++) if (this.k.alive[id]) liv++;
+    this.alive = liv;
+    return true;
+  }
+
   _spawn(x, y, genome, mo, fa, gen) {
     let id;
     if (this.free.length) id = this.free.pop();
@@ -830,6 +911,11 @@ export class Sim {
     k.home[id] = mo >= 0 ? k.home[mo] : -1;
     k.homeTier[id] = mo >= 0 ? k.homeTier[mo] : 0;
     k.memX[id] = -1; k.memY[id] = -1; k.memV[id] = 0;
+    // ⚠ saw too — it is exempt from the daily decay ON PURPOSE, which means a
+    // recycled slot hands the previous occupant's hand-trauma to a newborn.
+    // Reviewed and measured: refound a dead town and 14 of 14 new figures
+    // arrived pre-traumatized by a hand they never saw.
+    k.saw[id] = 0;
     for (let j = 0; j < G; j++) k.genome[id * G + j] = genome[j];
     const span = SPAN_DAYS[expressed(genome, L.span)];
     const homo = marrowHomozygous(genome);
@@ -1027,11 +1113,33 @@ export class Sim {
   _sow(F) {
     const N = this.N, M = this.moss, W = this.water, Q = this.moist, T = this.temp;
     const light = this.daylight;
-    if (light <= 0) return;                        // nothing grows in the dark
+    // ⚠ the early-out must survive the dynamo: with no standing dynamo the
+    // night skip is exactly what it always was, and headless towns that never
+    // invent one pay nothing for the feature existing.
+    let hasPower = false;
+    for (const w2 of this.works) if (w2.kind === WORK_AT.dynamo && w2.prog >= WORK_DONE) { hasPower = true; break; }
+    if (light <= 0 && !hasPower) return;           // nothing grows in the dark
+    const near2 = (kind, ox, oz) => {
+      // ⚠ radius * S, like the service loop and the school scan — one WORKS
+      // table column must mean ONE real distance. Unscaled, the dynamo lit
+      // kin to 12 cells and fields to only 8: two circles from one number.
+      const rr = WORKS[kind].radius * S, rr2 = rr * rr;
+      for (const w2 of this.works) {
+        if (w2.kind !== kind || w2.prog < WORK_DONE) continue;
+        const dx2 = w2.x - ox, dy2 = w2.y - oz;
+        if (dx2 * dx2 + dy2 * dy2 <= rr2) return true;
+      }
+      return false;
+    };
     const inv = 1 / (C.MOSS_BAND * C.MOSS_BAND);
     for (const o of this.works) {
       if (o.kind !== WORK_AT.farm || o.prog < WORK_DONE) continue;
       const R = WORKS[o.kind].radius, R2 = R * R;
+      // the dynamo's field-facing half: a lit field keeps growing after dark.
+      // L replaces `light` for THIS farm only; an unlit farm at night still
+      // contributes nothing, exactly as before.
+      const L = light > C.DYNAMO_LIGHT ? light : (near2(WORK_AT.dynamo, o.x, o.y) ? C.DYNAMO_LIGHT : light);
+      if (L <= 0) continue;
       let crop = 0, cells = 0;
       const x0 = Math.max(0, Math.round(o.x - R)), x1 = Math.min(N - 1, Math.round(o.x + R));
       const y0 = Math.max(0, Math.round(o.y - R)), y1 = Math.min(N - 1, Math.round(o.y + R));
@@ -1044,7 +1152,7 @@ export class Sim {
           if (W[i] > 0.02) continue;                 // a flooded field grows nothing
           const d = T[i] - C.MOSS_IDEAL, heat = 1 - d * d * inv;
           if (heat <= 0) continue;
-          const g = C.FARM_GROW * F * heat * (0.25 + Q[i] * 0.75) * light * (1 - M[i]);
+          const g = C.FARM_GROW * F * heat * (0.25 + Q[i] * 0.75) * L * (1 - M[i]);
           M[i] = M[i] + g > 1 ? 1 : M[i] + g;
           crop += M[i];
           cells++;
@@ -1086,7 +1194,12 @@ export class Sim {
           if (tgt) {
             // taken off the FIELD, never conjured: the ground gives it up.
             const capN = STOCK_CAP(tgt.kind);
-            const take = Math.min(C.HARVEST * F * (mean - 0.12), capN - tgt.stock);
+            // the mill grinds: a milled field banks more per take. Multiplied
+            // into the AMBITION, so the conservation fix below still means only
+            // what the ground surrendered is banked — the mill makes the hands
+            // faster, it does not conjure moss.
+            const milled = near2(WORK_AT.mill, o.x, o.y);
+            const take = Math.min(C.HARVEST * F * (mean - 0.12) * (milled ? C.MILL_MULT : 1), capN - tgt.stock);
             if (take > 0) {
               // ⚠⚠ BANK WHAT THE GROUND ACTUALLY SURRENDERED, NOT WHAT WAS ASKED
               // FOR. This used to credit the store the whole of `take` and then
@@ -1282,7 +1395,7 @@ export class Sim {
 
       // warmth is not a decay, it's a reading of where you are standing —
       // and a windbreak is a warm place that is not the finger
-      let shelter = 0;
+      let shelter = 0, mended = false;
       for (const o of this.works) {
         if (o.prog < WORK_DONE) continue;
         const dx = o.x - k.x[id], dy = o.y - k.y[id];
@@ -1304,6 +1417,16 @@ export class Sim {
           const give = Math.min(o.stock, o.kind === WORK_AT.granary ? 0.020 : 0.010);
           o.stock -= give; k.need[base + 2] = Math.min(1, k.need[base + 2] + give * 1.6);
         }
+        // a bed for the hurt: being near one doesn't feed or warm anybody —
+        // it makes RECOVERY faster, read exactly once at the strain decay below
+        else if (o.kind === WORK_AT.mend) mended = true;
+        // the lit yard: after dark, company and courage where the light is.
+        // This is the dynamo's people-facing half; its field-facing half is in
+        // _sow. Same shape as the household line above it, deliberately.
+        else if (o.kind === WORK_AT.dynamo && this.daylight < 0.15) {
+          k.need[base + 4] = Math.min(1, k.need[base + 4] + 0.0008);
+          k.need[base + 5] = Math.min(1, k.need[base + 5] + 0.0006);
+        }
       }
       const comfort = (T >= band[0] && T <= band[1]) ? 1
         : (1 - Math.min(1, (T < band[0] ? band[0] - T : T - band[1]) / 14)) * (1 - shelter) + shelter * 0.92;
@@ -1322,7 +1445,7 @@ export class Sim {
         k.strain[id] += hurt;
         k.need[base + 5] = Math.max(0, k.need[base + 5] - hurt * 0.9);   // fear reads on the lantern
       } else {
-        k.strain[id] = Math.max(0, k.strain[id] - dt / 1.4);
+        k.strain[id] = Math.max(0, k.strain[id] - dt / (mended ? C.MEND_RATE : 1.4));
         k.need[base + 5] = Math.min(1, k.need[base + 5] + dt * 0.7);
       }
 
@@ -2419,7 +2542,17 @@ export class Sim {
             const dx = k.x[t2] - k.x[id], dy = k.y[t2] - k.y[id], d2 = dx * dx + dy * dy;
             if (d2 < bd) { bd = d2; o = t2; }
           }
-          if (o >= 0 && this.rng() < 0.02) {
+          // ⚠ the school multiplies the THRESHOLD, never the number of draws —
+          // the rng stream must not shift with geography or every school placement
+          // would desync a replayed save.
+          let schooled = false;
+          for (const w2 of this.works) {
+            if (w2.kind !== WORK_AT.school || w2.prog < WORK_DONE) continue;
+            const sx2 = w2.x - k.x[id], sy2 = w2.y - k.y[id];
+            const sr2 = WORKS[WORK_AT.school].radius * S;
+            if (sx2 * sx2 + sy2 * sy2 <= sr2 * sr2) { schooled = true; break; }
+          }
+          if (o >= 0 && this.rng() < 0.02 * (schooled ? C.SCHOOL_BOOST : 1)) {
             const fresh = k.knows[id] & ~k.knows[o];
             for (let wi2 = 0; wi2 < WORKS.length; wi2++) {
               const b2 = 1 << wi2;
@@ -2673,6 +2806,7 @@ export class Sim {
     // falling back out of an age is a real event and reads as one.
     {
       const a = this.ageNow();
+      if (a > this.ageBest) this.ageBest = a;
       if (this.age == null) this.age = a;
       else if (a > this.age) {
         this.age = a;
@@ -3281,6 +3415,8 @@ export class Sim {
     // count — anything the sim reads every tick has to be in here.
     mix(this.ambientBase);
     mix(this.age == null ? -1 : this.age);   // an age that desyncs must be visible
+    mix(this.foundings);
+    mix(this.ageBest);
     // ⚠️ THE SHAPED GROUND HAS TO BE IN HERE. `height` is not saved and the
     // harness compares two towns by this number, so without folding the
     // player's own terrain a save that had a hill in it and one that did not
@@ -3332,6 +3468,7 @@ export class Sim {
       worldName: this.worldName || null,
       gifts: this.gifts,
       humid: this.humid, rainLeft: this.rainLeft, fog: this.fog,
+      foundings: this.foundings, ageBest: this.ageBest,
       // ⚠ the age is DERIVED, but the LAST-SEEN age is state: without it a
       // reload replays every age-turn beat the town ever had into the page.
       age: this.age == null ? null : this.age,
@@ -3428,6 +3565,19 @@ export class Sim {
     // and _daily seeds it from the board on the first tick instead of
     // announcing the gathering days to a town that is centuries past them.
     s.age = o.age == null ? null : o.age;
+    s.foundings = o.foundings || 1;
+    // max with the standing board so a legacy save seeds sanely
+    s.ageBest = Math.max(o.ageBest || 0, s.ageNow());
+    // ⚠ LEGACY FALLBACK ONLY, and it reads the SAVE's own array. The first
+    // version counted s.k.alive — which is not restored until far below this
+    // line, so it counted the constructor's empty arrays and flagged EVERY
+    // living town dead; the last page then fired over the title screen.
+    // Modern saves are overwritten by the authoritative narr.ended a few
+    // lines down; this exists so a pre-narr save of a long-dead town does not
+    // announce the end a second time on load.
+    { let liv = 0;
+      if (o.k && o.k.alive) for (let i2 = 0; i2 < o.k.alive.length; i2++) if (o.k.alive[i2]) liv++;
+      s._ended = liv === 0 && s.count > 0; }
     s.placeMem = o.placeMem || {};
     s.placeNames = o.placeNames || {};
     s.chronicle = o.chronicle; s.curtain = o.curtain; s.lampOn = o.lampOn;

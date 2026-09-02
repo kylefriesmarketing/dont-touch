@@ -168,7 +168,21 @@ export class UI {
     // so. And it says nothing whatever about how the kin are, which is still the
     // lanterns' job alone.
     const ageI = s.ageNow ? s.ageNow() : 0;
+    // one small bell when an age TURNS — never on load (the first frame seeds
+    // the tracker), and never on the way DOWN: losing an age already has the
+    // chronicle's own sentence, and a chime would make it sound like a prize.
+    if (this._lastAge == null) this._lastAge = ageI;
+    else if (ageI > this._lastAge) { this._lastAge = ageI; if (this.app && this.app.sfx) this.app.sfx.chime(); }
+    else if (ageI < this._lastAge) this._lastAge = ageI;
     $('hud').innerHTML = `<b>day ${s.day}</b><span class="agechip">${AGES[ageI].name}</span>`;
+    // ── THE LAST PAGE ──────────────────────────────────────────
+    // Real loss is allowed here — Kyle's call — so when the last kin dies the
+    // book closes and SAYS so, once, instead of the board just going quiet and
+    // the player wondering if the game broke. `_ended` is the sim's own flag
+    // (recomputed on load, so a saved dead town does not re-announce itself);
+    // `_endShown` is UI-local so a reload shows the page again — correct: you
+    // walked back down to the basement and the town is still gone.
+    if (s._ended && !this._endShown) { this._endShown = true; this.showEnd(); }
 
     // the day arc: "is night coming" is the one thing the lanterns cannot tell
     // you, and it governs rest, moss growth and every cold death.
@@ -302,6 +316,13 @@ export class UI {
 
   // -- THE PAGE (§12.3) ------------------------------------------------------
   showPage(fromDay = 0) {
+    // ⚠ A DEAD TOWN'S BOOK OPENS TO THE LAST PAGE, whichever way you open it.
+    // Without this, catchUp's +500ms showPage overwrote the last page half a
+    // second after it appeared (died-while-away is the LIKELIEST way a player
+    // meets the end), the 'b' key showed the ordinary book with no refound
+    // button, and 'leave it dark' was unrecoverable. showEnd is idempotent —
+    // fresh nodes, fresh listeners — so re-entry is safe.
+    if (this.sim._ended) { this.showEnd(); return; }
     const s = this.sim;
     const p = s.page(fromDay);
     const body = $('pageBody');
@@ -316,6 +337,48 @@ export class UI {
     h += `<div class="foot">a DIRTY BOY DEVS game</div>`;
     body.innerHTML = h;
     $('pageWrap').classList.remove('hide');
+  }
+
+  // The book's last page. Aggregates are allowed here by the same rule as
+  // showPage — the town is finished, and this page is the finishing of it.
+  showEnd() {
+    const s = this.sim;
+    const body = $('pageBody');
+    // ⚠ ageBest, not ageNow: ruins decay after the last death, so the present
+    // board understates what the town actually reached — and this page is the
+    // town's history, not its inventory.
+    const ages = (AGES[Math.max(s.ageBest || 0, s.ageNow())] || AGES[0]).name;
+    const places = Object.values(s.placeNames || {});
+    let h = `<h2>the last page</h2>`;
+    // foundings finally has a reader — the exact 'counter nothing consumes'
+    // defect this codebase has now found SIX times, once in its own reviewer's
+    // code. The register says which town on this ground this was.
+    const nth = ['', '', 'second', 'third', 'fourth', 'fifth', 'sixth'][s.foundings] || (s.foundings + 'th');
+    const townN = s.foundings > 1 ? ` · the ${nth} town on this ground` : '';
+    h += `<div class="sub">the town is quiet. day ${s.day} · ${s.graves.length} graves · ${s.stats.generations} generations · it reached ${ages}${townN}</div>`;
+    h += '<ol>';
+    const p = s.page();
+    p.slice(-8).forEach(e => { h += `<li><span>${e.day}</span>${e.text}</li>`; });
+    h += '</ol>';
+    if (places.length) h += `<div class="sub" style="margin-top:14px">the ground still answers to ${places.slice(0, 4).join(', ')}.</div>`;
+    // ⚠ the button is the ONLY prompt in the flow, and it is dad's act, not a
+    // game-over menu: the layout is still on the table.
+    h += `<div style="margin-top:18px;display:flex;gap:10px">` +
+      `<button id="refoundBtn" style="padding:8px 14px">set out new figures</button>` +
+      `<button id="leaveBtn" style="padding:8px 14px">leave it dark</button></div>`;
+    h += `<div class="foot">a DIRTY BOY DEVS game</div>`;
+    body.innerHTML = h;
+    $('pageWrap').classList.remove('hide');
+    $('refoundBtn').addEventListener('click', () => {
+      if (this.sim.refound(14)) {
+        this._endShown = false;
+        $('pageWrap').classList.add('hide');
+        if (this.app && this.app.view) this.app.view.lookAtTown();
+      }
+    });
+    // leaving it dark is a real choice: the page closes and the board stays.
+    // _endShown stays true so it does not nag; the book reopens it if asked.
+    $('leaveBtn').addEventListener('click', () => $('pageWrap').classList.add('hide'));
   }
 
   // 9:16 PNG. This is the shareable artifact and it is a launch feature.

@@ -82,6 +82,21 @@ export class Sfx {
       d.g.gain.setTargetAtTime(Math.max(0, want), t, 0.6);
     });
 
+    // ── the house talks to itself ──────────────────────────────
+    // A creak every half-minute or so, a pipe tick a little oftener. All
+    // Math.random — audio is view-side and never touches the sim's rng.
+    // ⚠ the Age of Toys ambience lesson stands: no raw endless waveforms, no
+    // sub-drones. These are EVENTS, quiet ones, and the room stays a room.
+    this._creakT = (this._creakT || 12) - dt;
+    if (this._creakT <= 0) {
+      this._creakT = 18 + Math.random() * 34;
+      this._creak();
+    }
+    this._tickT = (this._tickT || 7) - dt;
+    if (this._tickT <= 0) {
+      this._tickT = 9 + Math.random() * 22;
+      if (Math.random() < 0.6) this._pipeTick();
+    }
     this.airF.frequency.setTargetAtTime(300 + sim.daylight * 900, t, 1.2);
     this.airG.gain.setTargetAtTime(0.018 + sim.daylight * 0.03, t, 1.2);
     this.rainG.gain.setTargetAtTime(sim.rainLeft > 0 ? 0.075 : 0, t, 0.8);
@@ -99,6 +114,80 @@ export class Sfx {
     if (c.createStereoPanner && pan != null) { const p = c.createStereoPanner(); p.pan.value = pan; g.connect(p); node = p; }
     o.connect(g); node.connect(this.master);
     o.start(t); o.stop(t + dur + 0.02);
+  }
+
+  // a floor joist settling one room over: a pitch-bent groan through a low
+  // filter, quiet enough to be doubted
+  _creak() {
+    if (!this.ready || this.muted) return;
+    const c = this.ctx, t = c.currentTime;
+    const o = c.createOscillator(); o.type = 'triangle';
+    const f0 = 70 + Math.random() * 60;
+    o.frequency.setValueAtTime(f0, t);
+    o.frequency.linearRampToValueAtTime(f0 * (0.8 + Math.random() * 0.5), t + 0.55);
+    const fl = c.createBiquadFilter(); fl.type = 'lowpass'; fl.frequency.value = 260; fl.Q.value = 3.2;
+    const g = c.createGain();
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(0.028 + Math.random() * 0.02, t + 0.10);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.9);
+    o.connect(fl); fl.connect(g); g.connect(this.master);
+    o.start(t); o.stop(t + 1);
+  }
+
+  // the heating pipe, twice: tick... tick
+  _pipeTick() {
+    if (!this.ready || this.muted) return;
+    const d0 = Math.random() * 0.1;
+    this._blip(1900 + Math.random() * 700, 0.05, 'square', 0.012, (Math.random() - 0.5) * 0.8);
+    setTimeout(() => this._blip(1700 + Math.random() * 500, 0.04, 'square', 0.009, (Math.random() - 0.5) * 0.8), 140 + d0 * 400);
+  }
+
+  // ── THE MUSIC BOX ───────────────────────────────────────────
+  // Plays ONCE when the light is pulled on — the browser will not let audio
+  // start before a gesture, and the chain pull IS the gesture, which is better
+  // fiction than a title theme anyway: pulling the light on winds the box.
+  // A dozen plucked notes, slightly detuned like a tired mechanism, slowing
+  // and fading at the end the way a music box actually runs down.
+  musicBox() {
+    if (!this.ready || this.muted || this._boxPlayed) return;
+    this._boxPlayed = true;
+    const c = this.ctx, t0 = c.currentTime + 0.3;
+    // D minor pentatonic-ish lullaby, in music-box register
+    const seq = [587, 698, 880, 698, 587, 440, 523, 587, 440, 349, 440, 587, 523, 440, 349, 294];
+    let tt = t0;
+    seq.forEach((f, i) => {
+      const slow = 1 + Math.max(0, i - 11) * 0.12;      // the spring runs down
+      const det = 1 + (Math.random() - 0.5) * 0.004;    // tired mechanism
+      const vol = 0.035 * (i >= 12 ? 1 - (i - 11) * 0.18 : 1);
+      for (const [mult, mv] of [[1, 1], [2, 0.35], [3.01, 0.12]]) {
+        const o = c.createOscillator(); o.type = 'sine'; o.frequency.value = f * det * mult;
+        const g = c.createGain();
+        g.gain.setValueAtTime(0, tt);
+        g.gain.linearRampToValueAtTime(vol * mv, tt + 0.008);
+        g.gain.exponentialRampToValueAtTime(0.0001, tt + 1.6);
+        o.connect(g); g.connect(this.master);
+        o.start(tt); o.stop(tt + 1.7);
+      }
+      tt += (i % 4 === 3 ? 0.62 : 0.34) * slow;
+    });
+  }
+
+  // ── THE AGE CHIME ───────────────────────────────────────────
+  // One small bell when the town turns an age — the check-in player's reward
+  // for coming back down the stairs. Inharmonic partials so it reads as METAL,
+  // not as an interface bleep.
+  chime() {
+    if (!this.ready || this.muted) return;
+    const c = this.ctx, t = c.currentTime;
+    for (const [f, v, dur] of [[660, 0.05, 2.6], [1567, 0.022, 2.0], [2310, 0.01, 1.3]]) {
+      const o = c.createOscillator(); o.type = 'sine'; o.frequency.value = f;
+      const g = c.createGain();
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(v, t + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      o.connect(g); g.connect(this.master);
+      o.start(t); o.stop(t + dur + 0.1);
+    }
   }
 
   // the tap you should not do
