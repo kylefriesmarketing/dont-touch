@@ -287,9 +287,12 @@ export const WORKS = [
     made: 'set the wind to grinding', pre: 0b101000000, preN: 2, near: 1 },
   { key: 'mend', name: 'the mending house', need: 5, pressure: 0.30, effort: 1100, radius: 6.0, cap: 4, per: 30,
     made: 'made a bed for the hurt to lie in', pre: 0b10000, preN: 1, near: 1 },
-  { key: 'school', name: 'the school', need: 4, pressure: 0.28, effort: 1400, radius: 7.0, cap: 3, per: 36,
+  // ⚠ pressure is a minimum need-DEFICIT threshold, not a rate — a session
+  // once 'bumped' it upward to speed the school and made it strictly HARDER.
+  // Read the want-gate in _weave before touching this number.
+  { key: 'school', name: 'the school', need: 4, pressure: 0.24, effort: 1400, radius: 7.0, cap: 3, per: 36,
     made: 'sat the young down to be told', pre: 0b110000, preN: 2, near: 1 },
-  { key: 'dynamo', name: 'the dynamo', need: 0, pressure: 0.26, effort: 2400, radius: 8.0, cap: 3, per: 44,
+  { key: 'dynamo', name: 'the dynamo', need: 0, pressure: 0.22, effort: 2400, radius: 8.0, cap: 3, per: 44,
     made: 'bottled the lightning and hung it from a pole', pre: 0b101000000000, preN: 2, near: 1 },
 ];
 export const WORK_AT = {}; WORKS.forEach((w, i) => WORK_AT[w.key] = i);
@@ -1747,7 +1750,14 @@ export class Sim {
           for (const o2 of this.works) {
             if (!WORKS[o2.kind].near) continue;
             const ddx = o2.x - k.x[id], ddy = o2.y - k.y[id];
-            if (ddx * ddx + ddy * ddy < 9 * S * S) { sc = 0; break; }
+            // ⚠ softened from a HARD sc=0 veto: that rule dates from when a
+            //   building landed at the inventor's FEET, so inventing in the
+            //   crush meant BUILDING in the crush. _siteWork owns placement
+            //   and spacing now — and in an organized later-age town the veto
+            //   zeroed nearly every candidate (everyone lives ON the streets),
+            //   which is why the school fired never/never/241 across three
+            //   400-day seeds and the modern age died with it.
+            if (ddx * ddx + ddy * ddy < 9 * S * S) { sc *= 0.55; break; }
           }
         }
         if (sc > bestScore) { bestScore = sc; best = id; }
@@ -3580,6 +3590,7 @@ export class Sim {
       // restored colony was byte-identical in body and told its story on a
       // different rhythm. The widened fingerprint caught it immediately.
       narr: {
+        beat: this._beat || {},
         hatches: this._hatches || 0,
         lastRainLog: this._lastRainLog == null ? null : this._lastRainLog,
         tendLog: this._tendLog == null ? null : this._tendLog,
@@ -3673,6 +3684,10 @@ export class Sim {
       s._lastRainLog = o.narr.lastRainLog == null ? undefined : o.narr.lastRainLog;
       s._tendLog = o.narr.tendLog == null ? undefined : o.narr.tendLog;
       s._ended = !!o.narr.ended;
+      // ⚠ one-shot beats (rows, hearthnight...) live here; without restoring
+      // them, a reloaded town re-announced 'they built to a line, for the
+      // first time' — caught as a ±1 story-count divergence across a save.
+      s._beat = o.narr.beat || {};
       s._duskSweep = o.narr.duskSweep == null ? undefined : o.narr.duskSweep;
       s.eventCounts = new Map(o.narr.counts || []);
     } else {

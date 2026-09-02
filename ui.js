@@ -363,9 +363,9 @@ export class UI {
     if (places.length) h += `<div class="sub" style="margin-top:14px">the ground still answers to ${places.slice(0, 4).join(', ')}.</div>`;
     // ⚠ the button is the ONLY prompt in the flow, and it is dad's act, not a
     // game-over menu: the layout is still on the table.
-    h += `<div style="margin-top:18px;display:flex;gap:10px">` +
-      `<button id="refoundBtn" style="padding:8px 14px">set out new figures</button>` +
-      `<button id="leaveBtn" style="padding:8px 14px">leave it dark</button></div>`;
+    h += `<div class="endrow">` +
+      `<button id="refoundBtn" class="warm">set out new figures</button>` +
+      `<button id="leaveBtn">leave it dark</button></div>`;
     h += `<div class="foot">a DIRTY BOY DEVS game</div>`;
     body.innerHTML = h;
     $('pageWrap').classList.remove('hide');

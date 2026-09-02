@@ -34,7 +34,10 @@
     border:1px solid var(--edge);border-radius:7px;padding:5px 10px;cursor:pointer;
     letter-spacing:.01em}
   button:hover{background:rgba(255,255,255,.09)}
-  button.on{background:rgba(150,200,255,.16);border-color:rgba(150,200,255,.4)}
+  /* ⚠ one accent across the whole UI: the lantern amber the verb chips have
+     always worn. The old blue .on made the box speak a different light than
+     the hand — two interfaces in one game. */
+  button.on{background:rgba(216,164,92,.16);border-color:rgba(216,164,92,.45);color:#e6d3ae}
   button:focus-visible,input:focus-visible{outline:2px solid var(--sw);outline-offset:2px}
 
   /* ============ THE TITLE — the board, covered, in the dark ============= */
@@ -73,9 +76,9 @@
   #chain .say{margin-top:15px;font:300 15px/1 Georgia,serif;color:#a9b6c6;letter-spacing:.06em}
   #chain:hover .say,#chain:focus-visible .say{color:#e6d3ae}
   #tmeta{margin-top:28px;color:#3f4956;font-size:12px;letter-spacing:.05em}
-  #tmeta button{background:none;border:0;color:#5b6675;padding:3px 8px;font-size:12px;
-    text-decoration:underline;text-underline-offset:3px}
-  #tmeta button:hover{color:#9fb0c4;background:none}
+  #tmeta button{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);
+    border-radius:11px;color:#8b97a8;padding:3px 11px;font-size:12px}
+  #tmeta button:hover{color:#e6d3ae;background:rgba(216,164,92,.10);border-color:rgba(216,164,92,.35)}
   #tfoot{position:fixed;bottom:calc(15px + env(safe-area-inset-bottom));left:0;right:0;
     color:#333c48;font-size:11px;letter-spacing:.16em}
 
@@ -239,6 +242,15 @@
   #page,#boxin{width:min(580px,94vw);max-height:86vh;overflow:auto;
     background:linear-gradient(#101520,#0a0e15);border:1px solid var(--edge);
     border-radius:14px;padding:28px 30px}
+  /* the box calls itself 'the shoebox the layout's spare parts live in' — so
+     it is CARDBOARD, not the page's cold navy. Same geometry, warmer skin,
+     and the header wears a strip of parcel tape. */
+  #boxin{background:linear-gradient(#171310,#0f0c09);
+    border-color:rgba(216,164,92,.16)}
+  #boxin h2{position:relative;display:inline-block;padding:2px 10px;
+    background:rgba(216,164,92,.10);border-radius:3px;
+    box-shadow:0 0 0 1px rgba(216,164,92,.12)}
+  #boxin .row{border-top-color:rgba(216,164,92,.08)}
   /* ⚠ the PAGE gets dad's graph paper; the BOX stays a plain panel on purpose —
      the page is the town's book, the box is a settings tray, and giving them
      the same skin blurs which one you are holding. The gradient rides ON TOP
@@ -259,6 +271,11 @@
   #page li span{color:var(--faint);font-size:12px;min-width:3ch;padding-top:4px;
     font-variant-numeric:tabular-nums}
   #page .foot{margin-top:20px;color:var(--faint);font-size:11px;letter-spacing:.14em}
+  /* the last page's two choices: setting out new figures is the warm act */
+  #page .endrow{margin-top:18px;display:flex;gap:10px}
+  #page .endrow button{padding:8px 15px;font-size:13.5px}
+  #page .endrow .warm{background:rgba(216,164,92,.16);border-color:rgba(216,164,92,.5);color:#e6d3ae}
+  #page .endrow .warm:hover{background:rgba(216,164,92,.26)}
   .btns{display:flex;gap:8px;margin-top:18px;flex-wrap:wrap}
 
   .row{display:flex;align-items:center;justify-content:space-between;gap:14px;

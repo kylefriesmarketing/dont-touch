@@ -1970,3 +1970,31 @@ walk-up eaters). After: stores 4.26/17.14, ok-rates 92%/86% on two seeds.
 **Retune the rate whenever the reach moves — and when a threshold test fails
 twice with different numbers, the code under it is still moving; stop touching
 the assert and find what.**
+
+### ⚠️⚠️ THE BALANCE TRIANGLE, and the veto that was strangling the modern age
+
+Closing the hunger regression opened a three-way tension — hunger-health vs
+store-health vs ladder-pace — and two blind alleys before the real cause:
+- Harvest floor 0.14: ladder fine, **84% of the flagged hungry DEAD in 5 days**
+  on 'live' — the original bug's severity at scale. Floor stays 0.16: the floor
+  is what remains on the stalk for walk-up eaters, and the humane invariant
+  outranks pacing.
+- `pressure` bumps to speed the school: **BACKWARDS.** `pressure` is a minimum
+  need-DEFICIT threshold (`want < W.pressure → skip`), not a rate — raising it
+  made inventing strictly harder. Read the want-gate before touching the table.
+- **The real strangler**: the weave's `sc = 0` veto for inventors standing
+  within 4.5 cells of a near-work — written when buildings landed at the
+  inventor's FEET, so inventing in the crush meant building in the crush.
+  `_siteWork` owns placement now, and in an organized later-age town the veto
+  zeroed nearly every candidate (everyone lives ON the streets): school fired
+  never/never/241 across three 400-day seeds and the modern age died with it.
+  Softened to ×0.55. After: school@58/87, dynamo@92/102, both seeds at the
+  little lights, alive 213/371, **stores 50.9**, hunger 84% ok / 5% died.
+**When a placement-era rule outlives the placement it guarded, it turns from a
+guard into a stranglehold — re-audit every rule that reads positions whenever
+the thing that sets positions changes.**
+
+Also from this arc: the saw test guarded on `k.alive[slot]` alone and had been
+passing BY the recycled-slot leak it was supposed to catch (identity = birth
+day now), and the once-ever `rows` beat lived in unsaved `_beat`, re-firing on
+every reload — caught as a ±1 story-count divergence. `_beat` rides in narr now.

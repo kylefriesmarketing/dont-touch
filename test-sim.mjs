@@ -399,11 +399,22 @@ t('the witnesses disagree, because their own bodies decide', () => {
 t('what they saw never fades, while the hand itself does', () => {
   const s = clone(fixture('live', 200));
   s.lift(someone(s)); s.takeAway();
-  const w = [...Array(s.count).keys()].find(i => s.k.alive[i] && s.k.saw[i] !== 0);
-  ok(w != null, 'no surviving witness');
-  const saw0 = s.k.saw[w];
+  // ⚠ IDENTITY, NOT SLOT. This used to guard on `k.alive[w]` alone — but slots
+  // are recycled, so 'alive' can be a NEWBORN wearing the dead witness's index.
+  // Before _spawn reset k.saw, the newborn INHERITED the trauma and this test
+  // passed BY THE LEAK the review then fixed. Track every witness by birth day
+  // and only judge the ones still occupied by the same kin.
+  const wits = [];
+  for (let i = 0; i < s.count; i++) if (s.k.alive[i] && s.k.saw[i] !== 0) wits.push({ i, saw: s.k.saw[i], born: s.k.born[i] });
+  ok(wits.length > 0, 'no surviving witness');
   run(s, 40);
-  if (s.k.alive[w]) eq(s.k.saw[w], saw0, 'a witness forgot');
+  let judged = 0;
+  for (const w of wits) {
+    if (!s.k.alive[w.i] || s.k.born[w.i] !== w.born) continue;   // died, slot recycled
+    eq(s.k.saw[w.i], w.saw, 'a witness forgot');
+    judged++;
+  }
+  ok(judged > 0, 'every witness died within forty days — the scenario stopped testing anything');
 });
 
 t('taken means no body, so there is never a stone for that one', () => {
