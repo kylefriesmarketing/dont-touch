@@ -490,7 +490,29 @@ t('what is left of a stale crumb becomes pasture', () => {
   // ⚠️ nothing is ever simply deleted from a world whose whole subject is that
   // marks stay. A crumb nobody finished is the reason that patch is green.
   const s = clone(fixture('live', 200));
-  const gx = 48, gy = 48;
+  // ⚠ QUIET GROUND, FOUND, NOT HARDCODED. This used (48,48) — which by day 200
+  // on this trajectory is the dead centre of the town: 57 kin and 27 works
+  // within 8 cells, three stores within 3. The crumb's deposit landed and was
+  // grazed to nothing INSIDE the same day, so the assert read 'the ground did
+  // not get the rest of it' when the truth was 'the town ate it immediately'.
+  // The mechanic under test is deposit-on-decay, so the test needs ground
+  // nobody is standing on — and trajectories move every time the sim is
+  // rebalanced, so it has to look rather than remember.
+  let gx = -1, gy = -1;
+  outer: for (let y = 8; y < s.N - 8; y += 2) for (let x = 8; x < s.N - 8; x += 2) {
+    if (!s.inJar(x, y) || s.water[s.idx(x, y)] > 0.001) continue;
+    let busy = false;
+    for (let id = 0; id < s.count && !busy; id++)
+      if (s.k.alive[id] && Math.hypot(s.k.x[id] - x, s.k.y[id] - y) < 10) busy = true;
+    for (const o of s.works) if (Math.hypot(o.x - x, o.y - y) < 10) { busy = true; break; }
+    if (!busy) { gx = x; gy = y; break outer; }
+  }
+  ok(gx >= 0, 'no quiet ground left on the whole board — the town ate the map');
+  // ⚠ quiet ground tends to be SATURATED ground (nobody grazes it), and a
+  // cell at moss 1.0 cannot rise — the first fix passed by a float hair
+  // (0.9999... → 1.0 cap). The mechanic under test is the DEPOSIT, so the
+  // test sets its own headroom instead of hoping the map provides it.
+  s.moss[s.idx(gx, gy)] = 0.3;
   const before = s.moss[s.idx(gx, gy)];
   s.give(gx, gy);
   s.gifts[0].mass = 0.5;
