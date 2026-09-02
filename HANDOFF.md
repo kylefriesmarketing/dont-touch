@@ -1955,3 +1955,18 @@ stream must not shift with geography; a 50-draw parity test pins it. Falls back
 to the inventor's feet if nothing within 8 cells passes, so a founding act is
 never blocked. store/windbreak/channel never take the lattice — a channel
 belongs at the water it was scraped from.
+
+### ⚠️ A GEOMETRY FIX IS AN ECONOMY CHANGE (the near2×S aftermath, 2026-08-30)
+
+The review's radius unification was geometrically right and economically wrong:
+the mill's reach grew 1.5× (2.25× AREA), so MILL_MULT 1.6 suddenly applied to
+nearly every field. The harvest pinned the commons at its own floor — measured
+day-300 stores **8.03 → 0.33** and town-core moss **0.087 → 0.046** — and the
+walk-up hungry graze exactly the cells the harvest drains, so the hunger test
+failed AGAIN with new numbers (its second recalibration would have been its
+third blind one; the fix was the economy, not the assert). MILL_MULT 1.35 and
+the harvest floor 0.12 → 0.16 (the floor is what stays ON THE STALK for
+walk-up eaters). After: stores 4.26/17.14, ok-rates 92%/86% on two seeds.
+**Retune the rate whenever the reach moves — and when a threshold test fails
+twice with different numbers, the code under it is still moving; stop touching
+the assert and find what.**

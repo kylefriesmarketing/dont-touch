@@ -88,7 +88,13 @@ export const C = {
   // should have — it rescues exhausted ground, it does not carpet the board.
   FARM_GROW: 0.00030,    // per tick inside a standing field
   HARVEST: 0.200,        // per tick, per unit of field surplus, into a store
-  MILL_MULT: 1.6,        // a milled harvest banks this much more per take
+  // ⚠ 1.35, retuned when the radius convention was unified: the mill reach
+  // grew 1.5x (2.25x AREA), so 1.6 suddenly applied to nearly every field and
+  // the harvest pinned the commons at the floor — measured day-300 stores
+  // 8.03 -> 0.33 and town-core moss 0.087 -> 0.046, with the walk-up hungry
+  // grazing the same cells the harvest drains. A geometry fix is an economy
+  // change; retune the rate when the reach moves.
+  MILL_MULT: 1.35,       // a milled harvest banks this much more per take
   MEND_RATE: 0.45,       // strain recovery divisor near a mending house (vs 1.4)
   SCHOOL_BOOST: 2.4,     // teach-roll threshold multiplier near a school
   DYNAMO_LIGHT: 0.55,    // the light a dynamo holds its fields at after dark
@@ -1248,7 +1254,11 @@ export class Sim {
         // stands. A high gate meant the crop was grazed away before it could
         // ever be carried, so the granaries stayed empty and farming was a
         // decoration on top of gathering.
-        if (mean > 0.12) {
+        // ⚠ 0.16, raised with the mill retune above: the floor is what the
+        // harvest leaves ON THE STALK for the kin who walk up and eat — at
+        // 0.12 the commons starved the walk-up eaters once the wider mills
+        // pinned every field to it.
+        if (mean > 0.16) {
           let tgt = null, bd = 1e9;
           for (const g2 of this.works) {
             if (g2.kind !== WORK_AT.granary && g2.kind !== WORK_AT.store) continue;
@@ -1268,7 +1278,7 @@ export class Sim {
             // what the ground surrendered is banked — the mill makes the hands
             // faster, it does not conjure moss.
             const milled = near2(WORK_AT.mill, o.x, o.y);
-            const take = Math.min(C.HARVEST * F * (mean - 0.12) * (milled ? C.MILL_MULT : 1), capN - tgt.stock);
+            const take = Math.min(C.HARVEST * F * (mean - 0.16) * (milled ? C.MILL_MULT : 1), capN - tgt.stock);
             if (take > 0) {
               // ⚠⚠ BANK WHAT THE GROUND ACTUALLY SURRENDERED, NOT WHAT WAS ASKED
               // FOR. This used to credit the store the whole of `take` and then
