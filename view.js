@@ -212,7 +212,13 @@ export class View {
     // A warm spot from above centre gives night a pool of light with real
     // falloff, and it swings faintly because a basement bulb on a cord does.
     // No shadow casting — the key light already owns the one shadow map.
-    this.bulb = new THREE.SpotLight(0xffd9a0, 0.0, 7.5, 0.62, 0.55, 1.1);
+    // ⚠️ A TIGHT POOL WAS TRIED AND REJECTED — angle 0.40 put a real circle
+    // of light on the table, and then the sim said no: the lamp is BOARD-WIDE
+    // in the rules (`ambient` +1.6 everywhere, `daylight` floored at 0.22
+    // everywhere), so a visible pool edge would read as a gameplay boundary
+    // that does not exist. 0.50/0.85 keeps a gentle centre-weighted warmth —
+    // shaped, honest, and the cord's faint swing still shows in the falloff.
+    this.bulb = new THREE.SpotLight(0xffd9a0, 0.0, 7.5, 0.50, 0.85, 1.1);
     this.bulb.position.set(0, 3.1, 0);
     this.bulb.target.position.set(0, 0, 0);
     this.scene.add(this.bulb);
@@ -240,17 +246,57 @@ export class View {
     // curtain at 0.75, daylight is only 0.22 — which put the key light at 0.41
     // and the whole layout read as a dark green smudge. The floors are what a
     // basement bulb does; `d` is still what decides day from night.
-    this.hemi.intensity = 0.40 + d * 0.62;
-    this.key.intensity = 0.62 + d * 1.05;
+    //
+    // ── THE DAY ARC ─────────────────────────────────────────────
+    // Photographed before this: dawn and noon were THE SAME PICTURE at two
+    // exposures (the key moved 0.92 − d·0.02 — a 2% shift), and night was
+    // day dimmed 60%. Now the light says the TIME, not just the amount:
+    // gold at the day's edges, white at noon, moon-blue night. Everything
+    // keys off `d` itself, so both edges of the day get the gold (they do
+    // in life) and a heavily-curtained window simply lives nearer golden
+    // hour all day — which is what a curtain does.
+    // ⚠️ nightK dies by d 0.14 ON PURPOSE — the first dose ran it to 0.20,
+    // where it overlapped the gold window and its blue pull CANCELLED the
+    // hemisphere's warm brush at dawn (photographed: a neutral dawn with the
+    // gold arithmetically present and visually absent). The two hands must
+    // not fight over the same stretch of the day.
+    // ⚠️ a lamp-lit night sits at d 0.22 (the sim floors daylight there), so
+    // nightK is 0 and gold is high with the lamp on: bulb-night renders warm
+    // tungsten board-wide while true dark night goes moon-blue. Two different
+    // nights, both honest — keep this accident.
+    const nightK = 1 - Math.min(1, d / 0.14);                       // 1 deep night → 0 by d 0.14
+    const gold = Math.min(1, d / 0.16) *
+      Math.min(1, Math.max(0, 1 - (d - 0.16) / 0.38));              // ⚠️ both factors clamped — the falling edge exceeds 1 below d 0.16
+    this.hemi.intensity = 0.40 + nightK * 0.07 + d * 0.62;          // +0.07 pays for the bluer night sky
+    this.key.intensity = 0.62 + d * 1.12 + gold * 0.25;             // the low sun carries its own light
     this.fill.intensity = 0.22 + d * 0.34;
-    this.key.color.setRGB(1, 0.92 - d * 0.02, 0.78 + d * 0.04);
+    // key: noon-white → golden at the edges → MOONLIGHT at dark night. The
+    // key at deep night is a pure visibility floor (with the lamp off there
+    // is no bulb to be warm about), so it may be moon-coloured — and with the
+    // lamp ON the sim floors d at 0.22, nightK is 0, and this whole blend
+    // yields to the tungsten gold on its own. Measured before this: a warm
+    // night key at 0.62 swamped the bluer hemisphere and the moon-blue night
+    // never reached the frame.
+    const kr = 1 - nightK * 0.16;
+    const kg = (0.955 - gold * 0.20) * (1 - nightK) + 0.92 * nightK;
+    const kb = (0.86 - gold * 0.36) * (1 - nightK) + 1.00 * nightK;
+    this.key.color.setRGB(kr, kg, kb);
+    // hemisphere: the old constant 0xd8e6f2 at noon, brushed warm at the
+    // edges, moon-blue at deep night — the warm hut windows finally have a
+    // cold dark to glow against
+    this.hemi.color.setRGB(
+      0.85 + gold * 0.13 - nightK * 0.22,
+      0.90 + gold * 0.02 - nightK * 0.15,
+      0.95 - gold * 0.15 + nightK * 0.02);
     // the title screen: the room before anybody came downstairs. View-only, and
     // applied last so it scales whatever the day had already decided.
     // the bulb takes over as the day goes: zero at noon, the main light at
     // night — but only when the lamp is actually on. Its faint swing is the
     // same cord the shadows already answer to.
     const nightF = 1 - d;
-    this.bulb.intensity = s.lampOn ? nightF * nightF * 3.4 : 0;
+    // 4.6 not 3.4: the cone is a little tighter than it was, and the higher
+    // penumbra spends light on its soft edge
+    this.bulb.intensity = s.lampOn ? nightF * nightF * 4.6 : 0;
     this.bulb.position.x = Math.sin(this.t * 0.43) * 0.10;
     this.bulb.position.z = Math.cos(this.t * 0.31) * 0.08;
     if (this.titleDim > 0.001) {
@@ -258,9 +304,16 @@ export class View {
       this.hemi.intensity *= q; this.key.intensity *= q; this.fill.intensity *= q;
       this.bulb.intensity *= q;
     }
-    // the lamp swings a little across the day so shadows are not painted on
+    // the lamp swings a little across the day so shadows are not painted on.
+    // ⚠️ the sine is raised to 1.6 because the bare sine is too FAT: a plain
+    // floor drop only moved the golden-hour sun 45° → 42° (measured), which
+    // reads as nothing. The exponent holds noon at 2.7 exactly and drops the
+    // day's edges to a real ~29° low sun — long shadows are half of what
+    // golden hour IS. Lateral shadow-camera coverage is unaffected (a lower
+    // sun stretches shadows ALONG the light, which the ortho box covers).
     const ang = 0.55 + s.dayFrac * 1.9;
-    this.key.position.set(Math.cos(ang) * 1.7, 1.6 + Math.sin(s.dayFrac * 3.14) * 1.1, Math.sin(ang) * 1.2);
+    const sunUp = Math.pow(Math.max(0, Math.sin(s.dayFrac * 3.14)), 1.6);
+    this.key.position.set(Math.cos(ang) * 1.7, 0.55 + sunUp * 2.15, Math.sin(ang) * 1.2);
   }
 
   // The surface the scenery actually presents: the heightfield eased down to

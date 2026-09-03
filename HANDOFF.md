@@ -2099,3 +2099,57 @@ and the tilt verb can transform the jar — the studio point maps across via
 localToWorld before the camera is placed.
 Measured: ~72ms per photo (once per tap), 6/6 clean portraits day AND night,
 counts healed after every shot, zero console errors.
+
+---
+
+## THE LIGHTING POLISH (2026-09-02) — the light says the time, not just the amount
+
+Photographed first (six-state baseline: dawn/noon/dusk/night-off/night-on):
+**dawn and noon were THE SAME PICTURE at two exposures** — the key colour moved
+0.92 − d·0.02, a 2% shift — and night was day dimmed 60%. All in `_paintSky`,
+view-only, gate re-run green anyway.
+
+The day arc, all keyed off `d` itself (both edges of the day get the gold, as
+in life, and a heavily-curtained window simply lives nearer golden hour):
+- `gold` window peaks near d 0.16 (⚠️ clamp BOTH factors — the falling edge
+  exceeds 1 below the peak, caught by arithmetic audit)
+- `nightK` dies by d 0.14 ON PURPOSE — the first dose ran it to 0.20, where
+  its blue pull overlapped the gold window and CANCELLED the hemisphere's warm
+  brush at dawn (photographed: gold arithmetically present, visually absent).
+  Two blend hands must not fight over the same stretch of the day.
+- dark night: the key goes MOONLIGHT (0.84, 0.92, 1.0). Measured first: a warm
+  night key at 0.62 intensity swamped the bluer hemisphere — the moon never
+  reached the frame (mean-RGB moved r −10% / b +17% after, luma held).
+- ⚠️ THE LAMP-NIGHT ACCIDENT, KEEP IT: the sim floors daylight at 0.22 when
+  lampOn, which lands inside the gold window with nightK 0 — so bulb-night
+  renders warm tungsten board-wide and dark night goes moon-blue, with NO
+  branch on lampOn anywhere in the view. Two honest nights.
+
+⚠️ **A TIGHT BULB POOL WAS TRIED AND REJECTED — the sim vetoed it.** angle
+0.40 put a real circle of light on the table; then `sim.js` was read: the lamp
+is BOARD-WIDE in the rules (`ambient` +1.6 everywhere, `daylight` floored
+everywhere). A visible pool edge would read as a gameplay boundary that does
+not exist. Shipped 0.50/0.85 — centre-weighted warmth, no false boundary.
+**Check what the sim thinks a light MEANS before shaping what it looks like.**
+
+⚠️⚠️ **THE titleDim CONTAMINATION — the measurement trap of this pass.** The
+title fade eases toward 0 only inside render(); with rAF suspended in the pane
+it advances 0.05s per photographed frame, so every shot in a fresh page is
+taken through a DIFFERENT partial fade (measured titleDim 0.368 after 12
+frames). The first before/after comparison was garbage — the after set read
+darker purely because its page had rendered fewer frames. For any lighting
+photography here: **force `v.titleDim = 0; v.titleTo = 0` before the shot**,
+and prefer same-instant pairs (stub the old `_paintSky` onto the instance,
+shoot, `delete v._paintSky` to fall back to the prototype, shoot again).
+
+Verified: mean-RGB deltas per state (dawn +24% luma and warm-shifted r>g, noon
++6% same hue, dark night cooler at held luma, lamp-night brighter and warmer),
+matched-pair photographs for all four states, lights-write census (every
+writer lives in _paintSky), 0 console errors, fp untouched (view-only).
+Addendum, same pass: **the low sun.** The key's daily elevation arc was a bare
+sine with a 1.6 floor — golden hour sat at ~45° and shadows stayed noon-short
+all day. A plain floor drop measured 45° → 42°: NOTHING (the sine is too fat
+near its peak). `sunUp = sin(dayFrac·π)^1.6` holds noon at exactly 2.7 and
+drops the day's edges to a measured ~37° — hut and tree shadows finally
+stretch at dawn/dusk. Lateral shadow-camera coverage is unaffected (a lower
+sun stretches shadows ALONG the light direction, which the ortho box covers).
