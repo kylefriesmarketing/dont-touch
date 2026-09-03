@@ -140,6 +140,18 @@ export class UI {
   select(id) {
     this.selected = id;
     $('inspect').classList.toggle('hide', id < 0);
+    // the polaroid — taken ONCE per tap, never per frame (paintInspector
+    // rebuilds inspectBody every paint; the photo lives outside it)
+    const shot = $('inspectShot');
+    if (shot) {
+      shot.innerHTML = '';
+      if (id >= 0 && this.app && this.app.view && this.app.view.portraitOf) {
+        try {
+          const url = this.app.view.portraitOf(id);
+          if (url) { const im = document.createElement('img'); im.src = url; im.alt = ''; shot.appendChild(im); }
+        } catch (e) { /* a failed photo must never break the inspector */ }
+      }
+    }
   }
 
   sync() {

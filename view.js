@@ -1697,9 +1697,35 @@ export class View {
     addBody(new THREE.SphereGeometry(0.0022, 6, 4), 0, -0.0085, 0.020, 0);
     addBody(new THREE.SphereGeometry(0.0022, 6, 4), 0,  0.0085, 0.020, 0);
     // eye WHITES — moved out of the dark layer so they render near-white and
-    // the pupils in the feature layer sit proud of them
-    addBody(new THREE.SphereGeometry(0.0034, 7, 5), 1.0, -0.0044, 0.0326, 0.0082);
-    addBody(new THREE.SphereGeometry(0.0034, 7, 5), 1.0,  0.0044, 0.0326, 0.0082);
+    // the pupils in the feature layer sit proud of them.
+    // ⚠️ THE CUTENESS PASS (Kyle: 'the creatures arent cute enough so theres no
+    // real stakes'). Photographed before/after: the old face had small angular
+    // pupils gazing down-vacant, a mouth dash floating on the NECK (0.0275 is
+    // below the head, which starts at 0.0285 in the lifted frame — it read as a
+    // chest vent), no glint, no blush, no blink. Baby-schema fixes: whites grew
+    // 0.0034→0.0040 and sit nearly touching, pupils 0.0016→0.0024 aimed straight
+    // ahead with a specular GLINT, blush cheeks, and the mouth is a small smile
+    // ON the head. Suffering still reads — droop/shiver/grey-out are untouched,
+    // and the contrast against a resting smile makes them land harder.
+    // ⚠️ z 0.0074, not 0.0080 — photographed at 0.0080 the whites stood off the
+    // skull like frog-stalks from a 3/4 angle; 0.0074 keeps the frontal read
+    // and seats them back into the head silhouette.
+    addBody(new THREE.SphereGeometry(0.0040, 7, 5), 1.0, -0.0046, 0.0330, 0.0074);
+    addBody(new THREE.SphereGeometry(0.0040, 7, 5), 1.0,  0.0046, 0.0330, 0.0074);
+    // the GLINT — a white fleck riding the upper-outer face of each pupil. It
+    // lives in the BODY layer (aTint 1.0 renders it near-white over any paint)
+    // and shares the blink tag, so it collapses with the lid.
+    // ⚠️ photographed at 0.0009 r / pupil-centre: it filled the pupil and read
+    // as a grey HOLE — a ring-eyed stare, worse than no glint. It must be small
+    // and clearly in the upper-outer CORNER of the pupil.
+    addBody(new THREE.SphereGeometry(0.0006, 6, 4), 1.0, -0.0056, 0.0344, 0.0117);
+    addBody(new THREE.SphereGeometry(0.0006, 6, 4), 1.0,  0.0056, 0.0344, 0.0117);
+    // BLUSH — flattened cheek pads. aTint is SIGNED now: positive mixes toward
+    // off-white (whites/glints/belly), NEGATIVE mixes toward blush pink — one
+    // attribute, two jobs, still one draw call.
+    const mkBlush = () => { const g0 = new THREE.SphereGeometry(0.0018, 7, 5); g0.scale(1, 0.72, 0.45); return g0; };
+    addBody(mkBlush(), -0.80, -0.0068, 0.0300, 0.0062);
+    addBody(mkBlush(), -0.80,  0.0068, 0.0300, 0.0062);
     let bTot = 0;
     for (const bp of bparts) bTot += bp.g.attributes.position.count;
     const bpos = new Float32Array(bTot * 3), bnor = new Float32Array(bTot * 3);
@@ -1715,6 +1741,14 @@ export class View {
     body.setAttribute('position', new THREE.BufferAttribute(bpos, 3));
     body.setAttribute('normal', new THREE.BufferAttribute(bnor, 3));
     body.setAttribute('aTint', new THREE.BufferAttribute(btint, 1));
+    // EGGS ARE EGGS — the body geometry is shared, so eggs have always rendered
+    // with eye whites baked on (shipped oddity), and the cuteness pass would
+    // have given them pink cheeks too. A per-instance flag collapses every face
+    // part (whites, glints, blush) in the vertex stage, so an egg is finally a
+    // blank pale shape. Written per instance in _paintKin, like the colors.
+    this._eggAttr = new THREE.InstancedBufferAttribute(new Float32Array(CAP), 1);
+    this._eggAttr.setUsage(THREE.DynamicDrawUsage);
+    body.setAttribute('aKinEgg', this._eggAttr);
 
     // painted-toy material; per-instance colour carries the hue.
     // ⚠️ aTint injection point matters: with InstancedMesh + setColorAt, three
@@ -1722,15 +1756,35 @@ export class View {
     // so the mix must come AFTER that include — it lerps the FINAL instance-
     // tinted colour toward off-white, which is what keeps the eye whites white
     // over any paint. (Same onBeforeCompile pattern as the lantern points.)
+    // THE BLINK — shader-side, keyed off gl_InstanceID (WebGL2, which is all
+    // three r169 supports), so the whole colony blinks on its own clocks with
+    // ZERO per-frame attribute writes. One shared uniform object (`_kinT`) is
+    // registered into BOTH the body and the feature materials — whites, glints
+    // and pupils must close on the same clock or the pupils float over shut
+    // lids. Eye parts squash toward the lid line at local y=0.0330 in the
+    // vertex stage, before the instance matrix, so posture/droop compose.
+    // ⚠️ the marker is `aTint > 0.6` here (whites+glints are 1.0; belly tops at
+    // 0.35, blush is negative) and `aEye` in the feature layer.
+    this._kinT = { value: 0 };
+    const BLINK_GLSL = [
+      '  float kinH = fract(sin(float(gl_InstanceID) * 12.9898) * 43758.5453);',
+      '  float kinCyc = fract(uT * (0.20 + kinH * 0.12) + kinH * 7.0);',
+      '  float kinBl = max(0.0, 1.0 - abs(kinCyc - 0.030) / 0.030);',
+    ].join('\n');
     const bodyMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.62, metalness: 0.02 });
     bodyMat.onBeforeCompile = (sh2) => {
+      sh2.uniforms.uT = this._kinT;
       sh2.vertexShader = sh2.vertexShader
-        .replace('#include <common>', '#include <common>\nattribute float aTint;\nvarying float vTint;')
-        .replace('#include <color_vertex>', '#include <color_vertex>\n  vTint = aTint;');
+        .replace('#include <common>', '#include <common>\nattribute float aTint;\nattribute float aKinEgg;\nvarying float vTint;\nuniform float uT;')
+        .replace('#include <color_vertex>', '#include <color_vertex>\n  vTint = aTint;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\n' + BLINK_GLSL +
+          '\n  if (aTint > 0.6) transformed.y = mix(transformed.y, 0.0330, kinBl * 0.92);' +
+          '\n  if (aKinEgg > 0.5 && (aTint > 0.6 || aTint < -0.05)) transformed = vec3(0.0, 0.012, 0.0);');
       sh2.fragmentShader = sh2.fragmentShader
         .replace('#include <common>', '#include <common>\nvarying float vTint;')
         .replace('#include <color_fragment>',
-          '#include <color_fragment>\n  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.93,0.94,0.90), vTint);');
+          '#include <color_fragment>\n  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.93,0.94,0.90), max(vTint, 0.0));' +
+          '\n  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.97,0.55,0.55), max(-vTint, 0.0));');
     };
     this.bodies = new THREE.InstancedMesh(body, bodyMat, CAP);
     this.bodies.castShadow = true;
@@ -1751,25 +1805,44 @@ export class View {
     // became the eye WHITES in the body mesh above; only what must never take
     // the paint stays in this layer.
     const parts = [];
-    const put = (geo, x, y, z) => { geo.translate(x, y, z); parts.push(geo.toNonIndexed()); };
-    put(new THREE.SphereGeometry(0.0016, 6, 4), -0.0044, 0.0326, 0.0102);   // left pupil
-    put(new THREE.SphereGeometry(0.0016, 6, 4),  0.0044, 0.0326, 0.0102);   // right pupil
-    put(new THREE.BoxGeometry(0.0022, 0.0008, 0.0006), 0, 0.0275, 0.0098);  // the mouth dash
+    const put = (geo, x, y, z, eye = 0) => { geo.translate(x, y, z); parts.push({ g: geo.toNonIndexed(), eye }); };
+    // pupils: BIG (0.0016→0.0024), round (8,6 vs the old angular 6,4), aimed
+    // straight ahead at the eye's own centre height, a hair inward of the
+    // whites — the slight convergent gaze is the toy-shop look
+    put(new THREE.SphereGeometry(0.0024, 8, 6), -0.0043, 0.0330, 0.0104, 1);  // left pupil
+    put(new THREE.SphereGeometry(0.0024, 8, 6),  0.0043, 0.0330, 0.0104, 1);  // right pupil
+    // the mouth: a small SMILE arc, on the head just under the eyes (the old
+    // dash sat at 0.0275 — the NECK — and photographed as a floating chest
+    // vent). Torus in the XY plane faces +z = kin-forward for free; rotated so
+    // the arc spans the bottom with the ends turned up.
+    const smile = new THREE.TorusGeometry(0.0014, 0.00045, 5, 10, Math.PI * 0.9);
+    smile.rotateZ(Math.PI + Math.PI * 0.05);
+    put(smile, 0, 0.0301, 0.0092);
     put(new THREE.CylinderGeometry(0.0005, 0.0009, 0.0105, 4), 0, 0.0450, 0); // antenna
     let vTot = 0;
-    for (const g0 of parts) vTot += g0.attributes.position.count;
+    for (const p0 of parts) vTot += p0.g.attributes.position.count;
     const fpos = new Float32Array(vTot * 3), fnor = new Float32Array(vTot * 3);
+    const feye = new Float32Array(vTot);
     let off = 0;
-    for (const g0 of parts) {
-      fpos.set(g0.attributes.position.array, off * 3);
-      fnor.set(g0.attributes.normal.array, off * 3);
-      off += g0.attributes.position.count;
+    for (const p0 of parts) {
+      fpos.set(p0.g.attributes.position.array, off * 3);
+      fnor.set(p0.g.attributes.normal.array, off * 3);
+      if (p0.eye) feye.fill(1, off, off + p0.g.attributes.position.count);
+      off += p0.g.attributes.position.count;
     }
     const feat = new THREE.BufferGeometry();
     feat.setAttribute('position', new THREE.BufferAttribute(fpos, 3));
     feat.setAttribute('normal', new THREE.BufferAttribute(fnor, 3));
-    this.features = new THREE.InstancedMesh(feat,
-      new THREE.MeshStandardMaterial({ color: 0x12161d, roughness: 0.35 }), CAP);
+    feat.setAttribute('aEye', new THREE.BufferAttribute(feye, 1));
+    const featMat = new THREE.MeshStandardMaterial({ color: 0x12161d, roughness: 0.35 });
+    featMat.onBeforeCompile = (sh3) => {
+      sh3.uniforms.uT = this._kinT;
+      sh3.vertexShader = sh3.vertexShader
+        .replace('#include <common>', '#include <common>\nattribute float aEye;\nuniform float uT;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\n' + BLINK_GLSL +
+          '\n  if (aEye > 0.5) transformed.y = mix(transformed.y, 0.0330, kinBl * 0.92);');
+    };
+    this.features = new THREE.InstancedMesh(feat, featMat, CAP);
     this.features.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.features.count = 0;
     this.features.frustumCulled = false;
@@ -1911,6 +1984,7 @@ export class View {
 
   _paintKin() {
     const s = this.sim, k = s.k;
+    this._kinT.value = this.t;    // the blink clock, shared by both kin materials
     const G2 = LOCI.length * 2;
     let n = 0, glueSeen = false;
     for (let id = 0; id < s.count; id++) {
@@ -1929,6 +2003,11 @@ export class View {
       const st = k.stage[id];
       const grow = st === STAGE.EGG ? 0.62 : st === STAGE.NIB ? 0.7 : st === STAGE.HALF ? 0.86 : 1;
       const sz = k.size[id] * grow;
+      // toddlers are CHUBBY, not miniature: children compress on y only, so a
+      // nib is a squat round thing with the same big head — baby-schema, one
+      // multiplier. The antenna-tip call takes sz*chub so the glow stays seated
+      // on the shorter stalk (pickKin still reads "the antenna tip").
+      const chub = st === STAGE.NIB ? 0.86 : st === STAGE.HALF ? 0.93 : 1;
 
       // BLOODLINE SILHOUETTES: the two marrow allele bytes set the body WIDTH
       // (x/z only — height belongs to age and stage). Children share alleles
@@ -1987,6 +2066,7 @@ export class View {
       // stage reads at a glance even when the figure is standing still
       if (st === STAGE.RIME) this._col.lerp(this._rimeC, 0.35);
       this.bodies.setColorAt(n, this._col);
+      this._eggAttr.array[n] = st === STAGE.EGG ? 1 : 0;
 
       // posture: a failing kin DROOPS — pitched forward, sagging. This is the
       // distance read that replaces the dimming lantern, and it costs a pitch
@@ -2006,14 +2086,14 @@ export class View {
         this._v.set(x, y, z);
         // the family width still shows — being glued changes what they can DO,
         // not what bloodline they are
-        this._sc.set(sz * wf, sz, sz * wf);
+        this._sc.set(sz * wf, sz * chub, sz * wf);
         this._e.set(droop, k.phase[id] * 6.28, 0, 'YXZ');
         this._q.setFromEuler(this._e);
         this._m4.compose(this._v, this._q, this._sc);
         this.bodies.setMatrixAt(n, this._m4);
         this.features.setMatrixAt(n, this._m4);
         this._paintBurden(id, n);
-        this._paintLantern(id, n, x, y, z, sz, grow, st);
+        this._paintLantern(id, n, x, y, z, sz * chub, grow, st);
         this.kinScreen[n] = id; n++;
         continue;
       }
@@ -2044,7 +2124,7 @@ export class View {
       }
 
       this._v.set(x, y + hy + (moving ? bob * 0.006 * amp : 0), z);
-      this._sc.set((sz / sq) * wf, sz * sq * tY, (sz / sq) * wf);
+      this._sc.set((sz / sq) * wf, sz * sq * tY * chub, (sz / sq) * wf);
       // held: they slowly turn in the hand — being looked at from every side
       let face = held ? this.t * 0.6
         : Math.atan2(k.tx[id] - k.x[id], k.ty[id] - k.y[id]);
@@ -2071,7 +2151,7 @@ export class View {
       }
       this.features.setMatrixAt(n, this._m4);
 
-      this._paintLantern(id, n, x, y, z, sz, grow, st);
+      this._paintLantern(id, n, x, y, z, sz * chub, grow, st);
       this.kinScreen[n] = id;
       n++;
     }
@@ -2084,6 +2164,7 @@ export class View {
     this.burden.instanceMatrix.needsUpdate = true;
     if (this.bodies.instanceColor) this.bodies.instanceColor.needsUpdate = true;
     if (this.burden.instanceColor) this.burden.instanceColor.needsUpdate = true;
+    this._eggAttr.needsUpdate = true;
     this.lanterns.geometry.setDrawRange(0, n);
     this.lanterns.geometry.attributes.position.needsUpdate = true;
     this.lanterns.geometry.attributes.color.needsUpdate = true;
@@ -2778,6 +2859,113 @@ export class View {
     // a window that just got narrower can leave you already too far out
     if (this.orbit.tDist > this.maxDist) this.orbit.tDist = this.maxDist;
     if (this.orbit.dist > this.maxDist) this.orbit.dist = this.maxDist;
+  }
+
+  // — THE POLAROID. The inspector's little photograph of the one you tapped,
+  // taken by the page's own camera: shrink the drawing buffer, hand-place the
+  // camera at face height (the orbit camera can never get here — its lookAt is
+  // pinned to y 0.06), render once, toDataURL, put everything back. This is the
+  // self-photograph pipeline promoted from a debugging trick to a feature.
+  // ⚠️ synchronous, once per tap (UI event) — never per frame. The next real
+  // render() recomputes camera position from the orbit, so only size/aspect
+  // need restoring by hand.
+  // ⚠️ lights are boosted for the exposure and restored — the basement is dark
+  // and a portrait of a silhouette is nothing. The hand disc is hidden for the
+  // shot: a tap's reach ring closing red around the subject reads as a threat.
+  portraitOf(id, px = 112) {
+    const k = this.sim.k;
+    if (!k.alive[id]) return null;
+    const [wx, wy, wz] = this.cellToLocal(k.x[id], k.y[id], 0.004);
+    const a = Math.atan2(k.tx[id] - k.x[id], k.ty[id] - k.y[id]);
+    const sz0 = this.renderer.getSize(new THREE.Vector2());
+    const asp0 = this.camera.aspect;
+    const discV = this.handDisc ? this.handDisc.visible : false;
+    if (this.handDisc) this.handDisc.visible = false;
+    // the flash: exposure scales with how dark the room is, and the hemisphere
+    // light gets the most — it is the only light that reaches a face regardless
+    // of where the bulb hangs. Photographed at a flat ×2.6: a silhouette.
+    const day = this.sim.daylight;
+    const lit = [];
+    this.scene.traverse(o => {
+      if (!o.isLight) return;
+      lit.push([o, o.intensity]);
+      o.intensity *= o.isHemisphereLight ? 3.5 + (1 - day) * 9 : 2.0 + (1 - day) * 3;
+    });
+    // ⚠️ kin live in huddles, and a lens 5cm in front of one is usually inside
+    // a NEIGHBOUR (photographed twice: a jumble of clipped eye-whites). So the
+    // portrait DRAWS ONLY THE SUBJECT: copy its instance data into slot 0, set
+    // every colony draw count to 1 (burden and lanterns to 0), and shoot from
+    // the face angle. The world (huts, trees, ground) stays — the crowd steps
+    // out of frame. Nothing needs putting back by hand: _paintKin rewrites all
+    // instance data and counts every frame, and the finally-block render(0)
+    // runs it. Counts are restored explicitly anyway in case render(0) throws.
+    // ⚠️ D must clear the near plane WITH the figure's front: near is 0.05, and
+    // a lens at 0.052 clipped the whole face away (photographed as leg-stumps
+    // at the frame's bottom edge — the subject was there, just amputated by the
+    // frustum). The shot also drops near to 0.02 for margin, restored after.
+    // ⚠️ TWO in-situ attempts failed and are recorded so nobody retries them:
+    // shooting where the kin stands put the lens inside neighbours/huts/trees
+    // (kin live in huddles), and a raycast-picked azimuth still lost to fences
+    // (chose the back of the head over a thin rail) and to slopes (a camera
+    // point buried in terrain reads as a green wall). So: THE STUDIO. The
+    // subject's slot-0 copy is posed 5 units above the board where nothing
+    // else exists, shot against the dark, and _paintKin heals everything on
+    // the next frame. A flash-lit face against the basement dark — in fiction,
+    // and it cannot fail.
+    const D = 0.075, SY = 5;
+    let inst = 0; for (let i = 0; i < id; i++) if (k.alive[i]) inst++;
+    const c0b = this.bodies.count, c0f = this.features.count, c0u = this.burden.count;
+    this.bodies.getMatrixAt(inst, this._m4);
+    this._m4.decompose(this._v, this._q, this._sc);
+    this._v.set(0, SY, 0);
+    this._m4.compose(this._v, this._q, this._sc);
+    this.bodies.setMatrixAt(0, this._m4);
+    // an egg has no face: _paintKin scales the feature layer away for eggs,
+    // and the studio must do the same or the photo shows floating pupils, a
+    // smile and an antenna hanging on a blank shape
+    if (k.stage[id] === STAGE.EGG) {
+      this._sc.set(0.0001, 0.0001, 0.0001);
+      this._m4b.compose(this._v, this._q, this._sc);
+      this.features.setMatrixAt(0, this._m4b);
+    } else {
+      this.features.setMatrixAt(0, this._m4);
+    }
+    this.bodies.getColorAt(inst, this._col); this.bodies.setColorAt(0, this._col);
+    this._eggAttr.array[0] = this._eggAttr.array[inst]; this._eggAttr.needsUpdate = true;
+    this.bodies.count = 1; this.features.count = 1; this.burden.count = 0;
+    this.bodies.instanceMatrix.needsUpdate = true;
+    this.features.instanceMatrix.needsUpdate = true;
+    if (this.bodies.instanceColor) this.bodies.instanceColor.needsUpdate = true;
+    const lRange = this.lanterns.geometry.drawRange.count;
+    this.lanterns.geometry.setDrawRange(0, 0);
+    const near0 = this.camera.near;
+    try {
+      // instances live in jar space and the camera in world space — the tilt
+      // verb can transform the jar, so map the studio point across
+      const jarG = this.jar || this.scene;
+      jarG.updateMatrixWorld(true);
+      const sc = new THREE.Vector3(0, SY + 0.026, 0); jarG.localToWorld(sc);
+      const sp = new THREE.Vector3(Math.sin(a) * D, SY + 0.040, Math.cos(a) * D); jarG.localToWorld(sp);
+      this.camera.position.copy(sp);
+      this.camera.lookAt(sc);
+      this.camera.aspect = 1; this.camera.near = 0.02; this.camera.updateProjectionMatrix();
+      this.renderer.setSize(px, px, false);
+      this.renderer.render(this.scene, this.camera);
+      return this.renderer.domElement.toDataURL('image/png');
+    } catch (e) {
+      return null;    // a failed photo must never break the inspector
+    } finally {
+      for (const [o, i0] of lit) o.intensity = i0;
+      if (this.handDisc) this.handDisc.visible = discV;
+      this.bodies.count = c0b; this.features.count = c0f; this.burden.count = c0u;
+      this.lanterns.geometry.setDrawRange(0, lRange);
+      this.renderer.setSize(sz0.x, sz0.y, false);
+      this.camera.aspect = asp0; this.camera.near = near0; this.camera.updateProjectionMatrix();
+      // repaint a normal frame NOW — it re-runs _paintKin (healing the slot-0
+      // vandalism above) and replaces the stretched portrait buffer that would
+      // otherwise show until the next rAF tick
+      try { this.render(0); } catch (e) { /* the next tick will repaint */ }
+    }
   }
 
   render(dt) {

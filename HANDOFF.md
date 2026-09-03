@@ -1998,3 +1998,104 @@ Also from this arc: the saw test guarded on `k.alive[slot]` alone and had been
 passing BY the recycled-slot leak it was supposed to catch (identity = birth
 day now), and the once-ever `rows` beat lived in unsaved `_beat`, re-firing on
 every reload — caught as a ±1 story-count divergence. `_beat` rides in narr now.
+
+---
+
+## THE CUTENESS PASS (2026-09-02) — the face was the missing half of the stakes
+
+Kyle's oldest open verdict: *"the creatures arent cute enough so theres no real
+stakes."* The strain/droop/grey-out work made suffering VISIBLE; this pass makes
+the creature worth suffering FOR. All view.js, all inside the two existing
+instanced kin layers — **the five-draw-call ceiling holds.** Photographed
+before/after at portrait range (the self-photograph pipeline, receiver :8402).
+
+What the before-portrait showed, and the fix for each:
+- **Pupils were small, angular (6,4 sphere) and gazed down-vacant** → 0.0024 r,
+  8×6 segments, centred at the eye's own height, a hair inward of the whites
+  (the toy-shop convergent gaze), with a tiny white GLINT sphere per pupil.
+- **The mouth dash floated on the NECK** — 0.0275 in the lifted frame is below
+  the head (head starts 0.0285); it photographed as a chest vent → a small
+  smile (TorusGeometry arc, rotated to span the bottom) ON the head at 0.0301.
+- **No blush** → flattened cheek pads. `aTint` is SIGNED now: positive still
+  mixes toward off-white, negative mixes toward blush pink. One attribute, two
+  jobs, zero new draw calls.
+- **No blink** → shader-side, keyed off `gl_InstanceID` (WebGL2 is guaranteed —
+  three r169 dropped WebGL1): each instance blinks on its own 3–5s clock, ~0.2s,
+  whites+glints (body layer, tag `aTint > 0.6`) and pupils (feature layer, new
+  `aEye` attribute) squash to the lid line at local y 0.0330. ONE shared uniform
+  object (`_kinT`) registered into both materials — desynced layers would mean
+  pupils floating over shut lids. Closed eyes read as a contented ^^ squint.
+- **Toddlers were miniature adults** → `chub` (NIB 0.86 / HALF 0.93) compresses
+  y only; children are squat round things with the same big head. The lantern
+  call takes `sz * chub` so the antenna-tip glow stays seated on the shorter
+  stalk (pickKin still reads lanternPos = "the antenna tip").
+- **EGGS ARE EGGS, finally** — the body geometry is shared, so eggs had always
+  rendered with baked-on eye whites (shipped oddity), and this pass would have
+  added pink cheeks to them. A per-instance `aKinEgg` InstancedBufferAttribute
+  (written in _paintKin beside the colours) collapses every face part in the
+  vertex stage. An egg is a blank pale shape now.
+
+⚠️ Traps met on the way, so nobody re-earns them:
+- **A glint too big or too central reads as a HOLE, not a highlight** — at
+  0.0009 r near pupil-centre it photographed as a ring-eyed stare, worse than
+  no glint. It must be small (0.0006) and clearly in the upper-outer corner.
+- **Eye-white protrusion that looks right head-on looks like frog-stalks from
+  3/4** — whites at z 0.0080 photographed detached from the skull at az 0.8;
+  0.0074 keeps the frontal read and seats them. Always photograph BOTH angles.
+- **The portrait recipe**: the orbit camera hard-locks lookAt to y 0.06, so a
+  face shot must bypass it — `v.render(dt)` first (settles instances), then
+  hand-place `v.camera` + `renderer.render(v.scene, v.camera)` directly.
+  Boost every light ×3.2 for the shot and restore — identical for both halves
+  of a matched pair. And stage the subject: teleport one kin to open ground
+  (set k.x/y/tx/ty, do NOT step) — portraits inside a huddle put the camera
+  INSIDE a neighbour.
+- **Exact cross-reload state replay is impossible** — a background stepper
+  ticks between evals, so same-seed same-calls landed on day 25 vs 27 with a
+  different pick. For shared instanced geometry that doesn't matter: every kin
+  wears the same face.
+- To force a blink for a photo: instance n = count of alive ids below the kin's
+  id; solve `fract(uT*(0.20+h*0.12)+h*7) = 0.030` for uT with
+  `h = fract(sin(n*12.9898)*43758.5453)` and set `v._kinT.value` AFTER
+  `v.render()` (render overwrites it from this.t), then renderer.render.
+
+Verified: syntax (as .mjs — node --check lies on .js ESM), zero console errors
+across ~20 renders incl. both shader compiles, family lineup photographed
+(adult/HALF/NIB/egg), blink mid-close photographed, 3/4 + frontal matched
+pairs, night lanterns unchanged, gameplay-distance town unchanged. sim.js
+untouched; the 119-test gate re-run anyway before push (insurance, standing
+push-on-green rule).
+
+### THE POLAROID (same day) — the inspector shows you who you're looking at
+
+Tap a kin and the inspector now opens with a small photograph of them — the
+self-photograph pipeline promoted from a debugging trick to a feature.
+`View.portraitOf(id)` in view.js; written into `#inspectShot` ONCE per select
+in ui.js (inspectBody is rebuilt every paint — an <img> in there would churn).
+
+⚠️ THE ROUTE HERE MATTERED — three designs failed and are recorded IN the code:
+1. **In-situ at the kin's position**: kin live in huddles, so a lens 5–7cm in
+   front of one is usually inside a neighbour. Photographed: a jumble of
+   clipped eye-whites.
+2. **Azimuth scan avoiding kin, then a raycast** (subject→camera, so a camera
+   point inside a tree crown can't false-clear through backfaces): still lost —
+   a thin fence rail made it choose the BACK of the head, and a camera point
+   buried in a slope photographs a green wall.
+3. **THE STUDIO — what shipped**: the subject's instance data is copied into
+   slot 0, every colony draw count drops to 1 (burden/lanterns 0), the slot-0
+   copy is re-composed at (0, +5, 0) jar-local — high above the board where
+   nothing else exists — and shot against the dark. Cannot fail. _paintKin
+   rewrites all instance data every frame, so the finally-block `render(0)`
+   heals the vandalism AND replaces the stretched small buffer before the next
+   composite. Counts are also restored explicitly in case render(0) throws.
+
+⚠️ **near-plane trap, twice earned**: camera.near is 0.05 — the first framing
+put the lens at 0.052 and the frustum amputated everything but the legs. The
+photo drops near to 0.02 (restored in finally, with size + aspect).
+⚠️ the flash: light intensities are boosted for the exposure and restored —
+hemisphere hardest (`3.5 + (1-daylight)*9`; it reaches a face no matter where
+the bulb hangs), directionals gently. A flat ×2.6 photographed a silhouette.
+⚠️ jar-local vs world: instances live in jar space, the camera in world space,
+and the tilt verb can transform the jar — the studio point maps across via
+localToWorld before the camera is placed.
+Measured: ~72ms per photo (once per tap), 6/6 clean portraits day AND night,
+counts healed after every shot, zero console errors.

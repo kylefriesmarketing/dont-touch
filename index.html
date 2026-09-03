@@ -210,6 +210,12 @@
   #inspect h3{margin:0 0 8px;font-size:calc(12px * var(--ui));letter-spacing:.14em;
     text-transform:uppercase;color:var(--faint);font-weight:600;
     display:flex;justify-content:space-between}
+  /* the polaroid: a small photograph, slightly crooked like it was tucked
+     into the book's pages. empty (no img) it takes no space. */
+  #inspectShot{display:flex;justify-content:center}
+  #inspectShot img{width:92px;height:92px;border-radius:4px;margin:0 0 8px;
+    border:3px solid #e9e2d2;box-shadow:0 2px 9px rgba(0,0,0,.45);
+    transform:rotate(-2deg);background:#0a0d12}
   .who{display:flex;align-items:center;gap:8px;margin-bottom:2px}
   .who b{font-size:calc(17px * var(--ui))}
   .who i{color:var(--dim);font-style:normal;font-size:calc(12px * var(--ui))}
@@ -451,6 +457,9 @@
 
 <div id="inspect" class="hide">
   <h3>the one you're looking at <button id="closeInspect" style="padding:0 6px">×</button></h3>
+  <!-- the polaroid — written ONCE per select in ui.js, never per frame
+       (inspectBody is rebuilt every paint; an <img> in there would churn) -->
+  <div id="inspectShot"></div>
   <div id="inspectBody"></div>
 </div>
 
