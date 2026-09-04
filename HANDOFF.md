@@ -2153,3 +2153,88 @@ near its peak). `sunUp = sin(dayFrac·π)^1.6` holds noon at exactly 2.7 and
 drops the day's edges to a measured ~37° — hut and tree shadows finally
 stretch at dawn/dusk. Lateral shadow-camera coverage is unaffected (a lower
 sun stretches shadows ALONG the light direction, which the ortho box covers).
+
+---
+
+## THE BOOK HAS CHAPTERS (2026-09-03) — menu depth, spent where the fiction wanted it
+
+Kyle: menu depth. The deepest menu this game owns is the book, and the fiction
+had already promised more than the book delivered ("nobody is ever going to
+tell you what you were. the graves will" — while graves recorded no cause).
+Four tabs now: **the days** (the chronicle, unchanged) · **the living** ·
+**the yard** · **what they know**. All pure reads composed in ui.js;
+aggregates stay book-only (the documented §12.3 exception).
+
+- **ONE sim field**: `_carry` keeps the corpse's `cause` on the grave.
+  Save-compatible (graves serialize verbatim; old graves lack the field and
+  phrase as 'rests here'), fingerprint-neutral (only graves.length is mixed).
+  The yard reuses the `_die` how-table VERBATIM — one voice for one fact —
+  and 'taken' is absent ON PURPOSE (no body, no grave; do not "complete" it).
+- **The yard is the moral mirror and stays a RECORD**: no totals by cause, no
+  grouping, no judgment — "Thov was struck where they stood — one of the
+  first." is the whole sentence. Verified end to end: strike → corpse →
+  carried → grave → book.
+- **Chapters work on a dead town**: 'days' still lands on the last page
+  (refound button intact), and the yard stays readable beside it — the last
+  page's evidence, one tab away.
+- Drafted by a 3-draft + 3-adversarial-verify workflow. The verifiers earned
+  their run: a census parent-lookup that would MISNAME THE DEAD on recycled
+  slots (fixed with lineage invariants: parent gen < child gen, parent born <=
+  child born); a yard sub-line that FLICKERED with the burial queue ("not all
+  of them were found" was true during every normal death-to-carry gap — fixed
+  by adding corpses-still-lying to the buried side); and both draft notes
+  carried STALE splice instructions (add TRADES / import WORKS) that would
+  have been duplicate-declaration boot-kills — the plumbing had already
+  landed them. **Follow a draft's notes only after grepping the live file.**
+- ⚠️ SPLICE GUARD TRAP (cost one round): the idempotence check matched
+  'pageCensus()' — which matches renderBook's CALL SITE — so the splice
+  no-opped while syntax AND import checks stayed green (a missing method is a
+  runtime error, not a parse error). Guard on the DEFINITION ('pageCensus() {')
+  and count definitions after.
+
+Verified live: all four tabs render in-voice on a day-60 town (66 alive),
+grave causes 1/1, the smitten row, dead-town tab flow, 'while you were away'
+title, zero console errors. Gate re-run for the sim field.
+
+### The review of the chapters — three real defects, found before the push
+
+A 4-lens adversarial pass (half its agents died on session limits; the book lens
+survived and earned the run). Every finding independently verified against the
+code before it was believed:
+
+1. ⚠️⚠️ **THE AWAY PAGE DIED ON THE FIRST TAP THE UI INVITES.** catchUp renders
+   "while you were away" via showPage(fromDay) and main.js stores `awayFrom` —
+   which NOTHING has ever read. The tab handler calls renderBook() with no
+   argument, and renderBook defaulted fromDay to 0, so tapping 'the yard' to see
+   who died and then 'the days' to finish reading replaced the away page with
+   the whole run's greatest hits, unrecoverably. The B key did the same. This is
+   the SIXTH instance of this codebase's signature defect (a value computed,
+   stored, and consumed by nobody) and the second time in this exact feature.
+   Fixed: renderBook remembers the days window in `_daysFrom`; showPage with no
+   argument opens the whole book from the board but KEEPS the window when the
+   book is already open.
+2. **'save it as a picture' saved a different page than the one on screen.**
+   exportPage always rendered s.page() under a hardcoded 'the book of the town',
+   so the button under 'the yard' — the page the fiction had just promised —
+   saved a chronicle with no grave in it, and a dead town exported without its
+   last-page register. The export now reads #pageBody (h2 -> title, first .sub ->
+   subtitle, ol>li -> rows), so the picture can never disagree with the page the
+   button was pressed under. Filename carries the chapter.
+   ⚠️ that change made a SECOND bug reachable: chapters run to 40 rows and the
+   chronicle never did, so the old unbounded draw loop would have walked the
+   yard straight off the bottom of a 1920px canvas. Rows now stop at the footer
+   and the remainder is said in voice ("and 4 more, in the book.").
+3. **The text-size setting never reached the book at all.** Every size inside
+   #page was absolute px, so a player on 150% text got the one panel of long
+   reading in the game at 100%. Measured after: tabs 12 -> 18, rows 16 -> 24,
+   h2 27 -> 40.5. ⚠️ scoped to #page (the box is out of scope) and each override
+   placed AFTER its shared rule — same-specificity duplicates, later wins, the
+   CSS-order trap this file already records once.
+
+Refuted and correctly left alone: the census's dormant `k.job` branch (trades
+are staged, the guard is deliberate forward-compat — HANDOFF v0.6 records it).
+Verified live: away page survives yard->days and B; fresh open gives the whole
+book; all four chapters render on a second seed; export photographed for days /
+yard / know / the last page; polaroid and kin counts unregressed; 16/16 graves
+carry causes; 0 console errors. Gate 119/0 (the sim field; the three fixes above
+are UI-only).

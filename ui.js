@@ -1,7 +1,7 @@
 // DON'T TOUCH — ui.js
 // DOM overlay. The game must be fully playable with every panel closed. (Invariant 7)
 
-import { LOCI, L, NEEDS, STAGE, STAGE_NAME, expressed, carried, marrowHomozygous, C, AGES } from './sim.js';
+import { LOCI, L, NEEDS, STAGE, STAGE_NAME, expressed, carried, marrowHomozygous, C, AGES, WORKS } from './sim.js';
 import { LUT, setPalette, setGlyphs, hueOf, NEED_MARK, NEED_WORD, worstNeed } from './palette.js';
 
 const $ = (id) => document.getElementById(id);
@@ -15,10 +15,21 @@ const BIG = new Set(['mutation', 'death-named', 'end', 'invented', 'reinvented',
 const SET_KEY = 'donttouch-settings';
 const DEFAULTS = { palette: 'off', glyph: 0, text: 1, post: 1, motion: 0, sound: 1 };
 
+// what a trade is called — shared by the inspector and the census chapter
+const TRADES = ['', 'one who gathers', 'one who carries water',
+  'one who keeps what stands', 'one who shows how things are done'];
+// how somebody went — the sim's own phrasing from _die, reused verbatim so the
+// yard never invents a second voice for the same fact
+const HOW_GONE = { age: 'grew old', hunger: 'went hungry', thirst: 'went dry',
+  heat: 'was in the warm place too long', cold: 'went cold',
+  water: 'was in the low end when it filled', smitten: 'was struck where they stood' };
+
 export class UI {
   constructor(sim, app) {
     this.sim = sim; this.app = app;
     this.selected = -1;
+    this.chapter = 'days';     // which book chapter is open
+
     this.lastChron = 0;
     this.chronBox = $('chron');
     this.settings = this.loadSettings();
@@ -78,6 +89,11 @@ export class UI {
       if (!this.sim.lid) this.nudge('the room is dry. whatever they lose to the air now, the air keeps.', 'sheetdry');
     });
     $('pageBtn').addEventListener('click', () => this.showPage());
+    $('pgtabs').addEventListener('click', (e) => {
+      const b = e.target.closest('button'); if (!b) return;
+      this.chapter = b.dataset.ch;
+      this.renderBook();
+    });
     $('boxBtn').addEventListener('click', () => this.showBox(true));
     $('closeBox').addEventListener('click', () => this.showBox(false));
     $('closePage').addEventListener('click', () => $('pageWrap').classList.add('hide'));
@@ -275,7 +291,6 @@ export class UI {
       'going to the one who stays', 'making something', 'going to what fell out of the sky',
       'going where something wanted them', 'gathering for the store', 'carrying water'];
 
-    const TRADES = ['', 'one who gathers', 'one who carries water', 'one who keeps what stands', 'one who shows how things are done'];
     const glued = !!k.glued[id];
     const worst = worstNeed(k.need, base);
     const mark = LUT.glyphs ? NEED_MARK[worst] : '';
@@ -327,33 +342,256 @@ export class UI {
   }
 
   // -- THE PAGE (§12.3) ------------------------------------------------------
-  showPage(fromDay = 0) {
-    // ⚠ A DEAD TOWN'S BOOK OPENS TO THE LAST PAGE, whichever way you open it.
-    // Without this, catchUp's +500ms showPage overwrote the last page half a
-    // second after it appeared (died-while-away is the LIKELIEST way a player
-    // meets the end), the 'b' key showed the ordinary book with no refound
-    // button, and 'leave it dark' was unrecoverable. showEnd is idempotent —
-    // fresh nodes, fresh listeners — so re-entry is safe.
-    if (this.sim._ended) { this.showEnd(); return; }
-    const s = this.sim;
-    const p = s.page(fromDay);
+  // The book has CHAPTERS now: the days (the chronicle it always was), the
+  // living, the yard, what they know. All pure reads; aggregates are allowed
+  // in the book and only in the book — you had to go and open it.
+  showPage(fromDay) {
+    // ⚠️ THE AWAY PAGE HAS TO SURVIVE A TAB TAP. catchUp passes the window it
+    // computed; everybody else passes nothing, and then the rule is: opening
+    // the book from the board shows the whole book, while pressing B with the
+    // book ALREADY open keeps whatever window is being read. Without this,
+    // tapping 'the yard' and then 'the days' silently replaced 'while you were
+    // away' with the whole run's greatest hits — and that page is the one a
+    // returning player actually came back for. (main.js computes and stores
+    // `awayFrom` for the same reason and nothing ever reads it; the memory
+    // lives here instead, next to the render that needs it.)
+    if (fromDay == null) {
+      fromDay = $('pageWrap').classList.contains('hide') ? 0 : (this._daysFrom || 0);
+    }
+    this.chapter = 'days';
+    this.renderBook(fromDay);
+  }
+
+  _syncTabs() {
+    const t = $('pgtabs');
+    if (t) [...t.children].forEach(b => b.classList.toggle('on', b.dataset.ch === this.chapter));
+  }
+
+  renderBook(fromDay = this._daysFrom || 0) {
+    // the days chapter's window (0 = the whole book, >0 = the nights you were
+    // away) is remembered here, because the tab handler calls this with no
+    // argument at all
+    this._daysFrom = fromDay;
+    this._syncTabs();
     const body = $('pageBody');
-    const title = fromDay > 0 ? 'while you were away' : 'the book of the town';
-    // aggregates are allowed HERE, and only here — you had to go and open it
-    const sub = fromDay > 0
-      ? `${s.day - fromDay} days passed · ${s.alive || 0} alive · ${s.graves.length} in the yard`
-      : `day ${s.day} · ${s.alive || 0} alive · ${s.graves.length} in the yard · ${s.stats.generations} generations`;
-    let h = `<h2>${title}</h2><div class="sub">${sub}</div><ol>`;
-    p.forEach(e => { h += `<li><span>${e.day}</span>${e.text}</li>`; });
-    h += '</ol>';
-    h += `<div class="foot">a DIRTY BOY DEVS game</div>`;
-    body.innerHTML = h;
+    if (this.chapter === 'living') body.innerHTML = this.pageCensus() + `<div class="foot">a DIRTY BOY DEVS game</div>`;
+    else if (this.chapter === 'yard') body.innerHTML = this.pageYard() + `<div class="foot">a DIRTY BOY DEVS game</div>`;
+    else if (this.chapter === 'know') body.innerHTML = this.pageKnow() + `<div class="foot">a DIRTY BOY DEVS game</div>`;
+    else {
+      // ⚠ A DEAD TOWN'S BOOK OPENS TO THE LAST PAGE, whichever way you open it.
+      // Without this, catchUp's +500ms showPage overwrote the last page half a
+      // second after it appeared (died-while-away is the LIKELIEST way a player
+      // meets the end), the 'b' key showed the ordinary book with no refound
+      // button, and 'leave it dark' was unrecoverable. showEnd is idempotent —
+      // fresh nodes, fresh listeners — so re-entry is safe. The other chapters
+      // stay readable on a dead town on purpose: the yard especially IS the
+      // last page's evidence.
+      if (this.sim._ended) { this.showEnd(); return; }
+      const s = this.sim;
+      const p = s.page(fromDay);
+      const title = fromDay > 0 ? 'while you were away' : 'the book of the town';
+      const sub = fromDay > 0
+        ? `${s.day - fromDay} days passed · ${s.alive || 0} alive · ${s.graves.length} in the yard`
+        : `day ${s.day} · ${s.alive || 0} alive · ${s.graves.length} in the yard · ${s.stats.generations} generations`;
+      let h = `<h2>${title}</h2><div class="sub">${sub}</div><ol>`;
+      p.forEach(e => { h += `<li><span>${e.day}</span>${e.text}</li>`; });
+      h += '</ol>';
+      h += `<div class="foot">a DIRTY BOY DEVS game</div>`;
+      body.innerHTML = h;
+    }
     $('pageWrap').classList.remove('hide');
+  }
+
+  // -- THE CENSUS: everyone alive right now. aggregates allowed — you opened it.
+  pageCensus() {
+    const s = this.sim, k = s.k;
+    const named = [];
+    let unnamed = 0, eggs = 0, oldest = -1;
+    for (let id = 0; id < s.count; id++) {
+      if (!k.alive[id]) continue;
+      if (k.stage[id] === STAGE.EGG) { eggs++; continue; }
+      if (k.age[id] > oldest) oldest = k.age[id];
+      if (k.nameId[id] >= 0) named.push(id); else unnamed++;
+    }
+    // the book's order: the old lines first, and within a line, the old first
+    named.sort((a, b) => (k.gen[a] - k.gen[b]) || (k.age[b] - k.age[a]));
+
+    let sub = `${s.alive || 0} alive · ${s.stats ? s.stats.generations : 0} generations`;
+    if (oldest >= 0) sub += ` · the oldest has seen ${oldest.toFixed(0)} days`;
+
+    // a parent is named only if the slot still holds THEM. `alive` alone is
+    // not enough — freed slots are reused (_spawn pops this.free), so a living,
+    // named occupant can be a stranger wearing the parent's id. A true parent
+    // is always an earlier generation (child gen = max(parents)+1) and never
+    // born after the child; a recycled occupant fails one of those. Dead slots
+    // stay unnamed on purpose — the book must not misname the dead.
+    const parent = (pid, cid) => (pid >= 0 && k.alive[pid] && k.nameId[pid] >= 0
+      && k.gen[pid] < k.gen[cid] && k.born[pid] <= k.born[cid]) ? s.nameOf(pid) : null;
+
+    let h = `<h2>the living</h2><div class="sub">${sub}</div><ol>`;
+    const shown = named.slice(0, 40);
+    for (const id of shown) {
+      const nm = s.nameOf(id);
+      const mo = k.mother ? k.mother[id] : -1;
+      const fa = k.father ? k.father[id] : -1;
+      let fact;
+      if (k.glued && k.glued[id]) fact = 'stuck fast';
+      else if (k.stage[id] === STAGE.NIB) fact = 'a nib still';
+      else if (k.stage[id] === STAGE.HALF) fact = 'half-grown';
+      else if (mo < 0) fact = 'here since the beginning';
+      else if (k.stage[id] === STAGE.RIME) fact = 'white with rime';
+      else if (k.lifespan[id] > 0 && k.age[id] / k.lifespan[id] > 0.8) fact = 'grown old';
+      else if (k.job && k.job[id] > 0 && TRADES[k.job[id]]) fact = TRADES[k.job[id]];
+      else {
+        const mn = parent(mo, id), fn = parent(fa, id);
+        if (mn && fn) fact = `out of ${mn} and ${fn}`;
+        else if (mn || fn) fact = `out of ${mn || fn}`;
+        else if (k.born && k.born[id] >= 0) fact = `born on day ${k.born[id]}`;
+        else fact = `of generation ${k.gen[id]}`;
+      }
+      h += `<li><span>${k.age[id].toFixed(0)}</span>${nm} — ${fact}.</li>`;
+    }
+    if (!shown.length && !unnamed) {
+      h += eggs > 0
+        ? `<li><span>·</span>nobody walking yet — only eggs, waiting.</li>`
+        : `<li><span>·</span>nobody.</li>`;
+    }
+    // reads whole on its own when the list above is empty — no dangling 'and'
+    if (unnamed > 0) h += shown.length
+      ? `<li><span>·</span>and ${unnamed === 1 ? 'one more' : unnamed + ' more'}, not yet named.</li>`
+      : `<li><span>·</span>${unnamed === 1 ? 'one of them' : unnamed + ' of them'}, not yet named.</li>`;
+    h += '</ol>';
+
+    const asides = [];
+    if (named.length > shown.length) asides.push('and the rest of them, unlisted.');
+    const places = Object.values(s.placeNames || {});
+    if (places.length) asides.push(`the ground answers to ${places.slice(0, 4).join(', ')}.`);
+    if (asides.length) h += `<div class="sub" style="margin-top:14px">${asides.join(' ')}</div>`;
+    return h;
+  }
+
+  // -- THE YARD (the book's moral mirror: a record, never a verdict) ---------
+  // Returns the page HTML; sets nothing, listens to nothing. Newest grave
+  // first — the yard is read the way it is walked, from the fresh dirt back.
+  pageYard() {
+    const s = this.sim;
+    const graves = s.graves || [];
+    // the sim's own phrasing for how each of them went (verbatim; a grave from
+    // before causes were recorded simply rests here). 'taken' is absent ON
+    // PURPOSE: a taken kin leaves no body (_die's noBody path), so no grave
+    // ever carries that cause — do not "complete" this table.
+    const HOW = {
+      age: 'grew old', hunger: 'went hungry', thirst: 'went dry',
+      heat: 'was in the warm place too long', cold: 'went cold',
+      water: 'was in the low end when it filled', smitten: 'was struck where they stood'
+    };
+    let h = '<h2>the yard</h2>';
+    if (!graves.length) {
+      h += '<div class="sub">nobody has been carried here.</div>';
+      return h;
+    }
+    let first = Infinity;
+    for (const g of graves) if (g && g.day < first) first = g.day;
+    const bits = [`${graves.length} grave${graves.length === 1 ? '' : 's'}`];
+    if (isFinite(first)) bits.push(`first buried day ${first}`);
+    const st = s.stats || {};
+    // died > buried + still lying: some never came back. said softly, accusing
+    // nobody. a body merely waiting for its carrier does not count — without
+    // that term this line flickered with the burial queue.
+    if ((st.died || 0) > (st.buried || 0) + ((s.corpses && s.corpses.length) || 0)) bits.push('not all of them were found');
+    h += `<div class="sub">${bits.join(' · ')}</div>`;
+    const CAP = 40;
+    const shown = graves.slice(-CAP).reverse();
+    h += '<ol>';
+    for (const g of shown) {
+      if (!g) continue;
+      const nm = (g.nameId >= 0 && s.names[g.nameId]) ? s.names[g.nameId] : 'one who was never named';
+      const how = HOW[g.cause] || 'rests here';
+      // generation only when it says something: gen 1 is the founding stock —
+      // of whichever founding (refound seeds gen 1 again, and it is still a
+      // true thing to say over them)
+      const aside = g.gen === 1 ? ' — one of the first' : '';
+      h += `<li><span>${g.day}</span>${nm} ${how}${aside}.</li>`;
+    }
+    h += '</ol>';
+    const older = graves.length - shown.length;
+    if (older > 0) h += `<div class="sub" style="margin-top:14px">and ${older} older grave${older === 1 ? '' : 's'}, unlisted.</div>`;
+    return h;
+  }
+
+  pageKnow() {
+    // "what they know" — the practices, and the ages. pure reads of the sim;
+    // aggregates are allowed in the book, and only in the book (§12.3).
+    const s = this.sim;
+    const nowI = s.ageNow();
+    // ageBest, not ageNow, for the ladder: ruins decay after loss, and this
+    // page is the town's history, not its inventory (same rule as showEnd).
+    const bestI = Math.max(s.ageBest || 0, nowI);
+
+    let sub = (AGES[nowI] || AGES[0]).name;
+    if (bestI > nowI) sub += ' · it has been further';
+    if (s.foundings > 1) {
+      const nth = ['', '', 'second', 'third', 'fourth', 'fifth', 'sixth'][s.foundings] || (s.foundings + 'th');
+      sub += ` · the ${nth} town on this ground`;
+    }
+    let h = `<h2>what they know</h2><div class="sub">${sub}</div>`;
+
+    // every practice they have, in the order it was worked out. the founding
+    // four sit at day 0 with no inventor — nobody alive remembers working it
+    // out, which is what a tradition is.
+    const rows = [];
+    for (let i = 0; i < (s.prac || []).length; i++) {
+      const pr = s.prac[i], W = WORKS[i];
+      if (!pr || !W || pr.invented < 0) continue;
+      rows.push({ i, pr, W });
+    }
+    rows.sort((a, b) => (a.pr.invented - b.pr.invented) || (a.i - b.i));
+
+    let unlisted = 0;
+    if (rows.length > 40) { unlisted = rows.length - 40; rows.length = 40; }
+
+    h += '<ol>';
+    for (const r of rows) {
+      const pr = r.pr;
+      const endowed = pr.invented === 0 && pr.inventor < 0;
+      const span = endowed ? '—' : Math.floor(pr.invented);
+      const inm = pr.inventor >= 0 ? s.names[pr.inventor] : null;
+      const lost = pr.lost >= 0 && pr.lost >= pr.invented;
+      const bits = [r.W.name];
+      if (endowed) {
+        bits.push(s.foundings > 1 ? 'standing when they arrived' : 'already known when the town began');
+      } else if (inm) {
+        bits.push(`worked out by ${inm}`);
+        // "do it now" is only true while somebody does — a lost practice has
+        // nobody doing it now, so the flavor stands down until it is found
+        if (pr.tradition >= 0 && !lost) bits.push(`${inm} never met the ones who do it now`);
+      }
+      if (lost) bits.push('nobody left remembers how it is made');
+      if (pr.reinvented > 0) bits.push(pr.reinvented === 1 ? 'found again' : `found ${pr.reinvented} times`);
+      h += `<li><span>${span}</span>${bits.join(' · ')}</li>`;
+    }
+    h += '</ol>';
+
+    // what they have not thought of is never listed — one soft line at most,
+    // and no checklist of missing things (P3: no goals shown)
+    const asides = [];
+    if (unlisted > 0) asides.push('and the rest of them, unlisted.');
+    if ((s.prac || []).some(pr => pr && pr.invented < 0)) asides.push('what they have not thought of yet goes unwritten.');
+    if (asides.length) h += `<div class="sub" style="margin-top:14px">${asides.join(' ')}</div>`;
+
+    // the ladder — every age this ground has reached, in the order it came
+    const ladder = [];
+    for (let a = 0; a <= bestI && a < AGES.length; a++) ladder.push(AGES[a].name);
+    if (ladder.length) h += `<div class="sub" style="margin-top:14px">${ladder.join(' → ')}.</div>`;
+
+    return h;
   }
 
   // The book's last page. Aggregates are allowed here by the same rule as
   // showPage — the town is finished, and this page is the finishing of it.
   showEnd() {
+    this.chapter = 'days';   // direct callers (death watcher, catchUp) land here
+    this._syncTabs();
     const s = this.sim;
     const body = $('pageBody');
     // ⚠ ageBest, not ageNow: ruins decay after the last death, so the present
@@ -395,7 +633,27 @@ export class UI {
 
   // 9:16 PNG. This is the shareable artifact and it is a launch feature.
   exportPage() {
-    const s = this.sim, p = s.page();
+    // ⚠️ IT SAVES WHAT IS ON SCREEN. This used to render s.page() under a
+    // hardcoded 'the book of the town' no matter which chapter was open, so
+    // pressing the button under 'the yard' — the page the fiction just promised
+    // — saved a picture of the chronicle with no grave in it, and a dead town
+    // exported without its last-page register. The book now has four chapters
+    // plus the away page, and one button beneath all of them, so the picture is
+    // read back off #pageBody: whatever the reader is looking at is what they
+    // share. Falls back to the chronicle if the DOM is not there.
+    const s = this.sim;
+    const body = $('pageBody');
+    const h2 = body && body.querySelector('h2');
+    const subEl = body && body.querySelector('.sub');
+    const title = h2 ? h2.textContent : 'the book of the town';
+    const sub = subEl ? subEl.textContent
+      : `day ${s.day} · ${s.alive || 0} alive · ${s.graves.length} in the yard`;
+    const rows = body ? [...body.querySelectorAll('ol > li')].map(li => {
+      const sp = li.querySelector('span');
+      const day = sp ? sp.textContent : '';
+      return { day, text: li.textContent.slice(day.length).trim() };
+    }) : s.page();
+    const p = rows;
     const W = 1080, H = 1920;
     const c = document.createElement('canvas'); c.width = W; c.height = H;
     const g = c.getContext('2d');
@@ -414,29 +672,44 @@ export class UI {
       g.fillStyle = rad; g.fillRect(x - 50, y - 50, 100, 100);
     }
 
+    // one wrapper for the subtitle and the rows; returns the last baseline used
+    const wrap = (text, x, y0, maxW, lh) => {
+      let line = '', ly = y0;
+      for (const w of String(text).split(' ')) {
+        const test = line ? line + ' ' + w : w;
+        if (g.measureText(test).width > maxW) { g.fillText(line, x, ly); ly += lh; line = w; }
+        else line = test;
+      }
+      g.fillText(line, x, ly);
+      return ly;
+    };
+
     g.fillStyle = '#e8eef7';
     g.font = '600 76px Georgia, serif';
-    g.fillText('the book of the town', 80, 640);
+    g.fillText(title, 80, 640);
     g.fillStyle = '#8b97a8';
     g.font = '300 38px Georgia, serif';
-    g.fillText(`day ${s.day} · ${s.alive || 0} alive · ${s.graves.length} in the yard`, 80, 700);
+    // ⚠️ the last page's register runs long — wrap it rather than letting it
+    // walk off the right edge of the picture
+    let y = wrap(sub, 80, 700, W - 160, 48) + 130;
 
-    g.font = '300 42px Georgia, serif';
-    let y = 830;
-    p.forEach(e => {
+    // ⚠️ THE CHAPTERS CAN BE 40 ROWS LONG and the chronicle never was, so the
+    // old unbounded loop would have drawn the yard straight off the bottom of
+    // the canvas. Draw until the next row would reach the footer, then say what
+    // was left behind — in the book's own voice, not as a truncation notice.
+    const FOOT = H - 210;   // leaves the trailing line real air above the footer
+    let left = 0;
+    for (const e of p) {
+      if (y > FOOT) { left++; continue; }
       g.fillStyle = '#4e5a6b'; g.font = '300 30px Georgia, serif';
       g.fillText(String(e.day), 80, y);
       g.fillStyle = '#dbe4f0'; g.font = '300 42px Georgia, serif';
-      const words = e.text.split(' ');
-      let line = '', ly = y;
-      words.forEach(w => {
-        const test = line ? line + ' ' + w : w;
-        if (g.measureText(test).width > W - 260) { g.fillText(line, 180, ly); ly += 54; line = w; }
-        else line = test;
-      });
-      g.fillText(line, 180, ly);
-      y = ly + 96;
-    });
+      y = wrap(e.text, 180, y, W - 260, 54) + 96;
+    }
+    if (left > 0) {
+      g.fillStyle = '#5a6675'; g.font = 'italic 300 34px Georgia, serif';
+      g.fillText(`and ${left} more, in the book.`, 180, Math.min(y, FOOT + 56));
+    }
 
     g.fillStyle = '#5a6675'; g.font = '300 30px Georgia, serif';
     g.fillText('DON’T TOUCH · a DIRTY BOY DEVS game', 80, H - 90);
@@ -444,7 +717,8 @@ export class UI {
     c.toBlob((b) => {
       const a = document.createElement('a');
       a.href = URL.createObjectURL(b);
-      a.download = `dont-touch-day-${s.day}.png`;
+      const ch = this.chapter && this.chapter !== 'days' ? `-${this.chapter}` : '';
+      a.download = `dont-touch${ch}-day-${s.day}.png`;
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 4000);
     });

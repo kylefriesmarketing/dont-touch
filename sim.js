@@ -2818,7 +2818,11 @@ export class Sim {
       const px = this.yard.x + rr(this.rng, -3.5 * S, 3.5 * S), py = this.yard.y + rr(this.rng, -3.5 * S, 3.5 * S);
       if (this.inJar(px, py)) { gx = px; gy = py; break; }
     }
-    this.graves.push({ x: gx, y: gy, nameId: c.nameId, day: this.day, gen: c.gen });
+    // ⚠️ `cause` rides the corpse to the grave now — the book's yard chapter
+    // reads it ("the graves will tell you what you were"). Save-compatible:
+    // graves serialize verbatim, old saves' graves simply lack the field, and
+    // fingerprint() mixes only graves.length, so this is fingerprint-neutral.
+    this.graves.push({ x: gx, y: gy, nameId: c.nameId, day: this.day, gen: c.gen, cause: c.cause });
     this.stats.buried++;
     const carrier = this._name(id, `who carried the dead to the yard`);
     if (c.glued && c.nameId >= 0) {

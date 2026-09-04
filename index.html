@@ -270,16 +270,28 @@
     url('assets/pagepaper.jpg') center top/100% auto repeat-y;
     background-attachment:local,local}
   #page h2,#boxin h2{font:600 27px/1.2 Georgia,serif;margin:0 0 4px}
+  /* the book scales with the box's text-size setting. ⚠️ every size in here
+     was absolute px, so 150% text left the one panel of long reading in the
+     game untouched. The `font:` shorthands keep their unitless line-heights,
+     so a trailing font-size scales the leading with the text. */
+  #page h2{font-size:calc(27px * var(--ui))}
   #page .sub,#boxin .sub{color:var(--faint);font-size:12.5px;margin-bottom:18px}
+  #page .sub{font-size:calc(12.5px * var(--ui))}
+  /* the book's chapter tabs — same amber accent as everything that invites a touch */
+  #pgtabs{display:flex;gap:6px;margin:0 0 16px;flex-wrap:wrap}
+  #pgtabs button{padding:5px 12px;font-size:calc(12px * var(--ui));letter-spacing:.06em;color:var(--faint);
+    background:transparent;border:1px solid rgba(255,255,255,.10);border-radius:14px}
+  #pgtabs button:hover{color:#cfc7b6;border-color:rgba(255,255,255,.22)}
+  #pgtabs button.on{color:#e6d3ae;border-color:rgba(216,164,92,.5);background:rgba(216,164,92,.12)}
   #page ol{list-style:none;padding:0;margin:0}
   #page li{display:flex;gap:14px;padding:9px 0;border-top:1px solid rgba(255,255,255,.05);
-    font:300 16px/1.5 Georgia,serif;color:#cfd9e6}
-  #page li span{color:var(--faint);font-size:12px;min-width:3ch;padding-top:4px;
+    font:300 16px/1.5 Georgia,serif;font-size:calc(16px * var(--ui));color:#cfd9e6}
+  #page li span{color:var(--faint);font-size:calc(12px * var(--ui));min-width:3ch;padding-top:4px;
     font-variant-numeric:tabular-nums}
-  #page .foot{margin-top:20px;color:var(--faint);font-size:11px;letter-spacing:.14em}
+  #page .foot{margin-top:20px;color:var(--faint);font-size:calc(11px * var(--ui));letter-spacing:.14em}
   /* the last page's two choices: setting out new figures is the warm act */
   #page .endrow{margin-top:18px;display:flex;gap:10px}
-  #page .endrow button{padding:8px 15px;font-size:13.5px}
+  #page .endrow button{padding:8px 15px;font-size:calc(13.5px * var(--ui))}
   #page .endrow .warm{background:rgba(216,164,92,.16);border-color:rgba(216,164,92,.5);color:#e6d3ae}
   #page .endrow .warm:hover{background:rgba(216,164,92,.26)}
   .btns{display:flex;gap:8px;margin-top:18px;flex-wrap:wrap}
@@ -466,6 +478,15 @@
 <!-- ============ the book ============================================= -->
 <div id="pageWrap" class="sheet hide">
   <div id="page">
+    <!-- the book's chapters. 'the days' is the chronicle it always was; the
+         others are pure reads composed in ui.js. Aggregates are allowed in
+         the book and only in the book — you had to go and open it. -->
+    <div id="pgtabs">
+      <button data-ch="days" class="on">the days</button>
+      <button data-ch="living">the living</button>
+      <button data-ch="yard">the yard</button>
+      <button data-ch="know">what they know</button>
+    </div>
     <div id="pageBody"></div>
     <div class="btns">
       <button id="savePage">save it as a picture</button>
