@@ -2512,3 +2512,62 @@ vendored). Measured, the material roughness spread across every building materia
 is only 0.7–1.0, so a single shared material at ~0.88 would be visually
 indistinguishable — which makes the merge cheap to attempt and worth ~10x. Do
 that before adding another box to any building.
+
+---
+
+## 📐 THE STREET GRID, AND WHY IT WAS NOT ONE (2026-09-04)
+
+Kyle: *"the buildings should follow a grid so they look neat and organized… and
+the map is too small and congested — these guys need a whole world."*
+⚠️ THE REFERENCE IS FINALLY SEEN: the Instagram post's kingdom is **Minecraft** —
+a walled city, grey curtain wall with gates and towers, buildings packed
+shoulder to shoulder in dense blocks behind it, neat rectangular fields OUTSIDE
+the wall, a keep in the middle, a river. We are not chasing the voxel look (it
+would destroy the model-railway fiction), but the LAYOUT lessons are exactly
+what Kyle has been describing all along: **enclosure, density, and a legible
+grid, with the farmland pushed outside it.**
+
+**MEASURED FIRST, and both complaints are true.** On a day-100 town:
+- median building sits **1.92 cells off the lattice**, against 3.96 for pure
+  chance — *halfway to random*. It was never a grid.
+- the town spans **71 x 61 cells of a 96 x 96 board, x from 7 to 78** — 47% of
+  the whole board, edge to edge. There is no room left to grow into.
+
+**Why it was not a grid:** `_siteWork` swept every free cell in reach and
+subtracted a penalty for lattice offset — but the exact lattice points are
+usually BLOCKED by a building already standing there, so the best-scoring free
+cell is just the least-bad off-grid one. **Scoring a free scan and hoping it
+lands on the grid does not build a grid.** It now walks the LATTICE POINTS
+themselves, nearest first, and takes the first legal one; the free scan is only
+a fallback. The lattice also starts at the settling (age 2) instead of the kept
+winter (3), because by age 3 most of the town was already standing crooked and
+can never be re-laid — the old quarter is meant to be a small crooked heart, not
+most of the settlement.
+
+**Measured after** (4 seeds, day 300): on-grid 20% / 34% / 43% / 24%, median
+offset 1.39–2.18. Better, and honestly **not good enough yet** — and the reason
+is the number that matters for the next slice: **PITCH is 5.6 and a hall needs
+6.8 cells of clearance** (hall half 3.2 + house half 2.0 + gap 1.6), so every
+big building blocks its own neighbouring lattice points and the placement falls
+through to the free scan. A genuinely neat grid needs a wider PITCH, and a wider
+PITCH needs a bigger board — **which is why Kyle's two complaints are one
+problem.** Population also rose 866 → 1392 across the four seeds.
+
+⚠️ THE BIGGER WORLD IS AN ARCHITECTURAL CHANGE, NOT A CONSTANT BUMP, and it was
+investigated and deliberately NOT attempted in this pass. `C.N` is a RESOLUTION,
+not a size: `S = C.N / 64` scales every cell-distance so raising N alone gives
+the same world sampled more finely. Worse, the two layers disagree about how to
+scale — the sim's spacing (`HALF`, `gap`) is in RAW cells while the view scales
+building meshes by `g.scale.setScalar(S)` (∝ N), so at N=144 a house would
+render ~9 cells wide while the spacing rule still believed 4. They agree at N=96
+and nowhere else. Doing this properly means decoupling cell-size from N (or
+scaling GR with N) and re-verifying every tuned radius — its own slice, with its
+own four-seed measurement.
+
+⚠️ GATE NOTE: this went red on "a lifted kin leaves the world but stays alive in
+it", and it was NOT a regression. `someone()` returns the lowest-numbered living
+slot — a FOUNDER, the oldest kin on the board — and the measured pick was age
+179.9 of a 181.7-day lifespan, so it died of old age 1.8 days into the test's
+2-day run. A held kin ageing out is correct (the held branch checks lifespan on
+purpose). The test now lifts somebody with 10+ days left, because otherwise it
+is asserting that the hand defeats mortality.

@@ -898,7 +898,12 @@ export class Sim {
     // fought and buildings lost — pushed off-grid AND far away, and the town
     // paid in lives (measured alive 98 vs 171 at day 300).
     const gap = age <= 1 ? 0.4 : age === 2 ? 1.0 : 1.6;
-    const useLattice = age >= 3 && WORKS[wi].near;
+    // ⚠️ from the SETTLING (2), not the kept winter (3). The grid used to start
+    // two ages in, by which point most of the town was already standing crooked
+    // and could never be re-laid — the old quarter is meant to be a small
+    // crooked heart, not most of the settlement. At age 2 the gap is 1.0 so
+    // house+house+gap = 5.0 < PITCH 5.6, which the lattice can still satisfy.
+    const useLattice = age >= 2 && WORKS[wi].near;
     // ⚠ PITCH must EXCEED the widest common spacing need (house+house+gap =
     // 5.6) or adjacent street corners are illegal and the whole lattice is
     // unusable — the first pitch (4.2) did exactly that.
@@ -915,6 +920,37 @@ export class Sim {
       return true;
     };
     let bx = x0, by = y0, bs = -1e9, found = false;
+    // ── THE STREET GRID, TRIED FIRST ────────────────────────────
+    // ⚠️⚠️ SCORING A FREE SCAN AND HOPING IT LANDS ON THE GRID DOES NOT BUILD A
+    // GRID. The old code swept every cell in reach and subtracted a penalty for
+    // lattice offset — but the exact lattice points are usually BLOCKED by a
+    // building that is already there, so the best-scoring free cell is simply
+    // the least-bad off-grid one. Measured on a day-100 town: median offset
+    // 1.92 cells against 3.96 for pure chance — halfway to random, which is
+    // exactly why Kyle said the town looks scattered rather than laid out.
+    // So: walk the LATTICE POINTS themselves, nearest first, and take the first
+    // legal one. A building either stands on the street grid or the grid had no
+    // room for it, and only then does the free scan below get a say.
+    // ⚠️ still no rng — a deterministic ring walk and a first-match.
+    if (useLattice) {
+      const gx = Math.round((x0 - this.hearth.x) / PITCH), gy = Math.round((y0 - this.hearth.y) / PITCH);
+      let best = null, bestD = 1e9;
+      for (let ry = -3; ry <= 3; ry++) for (let rx = -3; rx <= 3; rx++) {
+        const lx = Math.round(this.hearth.x + (gx + rx) * PITCH);
+        const ly = Math.round(this.hearth.y + (gy + ry) * PITCH);
+        if (!ok(lx, ly)) continue;
+        const dx = lx - x0, dy = ly - y0, d = dx * dx + dy * dy;
+        if (d < bestD) { bestD = d; best = [lx, ly]; }
+      }
+      if (best) {
+        if (this._beat == null) this._beat = {};
+        if (this._beat.rows == null) {
+          this._beat.rows = this.day;
+          this.log('rows', 'they built to a line, for the first time.', 5.5);
+        }
+        return best;
+      }
+    }
     // ⚠️⚠️ WIDENING THIS SCAN WAS TRIED, MEASURED AND REVERTED (2026-09-04).
     // A review found that at ±8 the scan fails on roughly a third of calls in a
     // mature town and the fallback then plants the work at the inventor's exact

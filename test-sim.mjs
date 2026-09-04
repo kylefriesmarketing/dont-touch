@@ -375,7 +375,20 @@ const someone = (s) => { for (let i = 0; i < s.count; i++) if (s.k.alive[i] && s
 
 t('a lifted kin leaves the world but stays alive in it', () => {
   const s = clone(fixture('live', 200));
-  const id = someone(s); ok(id >= 0, 'nobody to lift');
+  // ⚠️ NOT `someone()` — that returns the lowest-numbered living slot, which is
+  // a FOUNDER, and founders are the oldest kin on the board. Measured when this
+  // went red: slot 1 was age 179.9 of a 181.7-day lifespan, so it died of old
+  // age 1.8 days into the 2-day run below and the test reported "a held kin
+  // stopped being alive". A held kin ageing out is CORRECT (the held branch
+  // checks lifespan on purpose); the test just has to lift somebody with life
+  // left, or it is asserting that the hand defeats mortality.
+  let id = -1;
+  for (let i = 0; i < s.count; i++) {
+    if (!s.k.alive[i] || s.k.stage[i] === STAGE.EGG) continue;
+    if (s.k.lifespan[i] - s.k.age[i] < 10) continue;      // room to survive the run
+    id = i; break;
+  }
+  ok(id >= 0, 'nobody to lift');
   const x0 = s.k.x[id], y0 = s.k.y[id];
   ok(s.lift(id), 'could not lift a living kin');
   ok(!s.lift(someone(s)), 'lifted two at once');
