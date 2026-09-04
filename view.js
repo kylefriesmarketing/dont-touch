@@ -776,13 +776,71 @@ export class View {
       ]);
       geo.setAttribute('position', new THREE.BufferAttribute(v, 3));
       geo.computeVertexNormals();
-      return new THREE.Mesh(geo, mat);
+      const m = new THREE.Mesh(geo, mat);
+      // ⚠️ A ROOF WITH NO RIDGE AND NO EAVES IS A TENT. The prism was right and
+      // the colour was doing the work, but from any angle where you can read a
+      // wall the roof met it as a hairline — a fold of paper on a box. A ridge
+      // beam and a shadow line under the eaves are what make it look BUILT, and
+      // they are two boxes riding the same group.
+      const grp = new THREE.Group();
+      grp.add(m);
+      const ridge = new THREE.Mesh(new THREE.BoxGeometry(w * 1.02, 0.0030, 0.0034), M.timber);
+      ridge.position.y = h; grp.add(ridge);
+      // ⚠️⚠️ NO EAVES. TRIED TWICE, PHOTOGRAPHED TWICE, BOTH WORSE — do not add
+      // them back. An overhang is a SIDE-ON read and this game is played from a
+      // bird's eye, so: as one w x d box it drew a huge dark tabletop across
+      // every building in town, and as a proper four-board perimeter rim it drew
+      // a heavy dark PICTURE FRAME around every roof, which from above is an
+      // outline, not an overhang. The ridge alone gives the roof its built line
+      // and costs one box. The lesson is the camera: detail that only reads from
+      // an angle the player never has is not detail, it is noise.
+      return grp;
     };
     const chimney = (x, z, h, w) => {
       const c = new THREE.Mesh(new THREE.BoxGeometry(w, h, w), M.stone);
       c.position.set(x, h / 2, z);
       c.userData.chimney = h;      // the smoke system harvests these by tag
       return c;
+    };
+    // ⚠️ NOT ONE BUILDING IN THIS TOWN HAD A DOOR. Photographed at eye level
+    // the whole settlement is plastered prisms under good roofs — the roofs do
+    // the silhouette work (see the note above) and then nothing says a PERSON
+    // GOES IN THERE. A door and a shuttered window are the cheapest possible
+    // "somebody lives here", and they are what a village reads as up close.
+    // ⚠️ everything here is a flat panel laid ON the wall face and pushed out
+    // by half a millimetre — no booleans, no holes, no extra material. `face`
+    // is +1 for the +z wall and -1 for -z, so a door always faces outward.
+    const door = (g2, w, d, wh, face = 1) => {
+      const dh = Math.min(wh * 0.62, 0.020), dw = dh * 0.52;
+      const dr = new THREE.Mesh(new THREE.BoxGeometry(dw, dh, 0.0016), M.cut);
+      dr.position.set(0, dh / 2, face * (d / 2 + 0.0006));
+      g2.add(dr);
+      // a lintel over it, because a door in a plaster wall needs a head
+      const li = new THREE.Mesh(new THREE.BoxGeometry(dw * 1.32, 0.0032, 0.0022), M.timber);
+      li.position.set(0, dh + 0.0016, face * (d / 2 + 0.0006));
+      g2.add(li);
+      // and a worn step, so it meets the ground instead of floating on it
+      const st = new THREE.Mesh(new THREE.BoxGeometry(dw * 1.25, 0.0022, 0.006), M.stone);
+      st.position.set(0, 0.0011, face * (d / 2 + 0.003));
+      g2.add(st);
+    };
+    // shuttered windows. ⚠️ these are also where the NIGHT GLOW belongs — the
+    // glow spots were already placed at roughly these coordinates (see the
+    // night-window block), so the light now comes out of an actual opening
+    // instead of off blank plaster.
+    const windows = (g2, w, d, wh, n, face = 1) => {
+      const s2 = Math.min(wh * 0.24, 0.009);
+      for (let i = 0; i < n; i++) {
+        const px = n === 1 ? 0 : (i / (n - 1) - 0.5) * w * 0.54;
+        const wn = new THREE.Mesh(new THREE.BoxGeometry(s2, s2, 0.0014), M.cut);
+        wn.position.set(px, wh * 0.60, face * (d / 2 + 0.0006));
+        g2.add(wn);
+        for (const sx of [-1, 1]) {                    // two shutters, thrown open
+          const sh = new THREE.Mesh(new THREE.BoxGeometry(s2 * 0.46, s2 * 1.06, 0.0014), M.timber);
+          sh.position.set(px + sx * s2 * 0.76, wh * 0.60, face * (d / 2 + 0.0011));
+          g2.add(sh);
+        }
+      }
     };
 
     if (o.kind === 0) {                                  // the store — a heap
@@ -849,10 +907,18 @@ export class View {
         sill.position.y = wh * 0.62; g.add(sill);
       }
       const rm = pick([M.tile, M.tile, M.slate, M.thatch]);
+      const turned = rnd() < 0.5;
       const rf = roof(w * 1.14, d * 1.14, 0.024 + rnd() * 0.014, rm);
-      rf.position.y = wh; rf.rotation.y = rnd() < 0.5 ? 0 : Math.PI / 2;
+      rf.position.y = wh; rf.rotation.y = turned ? Math.PI / 2 : 0;
       g.add(rf);
       g.add(chimney((rnd() - 0.5) * w * 0.5, (rnd() - 0.5) * d * 0.5, wh + 0.030, 0.008));
+      // somebody lives here. ⚠️ the door goes on a wall the roof does not
+      // overhang into — when the roof is turned, the gable faces x, so the
+      // long open wall is z and the door belongs there either way; `face`
+      // alternates so a row of houses does not look stamped.
+      const fc = rnd() < 0.5 ? 1 : -1;
+      door(g, w, d, wh, fc);
+      windows(g, w, d, wh, rnd() < 0.45 ? 2 : 1, fc);
 
     } else if (o.kind === 6) {                           // THE FIELD
       // ⚠ A FIELD IS GROUND, NOT A BUILDING. It has to read as worked earth
@@ -965,6 +1031,10 @@ export class View {
       belfry.position.y = wh + 0.044; g.add(belfry);
       const bell = new THREE.Mesh(new THREE.CylinderGeometry(0.0035, 0.005, 0.007, 6), M.cut);
       bell.position.y = wh + 0.036; g.add(bell);
+      // a school is a room children are called INTO, so it needs the door most
+      door(g, w, d, wh, 1);
+      windows(g, w, d, wh, 2, 1);
+      windows(g, w, d, wh, 2, -1);
 
     } else if (o.kind === 12) {                          // THE DYNAMO
       const w = 0.050, d = 0.040, wh = 0.028;
@@ -1001,6 +1071,21 @@ export class View {
       const cap = new THREE.Mesh(new THREE.ConeGeometry(0.022, 0.030, 4), M.slate);
       cap.position.set(w * 0.42, 0.085, -d * 0.30); cap.rotation.y = Math.PI / 4; g.add(cap);
       g.add(chimney(-w * 0.3, d * 0.2, wh + 0.038, 0.010));
+      // the hall is the biggest thing the town ever agrees to build, so it gets
+      // the great door and a row of windows — this is the one building a player
+      // should be able to pick out of the skyline and know what it is
+      door(g, w, d, wh, 1);
+      windows(g, w, d, wh, 3, 1);
+      windows(g, w, d, wh, 3, -1);
+      // a banner either side of the door. The town has no heraldry and never
+      // will — this is cloth somebody hung up, and it is the only saturated
+      // colour on the building.
+      for (const sx of [-1, 1]) {
+        const ban = new THREE.Mesh(new THREE.BoxGeometry(0.0075, 0.020, 0.0014),
+          sx < 0 ? M.tile : M.brick);
+        ban.position.set(sx * w * 0.20, wh * 0.66, d / 2 + 0.0014);
+        g.add(ban);
+      }
     }
 
     g.traverse(o2 => { o2.castShadow = true; o2.receiveShadow = true; });

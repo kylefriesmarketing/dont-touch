@@ -2473,3 +2473,42 @@ the stale `alive` count and `p.techs.size` — the third instance in this file.
 The `max` survives only as the legacy seed for saves written before the field
 existed; a real value is taken verbatim, and `_daily` corrects any lag at the
 next day boundary anyway.
+
+---
+
+## 🏘️ SOMEBODY LIVES HERE (2026-09-04) — doors, windows, ridge beams
+
+Kyle wants the town to read like a kingdom. Photographed at eye level first, and
+the diagnosis was blunt: **not one building in this town had a door.** The roofs
+were already doing real silhouette work (steep, tiled, terracotta and slate, at
+varied angles — see the roof note) and then nothing said A PERSON GOES IN THERE.
+Every dwelling-scale building now has a plank door with a timber lintel and a
+worn stone step, and shuttered windows placed where the night-glow spots already
+were, so the light now comes out of an actual opening instead of off blank
+plaster. Houses take a door and 1-2 windows, the school takes a door and windows
+on both faces, and the hall — the biggest thing the town ever agrees to build —
+takes a great door, three windows a side and two hung banners, so it can be
+picked out of the skyline and identified.
+Everything is a flat panel laid ON the wall face and pushed out half a
+millimetre: no booleans, no holes, no new material.
+
+⚠️⚠️ **NO EAVES. TRIED TWICE, PHOTOGRAPHED TWICE, BOTH WORSE — do not add them
+back.** An overhang is a SIDE-ON read and this game is played from a bird's eye.
+As one `w × d` box it drew a huge dark tabletop across every building in the
+town; as a proper four-board perimeter rim it drew a heavy dark PICTURE FRAME
+around every roof, because from above a rim is an outline, not an overhang. The
+ridge beam alone gives the roof its built line and costs one box. **The lesson is
+the camera: detail that only reads from an angle the player never has is not
+detail, it is noise.**
+
+⚠️ COST, and it is the real ceiling on going further: work views are un-instanced
+Groups, and this pass took the average house from ~9 meshes to 13.5, the school
+to 23 and the hall to 32 — **959 work meshes for 91 buildings**. The full-game
+review already flagged un-instanced work views as a late-game frame-rate slide.
+**The next visual step is not more detail, it is the MERGE**: hand-merge each
+building's Group into ONE mesh with baked vertex colours (the same technique
+`_kin()` already uses, since BufferGeometryUtils is an examples module and is not
+vendored). Measured, the material roughness spread across every building material
+is only 0.7–1.0, so a single shared material at ~0.88 would be visually
+indistinguishable — which makes the merge cheap to attempt and worth ~10x. Do
+that before adding another box to any building.
