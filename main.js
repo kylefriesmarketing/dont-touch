@@ -859,7 +859,16 @@ class App {
     for (let n = 1; n < NN; n++) if (s.k.need[base + n] < s.k.need[base + worst]) worst = n;
     const v = s.k.need[base + worst];
     const want = v < 0.30 ? `badly wants ${NEEDS[worst]}` : v < 0.62 ? `could use ${NEEDS[worst]}` : 'wants for nothing';
-    tag.innerHTML = `<b>${s.nameOf(id)}</b><i>${want}</i>`;
+    // ⚠️ and the THIRD line is what they have become. A trade is earned by a
+    // whole life of doing one thing, and it is invisible in the world — the
+    // figures all look alike on purpose — so the hover is where the town's
+    // division of labour actually becomes readable. Guarded: a legacy save has
+    // no k.job at all, and most kin never settle into a trade.
+    const TRADE_TAG = ['', 'one who gathers', 'one who carries the water',
+      'one who keeps what stands', 'one who shows the others how'];
+    const jb = (s.k.job && s.k.job[id]) || 0;
+    const trade = jb ? `<i style="opacity:.85;color:#e6d3ae">${TRADE_TAG[jb]}</i>` : '';
+    tag.innerHTML = `<b>${s.nameOf(id)}</b><i>${want}</i>${trade}`;
     tag.classList.remove('hide');
     this._moveTag();
   }

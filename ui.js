@@ -446,13 +446,18 @@ export class UI {
       const mo = k.mother ? k.mother[id] : -1;
       const fa = k.father ? k.father[id] : -1;
       let fact;
+      // ⚠️ THE TRADE OUTRANKS THE BIOGRAPHY now that trades are real. It used
+      // to sit below 'here since the beginning' and 'grown old', so a founder
+      // or an elder — exactly the kin most likely to HAVE settled into one —
+      // never showed it. What somebody spent their life doing is the most
+      // characterful true thing the census can say about them.
       if (k.glued && k.glued[id]) fact = 'stuck fast';
       else if (k.stage[id] === STAGE.NIB) fact = 'a nib still';
       else if (k.stage[id] === STAGE.HALF) fact = 'half-grown';
+      else if (k.job && k.job[id] > 0 && TRADES[k.job[id]]) fact = TRADES[k.job[id]];
       else if (mo < 0) fact = 'here since the beginning';
       else if (k.stage[id] === STAGE.RIME) fact = 'white with rime';
       else if (k.lifespan[id] > 0 && k.age[id] / k.lifespan[id] > 0.8) fact = 'grown old';
-      else if (k.job && k.job[id] > 0 && TRADES[k.job[id]]) fact = TRADES[k.job[id]];
       else {
         const mn = parent(mo, id), fn = parent(fa, id);
         if (mn && fn) fact = `out of ${mn} and ${fn}`;

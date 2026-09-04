@@ -2394,3 +2394,82 @@ decrement in `_die` (the correct central funnel) made that path decrement TWICE,
 so a town that had lost somebody no longer restored to its own fingerprint. The
 hand-decrement in `takeAway` is gone and `_die` owns it.
 **Before centralising a fix, grep for the special case somebody already wrote.**
+
+---
+
+## 🔨 THE TRADES (2026-09-04) — the town divides its own labour
+
+Kyle: *"the creatures need structure and job roles and daily tasks so the world
+seems to be more alive and cohesively working together towards a greater goal."*
+
+**Nobody is GIVEN a job.** `k.did` tallies what a kin actually spends its life
+doing (gathering / water / keeping what stands), `k.taught` counts the times
+somebody learned a practice by watching THIS kin work, and once a day a grown
+kin whose life has a clear shape is NAMED for it. That is the same rule as
+everything else here: the town works itself out and the record reports it.
+⚠️ `k.job` and the TRADES strings had been sitting in ui.js since v0.6, read by
+the inspector and (later) the book's census, with nothing in sim.js ever writing
+them — the review called it out as dormant. It is live now, and the inspector,
+the hover tag, the census chapter and a chronicle beat all light up at once.
+
+**A trade is COMPETENCE, NOT COMPULSION.** The gatherer gets more out of the same
+handful (and takes no more off the board, so it cannot overgraze), the
+water-carrier drinks quicker, the keeper builds 1.3x faster, the one who shows
+the others how is watched from 21 cells instead of 16. Biasing `_decide` was
+considered and REFUSED: the need economy here is famously delicate — see the
+placement-widening entry, a 30% population collapse from one well-meant change —
+and a kin who wants food less because of a job title would starve for its title.
+Competence divides the labour on its own: the keeper finishes the hut, so the
+others do not have to.
+
+⚠️⚠️ **THE THRESHOLDS ARE MEASURED, AND THE FIRST TWO GUESSES WERE BOTH WRONG BY
+AN ORDER OF MAGNITUDE.** Measured at day 300 over 175 grown kin, median tallies:
+gather 33,173 · water 11,364 · keep 33,334 · taught 38 (p90 95, max 232).
+- v1 used `lead >= 2200` and `taught >= 3`: **173 of 175 became the teacher** and
+  not one became a water-carrier. The witness loop credits EVERY onlooker, so a
+  single afternoon's work teaches dozens.
+- The counters were **Uint16 and SATURATED** — gather and keep both pin at the
+  65k ceiling, and two saturated buckets cannot be compared, so every long-lived
+  kin looked equally devoted to everything. Uint32 now.
+- **Water must be normalised (x3) or the trade is unreachable**: drinking is
+  brief and eating is constant, so on raw ticks the water-carrier can never lead.
+- v2 compared the lead against the SUM of the other two, which a typical kin
+  (33k / 34k / 33k) can never beat: **147 of 153 had no trade and there were zero
+  keepers in four seeds.** It is the RUNNER-UP that matters — total minus the
+  highest minus the lowest.
+
+**Measured after, four seeds, 300 days** (grown / none / gather / water / keep /
+show): eco1 120/32/72/1/8/7 · bat0 139/84/20/11/19/5 · live 148/72/49/2/24/1 ·
+basin 131/9/118/1/0/3. All four trades occur, generalists still exist, and the
+mix differs by seed — basin is a gathering town, bat0 spreads evenly.
+Population 866 vs the 776 baseline: healthier, not runaway.
+Determinism identical, save round-trip hash-equal, trades survive the save
+(23 → 23), and a legacy save with no trade arrays loads with 0 trades and no
+throw (fromJSON's `if (o.k[key])` leaves the new arrays at the constructor's
+zeros, and job 0 is 'no trade' — exactly right for a town that predates the idea).
+⚠️ `job`, `taught` and all three `did` buckets are folded into `fingerprint()`:
+the trade changes how fast they build, eat, drink and teach, so it is live sim
+state, and the tallies behind it must be folded too or two towns one tick from
+different trades hash equal.
+
+### ⚠️⚠️ `ageBest` WAS RECOMPUTED ON LOAD, AND IT IS IN THE FINGERPRINT
+
+Latent since ageBest shipped; the trades slice moved one seed's development into
+the window and it went red. `fromJSON` did:
+
+    s.ageBest = Math.max(o.ageBest || 0, s.ageNow());
+
+`_daily` is the ONLY writer of ageBest, so between an age turning and the next
+day boundary the live value LAGS the standing board. A save taken in that window
+restored to a HIGHER ageBest than the town it came from — and ageBest is folded
+into `fingerprint()`, so the baked-world round-trip test failed with a hash
+mismatch and no per-kin field differing anywhere. Chasing that costs an afternoon,
+because every obvious suspect (the new k arrays, the works, the terrain sample)
+diffs clean.
+
+**ANYTHING THE FINGERPRINT FOLDS MUST ROUND-TRIP EXACTLY.** Deriving it on load
+is how you get a hash that disagrees with its own town. This is the same class as
+the stale `alive` count and `p.techs.size` — the third instance in this file.
+The `max` survives only as the legacy seed for saves written before the field
+existed; a real value is taken verbatim, and `_daily` corrects any lag at the
+next day boundary anyway.

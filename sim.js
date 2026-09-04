@@ -413,6 +413,26 @@ export class Sim {
       // kin silently claims work 0 as home. homeTier is the kind of the
       // dwelling claimed (hut 3 / house 4), for the promotion ladder later.
       home: new Int32Array(K).fill(-1), homeTier: new Uint8Array(K),
+      // ── THE TRADES ──────────────────────────────────────────
+      // Nobody is GIVEN a job. `did` tallies what a kin actually spends its
+      // life doing — three buckets: gathering, water, keeping what stands —
+      // and `taught` counts the times somebody learned a practice by watching
+      // THIS kin make it. Once a grown kin's life has a clear shape, `job`
+      // names it, and the town has divided its labour without anybody
+      // deciding to. That is the same rule as everything else here: the town
+      // works itself out and the record reports it (P2/P3).
+      // ⚠️ `job` was read by the inspector and the book's census LONG before
+      // this existed — TRADES has been sitting in ui.js waiting for it.
+      // ⚠️ a legacy save has no `did`/`taught`/`job` in its k blob, and
+      // fromJSON's `if (o.k[key])` leaves them at the constructor's zeros —
+      // job 0 is 'no trade', which is exactly right for a town that predates
+      // the idea. No migration needed.
+      // ⚠️ Uint32, not Uint16: measured at day 300 the gather and keep tallies
+      // SATURATE a 16-bit counter (median 33k, max pinned at the 65k ceiling),
+      // and two saturated buckets cannot be compared — every long-lived kin
+      // would have looked equally devoted to everything.
+      did: new Uint32Array(K * 3), taught: new Uint32Array(K),
+      job: new Uint8Array(K),
     };
     this.names = [];           // nameId -> string
     this.free = [];            // free kin slots
@@ -2604,6 +2624,18 @@ export class Sim {
     const k = this.k, NN = NEEDS.length, base = id * NN;
     const i = this.idx(k.x[id], k.y[id]);
     const near = Math.abs(k.tx[id] - k.x[id]) + Math.abs(k.ty[id] - k.y[id]) < 0.8 * S;
+    // ── what this life is made of ───────────────────────────────
+    // One tally per tick against the thing they are actually doing. A trade is
+    // not a decision, it is an accumulation. Children are not counted: what you
+    // did before you were grown is childhood, not a career.
+    if (k.stage[id] >= STAGE.WHOLE) {
+      const gl = k.goal[id];
+      const bucket = (gl === 1 || gl === 11 || gl === 13) ? 0     // gathering
+        : (gl === 2 || gl === 14) ? 1                             // water
+        : (gl === 10) ? 2                                         // keeping what stands
+        : -1;
+      if (bucket >= 0) k.did[id * 3 + bucket]++;
+    }
     switch (k.goal[id]) {
       // ⚠️⚠️ THEY EAT WITH THEIR MOUTH, NOT WITH THEIR FEET. This read
       // `this.moss[i]` — the single cell the kin is STANDING ON — while `near`
@@ -2634,7 +2666,11 @@ export class Sim {
         // At 2.4 a meal takes about 55 ticks and leaves a surplus;  is still
         // capped by what is in the cell, so they still graze it out and move on.
         // ⚠️ decrement the cell they ATE FROM (mi), not the one under their feet.
-        this.moss[mi] -= take; k.need[base + 2] = Math.min(1, k.need[base + 2] + take * C.MOSS_FEED);
+        // the one who gathers gets more out of the same handful — competence,
+        // and it takes nothing extra off the board (the cell loses `take`
+        // either way), so this cannot overgraze the moss the town lives on
+        const feed = k.job[id] === 1 ? C.MOSS_FEED * 1.16 : C.MOSS_FEED;
+        this.moss[mi] -= take; k.need[base + 2] = Math.min(1, k.need[base + 2] + take * feed);
         }
       } break;
       case 11: {                              // eating something dad dropped
@@ -2678,7 +2714,8 @@ export class Sim {
             if (dx * dx + dy * dy <= 2.6 * S * S) { wet = 1; break; }
           }
         }
-        if (wet > 0.004) k.need[base + 1] = Math.min(1, k.need[base + 1] + 0.022);
+        // the one who carries the water drinks quicker and is back sooner
+        if (wet > 0.004) k.need[base + 1] = Math.min(1, k.need[base + 1] + (k.job[id] === 2 ? 0.0255 : 0.022));
       } break;
       case 3: break; // standing in the warm place is its own reward (handled by comfort)
       case 4: {
@@ -2740,7 +2777,15 @@ export class Sim {
         const w = this._workFor(id);
         if (!w || w.d > 1.6 * S) break;
         const o = w.work, W = WORKS[o.kind];
-        o.prog = Math.min(1, o.prog + 1 / W.effort);
+        // ⚠️ A TRADE IS COMPETENCE, NOT COMPULSION. The keeper builds faster;
+        // no trade changes what anybody WANTS. Biasing `_decide` instead was
+        // considered and refused: the need economy here is famously delicate
+        // (see the placement-widening entry — a 30% population collapse from
+        // one well-meant change), and a kin who wants food less because of a
+        // job title would starve for its title. Competence divides the labour
+        // on its own: the keeper finishes the hut, so the others do not have to.
+        const skill = k.job[id] === 3 ? 1.3 : 1;
+        o.prog = Math.min(1, o.prog + skill / W.effort);
         // ⚠️ WITNESSING IS HOW IT SPREADS. Watching somebody make a thing is
         // how a private trick becomes something the town knows — without this
         // every practice dies with whoever thought of it.
@@ -2749,8 +2794,13 @@ export class Sim {
           if (!k.alive[t] || t === id || k.stage[t] < STAGE.HALF) continue;
           if (k.knows[t] & bit) continue;
           const dx = k.x[t] - o.x, dy = k.y[t] - o.y;
-          if (dx * dx + dy * dy > 16 * S * S) continue;
+          // the one who shows how things are done is watched from further off
+          const teachR = (k.job[id] === 4 ? 21 : 16) * S;
+          if (dx * dx + dy * dy > teachR * teachR) continue;
           k.knows[t] |= bit;
+          // somebody learned it by watching THIS kin work — the rarest thing a
+          // life can accumulate, and the one the town names last
+          if (k.taught[id] < 65000) k.taught[id]++;
           const pr = this.prac[o.kind];
           if (pr.learned == null) {
             pr.learned = this.day;
@@ -2994,6 +3044,60 @@ export class Sim {
       } else if (a < this.age) {
         this.age = a;
         this.log('age', `it went back to ${AGES[a].name}.`, 3.4);
+      }
+    }
+    // ── THE TRADES: a life gets a name for its shape ────────────
+    // Once a day, quietly. A grown kin whose tally leans clearly one way is
+    // that trade; somebody others have learned from is the one who shows how
+    // things are done, which outranks the rest because it is the rarest.
+    // ⚠️ HYSTERESIS. `lead > second * 1.35` is what stops a kin flickering
+    // between two trades every day and spamming the book with it. A trade is
+    // meant to be a thing you settle into, and it can still CHANGE — a life
+    // that turns to the water for long enough becomes the water-carrier.
+    // ⚠️ no rng: this is a pure read of what already happened.
+    for (let id = 0; id < this.count; id++) {
+      if (!k.alive[id] || k.stage[id] < STAGE.WHOLE) continue;
+      const q = id * 3;
+      // ⚠️⚠️ NORMALISED, NOT RAW — and the numbers come from a measurement, not
+      // from taste. At day 300 the median grown kin has spent gather 33,173 /
+      // water 11,364 / keep 33,334 ticks: drinking is BRIEF and eating is
+      // constant, so on raw counts the water-carrier is unreachable and nobody
+      // in four seeds ever became one. Water is scaled by 3 so a life spent at
+      // the pond weighs the same as a life spent grazing, and the trade is then
+      // decided by who leans, not by which activity is inherently slower.
+      const gth = k.did[q], wat = k.did[q + 1] * 3, kep = k.did[q + 2];
+      let want = 0;
+      // ⚠️ taught: median 38, p90 95, max 232 across 175 grown kin. The first
+      // build of this used `>= 3` and made 173 of 175 the teacher — the witness
+      // loop credits EVERY onlooker who learns, so a single afternoon's work
+      // teaches dozens. 120 is above the 90th percentile: genuinely rare, which
+      // is the whole point of the one who shows the others how.
+      if (k.taught[id] >= 120) want = 4;
+      else {
+        const lead = Math.max(gth, wat, kep);
+        // about a third of a typical grown life spent mostly on one thing
+        if (lead >= 12000) {
+          // ⚠️ THE RUNNER-UP, NOT THE SUM OF THE REST. Summing them meant a
+          // typical kin (gather 33k / water 34k / keep 33k) had to beat 66k to
+          // lean at all, so NOBODY qualified — measured 147 of 153 grown kin
+          // with no trade and not one keeper in four seeds. What makes a trade
+          // is doing one thing more than the NEXT thing, so it is the middle
+          // value: total minus the highest minus the lowest.
+          const second = (gth + wat + kep) - lead - Math.min(gth, wat, kep);
+          if (lead > second * 1.35) want = gth === lead ? 1 : wat === lead ? 2 : 3;
+        }
+      }
+      if (want && k.job[id] !== want) {
+        const had = k.job[id];
+        k.job[id] = want;
+        // the town noticing what somebody has become is worth one line, and
+        // only the FIRST time a name settles on them — a later change is a
+        // quieter thing and the book already has enough to carry
+        if (!had) {
+          const TRADE_SAID = ['', 'gathers for the rest of them', 'carries the water',
+            'keeps what stands standing', 'shows the others how it is done'];
+          this.log('trade', `${this._name(id, 'who found their trade')} ${TRADE_SAID[want]}.`, 2.2);
+        }
       }
     }
     // what they felt fades, but slowly — and the strongest thing that ever
@@ -3617,6 +3721,13 @@ export class Sim {
       mix(k.x[id]); mix(k.y[id]); mix(k.age[id]); mix(k.stage[id]); mix(k.strain[id]);
       mix(k.nameId[id]); mix(k.glued[id]); mix(k.tender[id]); mix(k.goal[id]); mix(k.knows[id]);
       mix(k.memX[id]); mix(k.memY[id]); mix(k.memV[id]); mix(k.saw[id]); mix(k.home[id]); mix(k.homeTier[id]);
+      // ⚠️ the trade changes how fast they build, eat, drink and teach, so it
+      // is live sim state and belongs here — the same rule the ambientBase note
+      // above spells out. `did`/`taught` are the tallies BEHIND it: fold them
+      // too, or two towns whose kin are one tick from different trades hash
+      // equal and the harness calls a real divergence clean.
+      mix(k.job[id]); mix(k.taught[id]);
+      mix(k.did[id * 3]); mix(k.did[id * 3 + 1]); mix(k.did[id * 3 + 2]);
       for (let j = 0; j < G; j++) mix(k.genome[id * G + j]);
       for (let n = 0; n < NN; n++) mix(k.need[id * NN + n]);
     }
@@ -3749,8 +3860,20 @@ export class Sim {
     // announcing the gathering days to a town that is centuries past them.
     s.age = o.age == null ? null : o.age;
     s.foundings = o.foundings || 1;
-    // max with the standing board so a legacy save seeds sanely
-    s.ageBest = Math.max(o.ageBest || 0, s.ageNow());
+    // ⚠️⚠️ VERBATIM WHEN THE SAVE HAS IT — NEVER RECOMPUTED. This was
+    // `Math.max(o.ageBest || 0, s.ageNow())`, and `ageBest` is FOLDED INTO THE
+    // FINGERPRINT, so any save taken in the window between an age turning and
+    // the next `_daily` (its only writer) restored to a HIGHER value than the
+    // town it came from and the round-trip test failed. It sat latent for as
+    // long as ageBest has existed and only fired when a change to the sim moved
+    // one seed's development into that window — a false red that costs an
+    // afternoon to chase. Same class as the stale `alive` count two notes down:
+    // ANYTHING THE FINGERPRINT FOLDS MUST ROUND-TRIP EXACTLY, and deriving it
+    // on load is how you get a hash that disagrees with its own town.
+    // The max survives only as the LEGACY seed, for saves written before the
+    // field existed; a real value is taken as written, and _daily corrects any
+    // lag on the next day boundary anyway.
+    s.ageBest = o.ageBest != null ? o.ageBest : s.ageNow();
     // ⚠ LEGACY FALLBACK ONLY, and it reads the SAVE's own array. The first
     // version counted s.k.alive — which is not restored until far below this
     // line, so it counted the constructor's empty arrays and flagged EVERY
