@@ -2238,3 +2238,159 @@ book; all four chapters render on a second seed; export photographed for days /
 yard / know / the last page; polaroid and kin counts unregressed; 16/16 graves
 carry causes; 0 console errors. Gate 119/0 (the sim field; the three fixes above
 are UI-only).
+
+---
+
+## 🔬 THE FULL-GAME PASS (2026-09-04) — 24 agents, six lenses, 16 confirmed defects
+
+Kyle asked for a whole-game review including visuals. Six lenses (sim, PLAY IT,
+visuals, input/camera, UI/shell, audio), every finding then handed to a separate
+adversarial verifier that had to reproduce it in the code or refute it. 24 agents,
+0 errors, one finding correctly refuted.
+⚠️ THE FIRST TWO LAUNCHES RETURNED `confirmed: []` BECAUSE EVERY AGENT DIED ON A
+SESSION LIMIT. That is the documented empty-review trap and it looked exactly like
+a clean bill of health. Always read `<failures>` and the journal before believing
+a quiet result.
+
+### Fixed in this pass
+
+**The one that could lose a town.** `boot()` could not tell a MISSING WORLD FILE
+from a corrupt save: `loadWorld` swallows a 404 and returns null, `fromJSON` then
+throws its deliberate "this colony lives in <name>" guard, and that landed in the
+same catch as an unreadable blob — so one flaky request filed a real town away
+under a key nothing reads back, handed the player a day-0 colony under the "you
+left it in the dark" line, and let the 25s autosave make it permanent. The world
+now loads BEFORE the try and a missing one refuses to boot with its own sentence.
+
+**`moved` was a time-integral, not a distance** (main.js). `moved += |dx| + |dy|`
+with `sx,sy` rebased only in the orbit branch, so the same offset was re-added on
+every move event: a finger resting 3px off the press crossed the 26px reach-cancel
+about 120ms into a 900ms hold. Tap-select, the double-tap crumb and all four kin
+reaches were failing on any pointer that jitters — which is every touch pointer.
+Now the furthest displacement from the press.
+
+**A second contact stranded a lifted kin forever.** `down`/`mode` are single
+closure variables, so a resting thumb overwrote `mode='reach'` and the first
+release ran the wrong branch, which never calls setDown. Re-reaching is gated on
+`!s.held`, lift() then refuses everyone, and `held` survives the save. Scoped to
+one `pointerId` — ⚠️ INCLUDING THE RELEASE PATH, which is not optional: without
+it a stray thumb's pointerup runs the first finger's reach branch with the
+SECOND finger's coordinates, and off the board that is `takeAway()`.
+
+**Names were never unique** (sim.js). The language coins from ~175 short words, so
+by the third generation the town reused them and the book read as if a dead kin
+were still acting and buried "the same person" four times. This game's spine is
+that the town keeps the only account of itself. Measured after: 0 duplicates in
+174 / 400 / 307 names across three 300-day seeds.
+
+**An abandoned foundation deleted a rung from the game.** A site never rots before
+it is finished, so if the last knower died mid-build `unfinished` stayed true
+forever, `_weave` never evaluated that rung again, and everything listing it in
+`pre` died with it — one seed lost the school on day 67 and could never reach the
+little lights. One line, with a truth table: `if (!relearning && (unfinished ||
+mine >= room)) continue;`. The empty foundation should invite the archaeology.
+
+**The milestone re-announced itself.** `ageNow()` scans for works STANDING at
+prog >= WORK_DONE, so a hall under repair dropped the age and the climb back
+re-fired `AGES[a].said` — the once-in-history arrival line — six times in ninety
+days on one seed. `ageBest` was computed on the very next line and read by nobody
+(this codebase's signature defect, again). Now gated on a genuine first, with a
+quieter line for a return; the UI chime got the same treatment, per TOWN so a
+refounding earns its milestones again.
+
+**"who first made X" was logged only where it was FALSE.** `_name` writes its line
+only for a previously UNNAMED kin, and a real first inventor is usually already
+named — so across four seeds 171 such lines were logged and not one was true. The
+reason is now worked out from the same branch that follows it. Measured after:
+0 false lines.
+
+**The book was 11-17% one repeated sentence.** `log()`'s anti-repeat guard
+inspected only `chronicle[length-1]`, so it collapsed adjacent duplicates and
+missed every interleaved one: "one went hungry." was a sixth of one seed's entire
+book and one seed carried 166 copies of "something hatched near the flat." Now a
+bounded 14-entry / 8-day window folds them into one line with its `repeat` count.
+
+**Three view defects, all measured, none visible to any test.** The apron ring was
+seated from `cellToLocal` (the RAW grid) while the ground mesh is built from
+`_surfaceY` (edge-eased), so all four slabs sat 0.09-0.15 ABOVE the rim — a ledge
+around the whole world. ⚠️ THIS IS THE THIRD APRON DEFECT IN THIS FILE'S HISTORY
+AND THE SECOND CAUSED BY MEASURING THE BOARD WITH A DIFFERENT FUNCTION THAN THE
+ONE THAT DRAWS IT. The kin hover halo was pinned at a literal y = 0.0016 while kin
+stand at 0.15+, so it highlighted the ground a body-height below them. And the
+cover's slid-off pose landed at y = -0.275, entirely under the apron, so pulling
+the sheet off DELETED it from the picture — under a comment reading "it does not
+vanish." (0.34 where 0.035 was meant.)
+Measured after: apron -0.015 below the rim, ring 0.1602 vs feet 0.1626, sheet
+0.030 and above the apron.
+
+**One suspend killed sound for the session.** `start()` was an unconditional
+`if (this.ready) return;` and NOTHING in the repo ever called `resume()` — so a
+context suspended by an app-switch or created before a real gesture stayed
+suspended forever. Verified: suspended -> running. sfx.js also had no page
+lifecycle at all, so the four continuous beds droned on in a hidden tab frozen at
+their last values; the room is quiet now when nobody is looking at it.
+
+**Thunder was inaudible by construction** — a 60 Hz sine against the basement's
+59.5 Hz hum beats at half a hertz, so the one warning that rain is coming arrived
+as a slight wobble in the room tone. It is a swept rumble through a closing
+lowpass now.
+
+Also: `smite`/`takeAway` left `this.alive` one too high until the next tick (they
+run from outside one), `_siteWork` gave up after a ±8 scan and planted the work at
+the inventor's FEET — on the ground `ok()` had just refused — for about a third of
+all works in a mature town (now widens to 14 then 20, with the ±8 pass byte-
+unchanged), and the box's key card never mentioned WASD, the only way to cross
+the board.
+
+### Left as a backlog, deliberately
+
+- **Work views are un-instanced Groups**: ~845 individually shadow-casting meshes
+  by day 222 against a 53-mesh baseline. A real late-game frame-rate slide and a
+  real refactor; not something to slip into a review pass.
+- `page()`'s per-act rarity divisor suppresses a mass die-off *because* it is
+  mass, so an away page can report masonry after 24 named kin died.
+- `k.saw` can never go positive, so the witness schism is unimplemented.
+- `_shaped` is written by `shape()` and read by nothing.
+⚠️ REFUTED and correctly left alone: "arming a power strips the sheet for nine
+verbs that do not need it" — the verifier reproduced the state and the headline
+sub-claim was simply false.
+
+### ⚠️⚠️ THE WIDENING THAT A REVIEW RECOMMENDED AND FOUR SEEDS REFUTED
+
+The `_siteWork` fix in the list above SHIPPED RED and was reverted. It is the most
+useful thing in this whole pass, so it gets its own note.
+
+The finding was true: at ±8 the placement scan fails on about a third of calls in
+a mature town and the fallback plants the work at the inventor's exact FEET, on
+ground `ok()` had just refused. The verifier measured seed 3 at alive 138 → 142
+and called it a win. It went in, and the gate came back **117/2** — the hunger
+invariant, on a fixture the change had no obvious business touching.
+
+A/B across four seeds, 300 days, widening ON vs OFF:
+
+| seed | alive ON | alive OFF | works ON | works OFF | mean dist from hearth |
+|---|---|---|---|---|---|
+| eco1 | 37 | **183** | 55 | 92 | 13.8 vs 11.0 |
+| bat0 | 337 | 208 | 95 | 137 | 20.1 vs 16.4 |
+| live | 66 | **262** | 111 | 140 | 25.1 vs 18.6 |
+| basin | 105 | 123 | 56 | 84 | 13.6 vs 10.5 |
+| **total** | **545** | **776** | | | |
+
+**A scattered town starves.** Pushing a building further out to satisfy the
+spacing rule costs more in walking than a badly-sited building costs in anything
+else, and the town then builds FEWER of them because the population that would
+have built them is smaller. Reverted; the feet fallback stays.
+⚠️ **SINGLE-SEED COMPARISONS OF THIS GAME ARE NOISE** — written twice in this
+file already, and this is the third burn, this time inside a review's own
+recommendation with a number attached. A verifier measuring one seed is not
+verification. Any real fix here must find a NEARER legal cell (a BFS out from the
+inventor), never a farther one.
+
+### The other red: my own fix duplicated an existing patch
+
+"smite() leaves this.alive stale" was real — but `takeAway()` already hand-
+decremented for exactly this hazard, with a comment citing "31 vs 30". Putting the
+decrement in `_die` (the correct central funnel) made that path decrement TWICE,
+so a town that had lost somebody no longer restored to its own fingerprint. The
+hand-decrement in `takeAway` is gone and `_die` owns it.
+**Before centralising a fix, grep for the special case somebody already wrote.**

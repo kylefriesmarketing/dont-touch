@@ -199,9 +199,20 @@ export class UI {
     // one small bell when an age TURNS — never on load (the first frame seeds
     // the tracker), and never on the way DOWN: losing an age already has the
     // chronicle's own sentence, and a chime would make it sound like a prize.
-    if (this._lastAge == null) this._lastAge = ageI;
-    else if (ageI > this._lastAge) { this._lastAge = ageI; if (this.app && this.app.sfx) this.app.sfx.chime(); }
-    else if (ageI < this._lastAge) this._lastAge = ageI;
+    // ⚠️ A HIGH-WATER MARK, NOT THE CURRENT AGE. `ageNow()` is an uncached scan
+    // for works STANDING at prog >= WORK_DONE, so a hall under repair or a ruin
+    // decaying past the line drops the age and its return raised it again — the
+    // bell rang for the same milestone over and over (measured six times in
+    // ninety days on one seed). An age is only reached once per town.
+    // ⚠️ per TOWN: refounding on the ruins really is a new first time, so the
+    // mark resets when the founding register moves.
+    const fnd = s.foundings || 1;
+    if (this._ageFnd !== fnd) { this._ageFnd = fnd; this._ageSeen = ageI; }
+    else if (this._ageSeen == null) this._ageSeen = ageI;
+    else if (ageI > this._ageSeen) {
+      this._ageSeen = ageI;
+      if (this.app && this.app.sfx) this.app.sfx.chime();
+    }
     $('hud').innerHTML = `<b>day ${s.day}</b><span class="agechip">${AGES[ageI].name}</span>`;
     // ── THE LAST PAGE ──────────────────────────────────────────
     // Real loss is allowed here — Kyle's call — so when the last kin dies the

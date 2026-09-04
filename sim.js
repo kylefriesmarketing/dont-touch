@@ -895,6 +895,22 @@ export class Sim {
       return true;
     };
     let bx = x0, by = y0, bs = -1e9, found = false;
+    // ⚠️⚠️ WIDENING THIS SCAN WAS TRIED, MEASURED AND REVERTED (2026-09-04).
+    // A review found that at ±8 the scan fails on roughly a third of calls in a
+    // mature town and the fallback then plants the work at the inventor's exact
+    // FEET — on ground `ok()` had just refused. True, and it sounds obviously
+    // worth fixing. Widening to [8, 14, 20] was measured on ONE seed (alive
+    // 138 → 142) and looked like a win. Across FOUR seeds it is a 30% population
+    // COLLAPSE: alive 545 vs 776, works BUILT 55 vs 92 and 111 vs 140, mean
+    // distance from the hearth up 20-35%. Pushing a work further out to satisfy
+    // the spacing rule costs more in walking than a badly-sited building costs
+    // in anything else — a scattered town starves.
+    // ⚠️ SINGLE-SEED COMPARISONS OF THIS GAME ARE NOISE. That is written twice
+    // already in HANDOFF and it has now burned a third time, in a review's own
+    // recommendation. A real fix has to find a NEARER legal cell (a BFS out from
+    // the inventor), not a farther one — and it is a design change, not a review
+    // patch. The feet fallback stays until somebody builds that.
+    {
     for (let dy = -8; dy <= 8; dy++) for (let dx = -8; dx <= 8; dx++) {
       const x = Math.round(x0 + dx), y = Math.round(y0 + dy);
       if (!ok(x, y)) continue;
@@ -909,6 +925,7 @@ export class Sim {
         sc -= off * (age >= 5 ? 2.8 : 2.0);
       }
       if (sc > bs) { bs = sc; bx = x; by = y; found = true; }
+    }
     }
     if (found && useLattice) {
       if (this._beat == null) this._beat = {};
@@ -1007,7 +1024,23 @@ export class Sim {
 
   _name(id, why) {
     if (this.k.nameId[id] >= 0) return this.names[this.k.nameId[id]];
-    const nm = coinName(this.lang, this.rng);
+    // ⚠️⚠️ A NAME HAS TO BE UNIQUE OR THE RECORD IS NOT A RECORD. The language
+    // coins from 7 onsets x 5 vowels x 5 codas — about 175 short words — so by
+    // the third generation the town was reusing them, and the book then read as
+    // if a dead kin were still acting and buried the "same person" four times.
+    // This game's whole spine is that the town keeps the only account of itself;
+    // an ambiguous account is worse than none.
+    // ⚠️ `names` is at most a few hundred long and this runs only when somebody
+    // is named for the first time, so the linear scan is free — and unlike a
+    // cached Set it cannot go stale across a restore.
+    // ⚠️ the retries draw from `this.rng`, so the stream still depends only on
+    // the seed. Fingerprints move; that is expected and documented.
+    let nm = coinName(this.lang, this.rng);
+    for (let t = 0; t < 24 && this.names.includes(nm); t++) nm = coinName(this.lang, this.rng);
+    // a genuinely exhausted pool gets a longer word rather than a duplicate
+    for (let t = 0; t < 12 && this.names.includes(nm); t++) {
+      nm += coinName(this.lang, this.rng).toLowerCase();
+    }
     this.k.nameId[id] = this.names.length;
     this.names.push(nm);
     if (why !== 'founder') this.log('name', `${nm} — ${why}.`, 1.4);
@@ -1016,9 +1049,22 @@ export class Sim {
   nameOf(id) { const n = this.k.nameId[id]; return n >= 0 ? this.names[n] : 'a kin'; }
 
   log(kind, text, weight = 1) {
-    // don't say the same sentence four times in a row — it reads as a bug
-    const last = this.chronicle[this.chronicle.length - 1];
-    if (last && last.text === text && this.day - last.day < 8) { last.repeat = (last.repeat || 1) + 1; return; }
+    // don't say the same sentence four times in a row — it reads as a bug.
+    // ⚠️⚠️ A WINDOW, NOT JUST THE PREVIOUS LINE. This inspected only the last
+    // entry, so it collapsed ADJACENT duplicates and missed every interleaved
+    // one — and the town's book is the artifact this whole game exists to
+    // produce. Measured over four 300-day seeds: "one went hungry." was 11-17%
+    // of the entire chronicle, and one seed carried 166 identical copies of
+    // "something hatched near the flat." Scanning back a short window folds
+    // those into a single line with its own repeat count, which is what the
+    // `repeat` field was always for.
+    // ⚠️ bounded to the last 14 entries so this stays O(1) per call on a book
+    // that runs to thousands of lines.
+    for (let q = this.chronicle.length - 1, seen = 0; q >= 0 && seen < 14; q--, seen++) {
+      const e = this.chronicle[q];
+      if (this.day - e.day >= 8) break;              // the window is days, not just entries
+      if (e.text === text) { e.repeat = (e.repeat || 1) + 1; return; }
+    }
     const c = (this.eventCounts.get(kind) || 0) + 1;
     this.eventCounts.set(kind, c);
     // rarity ranking (§12.2): the rarer the kind, the higher the score
@@ -1681,7 +1727,18 @@ export class Sim {
       // fills as a town, not as a carpet.
       const perEff = (W.per || 10) * (pr.tradition >= 0 ? 0.6 : 1);
       const room = Math.max(1, Math.min(W.cap, Math.ceil(this.alive / perEff)));
-      if (unfinished || (mine >= room && !relearning)) continue;
+      // ⚠️⚠️ AN ABANDONED FOUNDATION USED TO DELETE A RUNG FROM THE GAME.
+      // A site never rots before it is finished (`o.done` is set only at
+      // WORK_DONE, and both the decay and the merge are gated on it), so if the
+      // last knower died mid-build, `unfinished` stayed true FOREVER — _weave
+      // never evaluated another candidate for that rung again, and every rung
+      // listing it in `pre` died with it. Measured unattended: one seed lost the
+      // school on day 67 and could therefore never reach the little lights.
+      // The empty foundation IS the standing thing nobody understands any more.
+      // It should invite the archaeology, not forbid it.
+      // ⚠️ truth table, R = relearning: R false → U || M, identical to before;
+      // R true → false, the only change. No new state, no new rng draw.
+      if (!relearning && (unfinished || mine >= room)) continue;
 
       // you cannot think of a thing until you know the things it is made of
       if (W.pre) {
@@ -1781,7 +1838,19 @@ export class Sim {
         this.works.push({ id: this.workSeq++, kind: wi, x: sx2, y: sy2, prog: 0, by: k.nameId[best], day, stock: 0 });
       }
 
-      const nm = this._name(best, `who first made ${W.name}`);
+      // ⚠️⚠️ NAME THEM FOR WHAT THEY ACTUALLY DID. This said "who first made X"
+      // unconditionally — but `_name` only writes its line when the kin was
+      // previously UNNAMED, and a genuine first inventor is usually already
+      // named (they are the busy one), while the unnamed kin reaching this point
+      // are almost always LEARNERS. Measured across four seeds: 171 lines of
+      // "who first made X" and not one of them was true. The branch below
+      // already knows which of the four this is, and every term it tests is
+      // still unmutated here, so the reason can simply be worked out first.
+      const why = pr.invented < 0 ? `who first made ${W.name}`
+        : pr.lost >= 0 ? `who worked out ${W.name} again`
+        : !known ? `who learned ${W.name}`
+        : `who knows ${W.name}`;
+      const nm = this._name(best, why);
       if (pr.invented < 0) {
         pr.invented = day; pr.inventor = k.nameId[best]; pr.inventorGone = -1;
         this.log('invented', `${nm} ${W.made}. nobody had done that before.`, 6.0);
@@ -2797,6 +2866,13 @@ export class Sim {
     k.alive[id] = 0;
     this.free.push(id);
     this.stats.died++;
+    // ⚠️ `this.alive` is a CACHE recomputed at the tail of _kin, which only runs
+    // inside a tick — so the death paths reachable from OUTSIDE one (smite and
+    // takeAway, both driven straight off the player's hand) left the count one
+    // too high until the next step: the strip, the book and the weave's `room`
+    // all read a kin who was already gone. Decrementing is self-correcting,
+    // because _kin assigns rather than adjusts.
+    if (this.alive > 0) this.alive--;
     if (k.stage[id] !== STAGE.EGG && !noBody) {
       this.corpses.push({ x: k.x[id], y: k.y[id], nameId: k.nameId[id], gen: k.gen[id], t: this.tick, cause, claim: -1, glued: k.glued[id] ? 1 : 0 });
       if (this.corpses.length > 24) this.corpses.shift();
@@ -2901,11 +2977,20 @@ export class Sim {
     // falling back out of an age is a real event and reads as one.
     {
       const a = this.ageNow();
+      // ⚠️⚠️ THE ARRIVAL SENTENCE IS ONCE IN A TOWN'S HISTORY. `ageNow()` is an
+      // uncached scan for works STANDING at prog >= WORK_DONE, so a hall under
+      // repair or a ruin decaying past the line drops the age — and the climb
+      // back used to re-fire `AGES[a].said`, the line that announces reaching
+      // that rung for the first time. Measured on one seed: the little lights
+      // "arrived" six times in ninety days. `ageBest` was computed on the very
+      // next line and consulted by nobody.
+      const firstTime = a > this.ageBest;
       if (a > this.ageBest) this.ageBest = a;
       if (this.age == null) this.age = a;
       else if (a > this.age) {
         this.age = a;
-        this.log('age', `${AGES[a].name}: ${AGES[a].said}`, 4);
+        if (firstTime) this.log('age', `${AGES[a].name}: ${AGES[a].said}`, 4);
+        else this.log('ageback', `they were back to ${AGES[a].name}.`, 2.4);
       } else if (a < this.age) {
         this.age = a;
         this.log('age', `it went back to ${AGES[a].name}.`, 3.4);
@@ -3396,16 +3481,18 @@ export class Sim {
     this.held = null;
     if (!this.k.alive[id]) return false;
     this._die(id, 'taken', true);
-    // ⚠⚠ `alive` IS A CACHED AGGREGATE AND THIS IS THE ONE KILL THAT HAPPENS
-    // OUTSIDE THE TICK. Every other death runs inside _kin(), which recomputes
-    // the count at the end of the same pass -- but the player can take somebody
-    // between ticks, and until the next tick `this.alive` was one too high.
-    // That matters because fingerprint() folds it: a save written in that gap
-    // restored to a DIFFERENT hash than the town it came from (caught by the
-    // round-trip test at 31 vs 30), which is the harness reporting a desync
-    // that was never real. Same rule as _kin's own count -- every live slot,
-    // eggs included -- so one fewer is exactly right.
-    if (this.alive > 0) this.alive--;
+    // ⚠⚠ `alive` IS A CACHED AGGREGATE AND KILLS CAN HAPPEN OUTSIDE THE TICK.
+    // Every death inside _kin() is fixed up by the recount at the end of that
+    // pass, but the player can take — or smite — somebody BETWEEN ticks, and
+    // until the next one `this.alive` was one too high. That matters because
+    // fingerprint() folds it: a save written in that gap restored to a DIFFERENT
+    // hash than the town it came from (caught by the round-trip test at 31 vs
+    // 30), which is the harness reporting a desync that was never real.
+    // ⚠️ THE DECREMENT NOW LIVES IN `_die`, which is the one funnel every death
+    // passes through, so `smite()` is covered too — it had exactly this bug and
+    // nothing had patched it. Do NOT decrement here as well: this method calls
+    // _die, and the pair took the count DOWN BY TWO, which broke this very
+    // round-trip test in the other direction.
     return true;
   }
 

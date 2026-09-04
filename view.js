@@ -471,12 +471,22 @@ export class View {
       // side's LOWEST rim point: the interior cannot be covered because no
       // apron geometry exists inside [-GR, GR]² at all.
       const AP = 7;                       // half-widths of land in every direction
+      // ⚠️⚠️ SEAT FROM THE RENDERED SURFACE, NOT THE RAW GRID. `cellToLocal`
+      // returns height[i]*YS with NO edge ease, but the ground mesh is built
+      // from _surfaceY, which eases the last 3% of the board down to EDGE_Y (the
+      // embankment flare that stopped the layout reading as a green cake in a
+      // tin). Seating the apron on the raw rim therefore put all four slabs
+      // 0.09–0.15 ABOVE the ground they extend — a ledge running right around
+      // the world, on every hilly-rimmed seed. This is the THIRD apron defect
+      // in this file's history and the second caused by measuring the board with
+      // a different function than the one that draws it: seat the apron with the
+      // same call the mesh uses, or it will not line up.
       const sideMin = { n: 1e9, s: 1e9, w: 1e9, e: 1e9 };
       for (let c = 0; c < N; c++) {
-        sideMin.n = Math.min(sideMin.n, this.cellToLocal(c, 0, 0)[1]);
-        sideMin.s = Math.min(sideMin.s, this.cellToLocal(c, N - 1, 0)[1]);
-        sideMin.w = Math.min(sideMin.w, this.cellToLocal(0, c, 0)[1]);
-        sideMin.e = Math.min(sideMin.e, this.cellToLocal(N - 1, c, 0)[1]);
+        sideMin.n = Math.min(sideMin.n, this._surfaceY(c, 0));
+        sideMin.s = Math.min(sideMin.s, this._surfaceY(c, N - 1));
+        sideMin.w = Math.min(sideMin.w, this._surfaceY(0, c));
+        sideMin.e = Math.min(sideMin.e, this._surfaceY(N - 1, c));
       }
       // ⚠ CLAMPED, NOT TILED — the board's own square maps to [0,1] in UV, so
       // everything beyond it samples the board's EDGE PIXEL smeared outward and
@@ -3153,7 +3163,12 @@ export class View {
     const ct = this.coverT;
     // pulled off, the sheet slides clear of the board and crumples beside it —
     // it does not vanish. Dad will notice it moved.
-    this.cover.position.set(ct * BOARD * 2.1, EDGE_Y + 0.03 - ct * 0.34, ct * 0.16);
+    // ⚠️ THE DROP WAS 0.34 AND IT MADE THE SHEET DO EXACTLY WHAT THIS COMMENT
+    // SAYS IT MUST NOT: at ct=1 the pose landed at y = -0.275, far under the
+    // apron floor (~0.02), so pulling the lid off deleted the sheet from the
+    // picture instead of slumping it beside the board. 0.035 puts it down ON
+    // the surrounding land, which is where a sheet you pulled off a table goes.
+    this.cover.position.set(ct * BOARD * 2.1, EDGE_Y + 0.03 - ct * 0.035, ct * 0.16);
     this.cover.rotation.z = -ct * 0.40;
     this.cover.scale.set(1 - ct * 0.42, 1 - ct * 0.60, 1 - ct * 0.10);
     this.fogMesh.material.opacity =
@@ -3340,7 +3355,14 @@ export class View {
     let n = -1;
     for (let i = 0; i < this.kinCount; i++) if (this.kinScreen[i] === id) { n = i; break; }
     if (n < 0) { r.visible = false; return; }
-    r.position.set(this.lanternPos[n * 3], 0.0016, this.lanternPos[n * 3 + 2]);
+    // ⚠️ THE RING HAS TO CLIMB WITH THEM. x and z rode the figure and y was a
+    // literal 0.0016 — the board's floor — so on a hill, a plateau or anywhere
+    // dad's thumb had raised the ground, the highlight sat a body-height or more
+    // BELOW the creature it was pointing at. Same call _paintKin plants the feet
+    // with, so the ring and the toy can never disagree about the ground.
+    r.position.set(this.lanternPos[n * 3],
+      this.cellToLocal(k.x[id], k.y[id], 0.0016)[1],
+      this.lanternPos[n * 3 + 2]);
     this._hoverT = (this._hoverT || 0) + dt;
     const p = 1 + Math.sin(this._hoverT * 4.2) * 0.10;
     r.scale.set(p, 1, p);

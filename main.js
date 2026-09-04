@@ -133,8 +133,22 @@ class App {
       // its UI — the player's only route back was clearing site data. Now the
       // unreadable blob is set aside under its own key (so the 25s autosave
       // cannot overwrite the evidence) and the town starts again.
+      // ⚠️⚠️ A MISSING WORLD FILE IS NOT A CORRUPT SAVE, AND THIS COST A TOWN.
+      // loadWorld swallows a 404 or an offline fetch and returns null; fromJSON
+      // then throws its deliberate 'this colony lives in "<name>"' guard, which
+      // landed in the SAME catch as an unreadable blob. So one flaky request
+      // filed a real town away under a key nothing reads back, handed the player
+      // a day-0 colony under the "you left it in the dark" line, and let the 25s
+      // autosave make it permanent. Load the world BEFORE the try and refuse to
+      // boot if it is missing: the save is then untouched, and a reload with the
+      // file back opens the town exactly where it was.
+      const wantWorld = saved.state && saved.state.worldName;
+      world = await loadWorld(wantWorld);
+      if (wantWorld && !world) {
+        throw new Error('could not load the world this colony lives in (“' + wantWorld +
+          '”). your town is safe and still saved — check your connection and reload.');
+      }
       try {
-        world = await loadWorld(saved.state && saved.state.worldName);
         this.sim = Sim.fromJSON(saved.state, world);
         away = Math.min(Date.now() - (saved.at || Date.now()), 24 * 3600e3);
       } catch (e) {
@@ -174,6 +188,19 @@ class App {
     if (params.has('pause')) this.setSpeed(0);
 
     addEventListener('resize', () => this.view.resize());
+    // ⚠️ sfx.js had NO page-lifecycle layer at all: the four continuous beds
+    // (hum, air, rain, drone) are started once and never stopped, so a
+    // backgrounded tab kept droning frozen at its last values — and a context
+    // suspended by an app-switch was never woken, which silenced the game for
+    // the rest of the session. The room goes quiet when nobody is looking at it
+    // and comes back when they do. The sim keeps running either way; that is
+    // the point of the away page.
+    addEventListener('visibilitychange', () => {
+      const c = this.sfx && this.sfx.ctx;
+      if (!c) return;
+      if (document.hidden) c.suspend().catch(() => {});
+      else if (this.phase === 'play') c.resume().catch(() => {});
+    });
     setInterval(() => this.save(), 25000);
     addEventListener('beforeunload', () => this.saveSummary());
     requestAnimationFrame(() => this.frame());
@@ -222,6 +249,13 @@ class App {
   // sheet is simply whatever sim.lid already says. View-only, cleared by enter().
   showTitle(hasSave) {
     this.phase = 'title';
+    // ⚠️ the KEYBOARD route into the game (the Enter/Space branch in bindInput)
+    // has no `hasSave` in scope, so it entered with `fresh === undefined` and
+    // never pulled the bulb on for a brand-new town — the chain says "pull the
+    // light on" and typing Enter left the room dark. `lampOn` is persistent AND
+    // fingerprinted, so two players on one seed diverged on whether they had
+    // clicked the chain or pressed a key.
+    this.fresh = !hasSave;
     this.paused = true;
     const t = document.getElementById('title');
     t.classList.remove('hide', 'going');
@@ -241,7 +275,9 @@ class App {
     };
   }
 
-  enter(fresh) {
+  // ⚠️ `fresh` defaults to what showTitle worked out, so the keyboard route and
+  // ?skiptitle inherit it; the chain's own `enter(!hasSave)` still overrides.
+  enter(fresh = this.fresh) {
     if (this.phase === 'play') return;
     this.phase = 'play';
     // the chain pull is the browser's audio gesture, so this is the first
@@ -335,7 +371,7 @@ class App {
   // -- input ---------------------------------------------------------------
   bindInput(canvas) {
     const s = this.sim, v = this.view;
-    let down = false, mode = null, sx = 0, sy = 0, moved = 0, lastPrint = 0;
+    let down = false, mode = null, sx = 0, sy = 0, moved = 0, lastPrint = 0, pid = null;
     const norm = (e) => {
       const r = canvas.getBoundingClientRect();
       return [((e.clientX - r.left) / r.width) * 2 - 1, -(((e.clientY - r.top) / r.height) * 2 - 1)];
@@ -345,6 +381,21 @@ class App {
 
     canvas.addEventListener('pointerdown', (e) => {
       if (this.phase !== 'play') return;
+      // ⚠️⚠️ ONE HAND AT A TIME. `down` and `mode` are single closure variables
+      // shared by every contact, so a resting thumb landing mid-hold overwrote
+      // mode='reach' — and the first release then ran the WRONG branch, which
+      // never calls setDown. A lifted kin stayed in the air forever: re-reaching
+      // is gated on !s.held, lift() then refuses everyone, and `held` survives
+      // the save. Even pointercancel's rescue could not reach them, because it
+      // also tests mode === 'reach'.
+      // ⚠️ the release path is filtered too (in `up`), and that half is not
+      // optional: without it a second finger's pointerup runs the first
+      // finger's reach branch with the SECOND finger's coordinates, and off the
+      // board that is takeAway() — an irreversible death from a stray thumb.
+      // hasPointerCapture makes this self-healing: if the first pointer's up was
+      // ever lost, its capture is gone and the next contact takes over.
+      if (down && e.pointerId !== pid && canvas.hasPointerCapture(pid)) return;
+      pid = e.pointerId;
       this.sfx.start();
       canvas.setPointerCapture(e.pointerId);
       down = true; moved = 0; sx = e.clientX; sy = e.clientY;
@@ -483,8 +534,16 @@ class App {
         }
       }
 
-      if (!down) return;
-      moved += Math.abs(e.clientX - sx) + Math.abs(e.clientY - sy);
+      if (!down || (pid !== null && e.pointerId !== pid)) return;   // a stray contact does not steer the hand
+      // ⚠️ FURTHEST DISPLACEMENT FROM THE PRESS, NOT A RUNNING SUM. sx,sy are
+      // rebased only in the orbit branch below, so `+=` re-added the same offset
+      // on every single move event and `moved` became a TIME-INTEGRAL: a finger
+      // resting 3px off the press point (a capacitive contact wanders 1-3px
+      // continuously at 60Hz) crossed the 26px reach-cancel about 120ms into a
+      // 900ms hold, so mend/strike/still/lift kept dying under a steady finger.
+      // MAX, not current, so a drag that swings out and comes back still counts
+      // as having moved. Never read in orbit mode, where sx,sy do rebase.
+      moved = Math.max(moved, Math.hypot(e.clientX - sx, e.clientY - sy));
       const dx = (e.clientX - sx) / innerWidth, dy = (e.clientY - sy) / innerHeight;
       if (mode === 'orbit') {
         v.orbit.tAz -= dx * 3.4;
@@ -531,8 +590,11 @@ class App {
     });
 
     const up = (e) => {
-      if (!down) return;
-      down = false;
+      // ⚠️ only the contact that STARTED this gesture may end it — see the
+      // pointerdown note. Letting a stray thumb's release run the reach branch
+      // could call takeAway() with the wrong coordinates.
+      if (!down || (pid !== null && e && e.pointerId !== undefined && e.pointerId !== pid)) return;
+      down = false; pid = null;
       if (mode === 'reach') {
         const [nx2, ny2] = norm(e);
         const hit = v.pickGround(nx2, ny2);
@@ -600,9 +662,10 @@ class App {
     // its own gestures all the time, and 'the browser took my finger' is not an
     // acceptable cause of death in a game with no undo. Cancel always sets down.
     canvas.addEventListener('pointercancel', (e) => {
+      if (pid !== null && e.pointerId !== pid) return;   // not the hand's own contact
       if (mode === 'reach') {
         if (s.held) { const k = s.k, id = s.held.id; s.setDown(k.x[id], k.y[id]); }
-        this.reach = null; this.heldCell = null; mode = null; down = false;
+        this.reach = null; this.heldCell = null; mode = null; down = false; pid = null;
         if (v.setHandDisc) v.setHandDisc(null);
         return;
       }
@@ -819,7 +882,16 @@ class App {
       if (this.view.setReach) this.view.setReach(this.reach.id, f, this.reach.power || 'lift');
       if (f >= 1) {
         const id = this.reach.id, p = this.reach.power || 'lift';
-        if (p === 'lift') { this.sim.lift(id); this.sfx.mutate(); }
+        // ⚠️ the lift branch must clear the reach like every other one does.
+        // It used to rely on `sim.held` becoming truthy to end the block — but
+        // when lift() REFUSES (the target died during the 900ms hold, or is
+        // already held) `held` stays null, the completed reach re-fires every
+        // frame, and the sound retriggers at 60Hz until the pointer is released.
+        if (p === 'lift') {
+          this.sim.lift(id); this.sfx.mutate();
+          this.reach = null;
+          if (this.view.setReach) this.view.setReach(-1, 0);
+        }
         else {
           const kx = this.sim.k.x[id], ky = this.sim.k.y[id];
           const V = this.view.vfx;

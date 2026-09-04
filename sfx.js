@@ -7,6 +7,15 @@ export class Sfx {
   }
 
   start() {
+    // ⚠️⚠️ ONE SUSPEND USED TO KILL SOUND FOR THE WHOLE SESSION. This was an
+    // unconditional early return with no state check, and nothing anywhere in
+    // the repo ever called resume(). So a context created before a real user
+    // gesture (autoplay policy), or suspended by a phone app-switch, stayed
+    // suspended forever: every later start() bailed on `ready`, and the game
+    // went permanently silent with no way back short of a reload. The chain
+    // pull is the gesture the fiction already gives us — so every call is now
+    // a chance to wake the context back up.
+    if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume().catch(() => {});
     if (this.ready) return;
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
@@ -208,5 +217,30 @@ export class Sfx {
   death() { this._blip(150, 1.1, 'sine', 0.055); }
   mutate() { [0, 120, 240, 380].forEach((d, i) => setTimeout(() => this._blip(520 * Math.pow(1.26, i), 0.5, 'sine', 0.045), d)); }
   lid() { this._blip(90, 0.7, 'sawtooth', 0.035); }
-  thunder() { this._blip(60, 1.6, 'sine', 0.06); }
+  // ⚠️ THIS WAS A 60 Hz SINE AND THE BASEMENT HUM IS 59.5 Hz. The two beat
+  // against each other at half a hertz, so the one cue that rain is coming
+  // arrived as a slight wobble in the room tone and nothing else. A far-off
+  // roll is a SWEEP through a closing filter — it cannot hide inside a fixed
+  // pitch, and the downward glide is most of what reads as distance.
+  thunder() {
+    if (!this.ready || this.muted) return;
+    const c = this.ctx, t = c.currentTime;
+    const g = c.createGain();
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(0.085, t + 0.09);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 2.2);
+    const lp = c.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(320, t);
+    lp.frequency.exponentialRampToValueAtTime(70, t + 2.0);
+    for (const [f0, f1, det] of [[104, 34, 0], [97, 31, 7]]) {
+      const o = c.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.setValueAtTime(f0, t);
+      o.frequency.exponentialRampToValueAtTime(f1, t + 1.9);
+      o.detune.value = det;
+      o.connect(lp); o.start(t); o.stop(t + 2.25);
+    }
+    lp.connect(g); g.connect(this.master);
+  }
 }
