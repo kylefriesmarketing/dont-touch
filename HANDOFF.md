@@ -2571,3 +2571,77 @@ slot — a FOUNDER, the oldest kin on the board — and the measured pick was ag
 2-day run. A held kin ageing out is correct (the held branch checks lifespan on
 purpose). The test now lifts somebody with 10+ days left, because otherwise it
 is asserting that the hand defeats mortality.
+
+---
+
+## 🌍 THE BIGGER WORLD (2026-09-09) — more cells, same meaning per cell
+
+Kyle: *"the map is too small and congested — these guys need a whole world"*,
+then *"fix the grid as well and still make it closer to the instagram reference."*
+Measured first: at 96 the town spanned 71 × 61 cells edge to edge (47% of the
+board) with nowhere to grow, and the street pitch (5.6) could not seat a hall
+(needs 6.8), so the grid fell apart around the town's most important building.
+
+**THE DESIGN — and the one trick it rests on.** `C.N` is 144 now (2.25× the
+cells), and **`S` is PINNED to `96 / 64` and no longer follows `C.N`.** The old
+law "N is a resolution, not a size" was true precisely BECAUSE S rose with N:
+every cell-distance scaled, so a finer grid was the same world. Pinned, a cell
+keeps meaning exactly what it meant — same walk speed, same forage reach, same
+building footprint in cells — and there are simply more of them. Nothing in the
+~92 `S` sites was touched. **Do not "fix" S back to `C.N / 64`.**
+- **N is PER INSTANCE**: `(opts.world && opts.world.N) || opts.N || C.N`. A baked
+  world brings its own N (keswick is 96 and stays 96); `fromJSON` infers a save's
+  N from `fields.temp.length` (and now writes `o.N` explicitly), so every
+  existing 96-grid save loads at 96, byte-identical. Without that inference the
+  existing mismatch guard would have REFUSED every player's town and boot()
+  would have filed it away as broken.
+- **`this.area = (N/96)²`** is the true board-area factor for the FIVE things that
+  are absolute amounts spread over the whole board (initial humid, rain per
+  step, the cloud threshold, the breath, the lid's take). `S²` used to play this
+  role and was only right at N=96. Everything else that used `S*S` is a
+  DISTANCE² and stays on S.
+- `CAP` 640 → 1400 (2.25× the ground; at CAP the spawn silently fails).
+- `PITCH` 5.6 → 7.0, now that a wider street is affordable.
+
+**THE VIEW — `cs = 96 / N`.** The board is a fixed physical thing (GR), so a
+cell is now 2/3 the world-size it was, and everything that lives ON a cell
+shrinks by `cs`: figures (size, feet offset, glow), works (`S * cs`, both the
+finished and the build-progress scale), graves, scenery, grass/rocks/buds, the
+hover ring, the polaroid's lens distance and offsets, and `YSv = YS * cs` so a
+hill the same cells wide is the same cells tall (slopes unchanged). The camera's
+default zoom, near limit, wheel step and `EL_NEAR_DIST` all take `cs` too, or a
+2/3-size figure could never be watched up close. **Board-frame things do NOT
+scale** — track, station, loco, apron, cover, fascia — they frame the table.
+Baked worlds and old saves arrive at N=96 → cs=1: byte-identical to before.
+The display terrain follows N (`SUB=2` → 287² verts at 144, ~2.25× today's); vfx
+already derives cell size from `GR/N` and needed nothing.
+
+**MEASURED, four seeds, 300 days at 144:** alive 269 / 326 / 366 / 276 (all reach
+the last age), works 141 / 143 / 127 / 130, town 34–46% of a board 2.25× the
+area, **on-grid 41 / 50 / 39 / 51% with median offset 1.77 / 0.42 / 2.04 / 0.00**
+— on half the seeds the median building now sits exactly on the street. Legacy
+96 save → loads at 96, hash-equal; baked keswick → N 96; determinism @144
+identical; 144 save round-trip hash-equal.
+⚠️ **COST**: 250–460 s per 300-day seed against ~100 s at 96 — roughly 3× per
+day. The gate is correspondingly slower; budget for it.
+⚠️ **THE FOREST IS INSTANCED AND NEVER GOES THROUGH `put()`.** The first 144
+photograph had a tree two houses wide: `put()` took the cell scale, but the
+bottle-brush trees are recorded into arrays and built as three InstancedMeshes
+by `mkIM`, which composes its own matrices — so `cs` has to be folded in THERE
+(cy offset and all three scale axes). Anything else that builds instance
+matrices by hand needs the same. Verified by a matched pair at the same day
+(W-mid → W2-mid: only the trees changed).
+⚠️ **THE GATE COSTS 2¼ HOURS AT 144** (8095 s: the 400-day untouched-town test
+alone is 76 min, the 300-day report block ~6 min). Run it in the background
+and get on with view work; a filtered `_tf.mjs` run still pays the report
+block, so budget ~10 min even for three short tests.
+⚠️ **TWO TESTS WERE PASSING ON 96-GRID LUCK, NOT ON THE FEATURE.**
+- The channel and ridge tests took the first wet cell from row 6 — which is
+  OUTSIDE the jar (`inJar` is a 0.455 circle), where `shape()` correctly
+  refuses to dig. At 96 the trench happened to cross the rim and its last
+  six cells got dug; at 144 the rim curves away from row 6 and not one cell
+  moved. Both scans now require `inJar` for the pond cell and the trench end.
+- The organisation test carried its own copy of the street pitch (5.6). The
+  pitch moved to 7.0 and a house standing exactly on the new street read as
+  1.98 cells off the old one. `STREET_PITCH` is exported from sim.js now and
+  the test reads it — never copy a tuning number into a test.

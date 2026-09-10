@@ -3,7 +3,7 @@
 // Invariant 4: every era gets a soak, zero errors, no NaN, nothing outside the jar.
 
 import { readFileSync } from 'node:fs';
-import { Sim, C, LOCI, L, expressed, NEEDS, STAGE, makeRNG, S, WORKS, WORK_AT, WORK_DONE, AGES, STOCK_CAP } from './sim.js';
+import { Sim, C, LOCI, L, expressed, NEEDS, STAGE, makeRNG, S, WORKS, WORK_AT, WORK_DONE, AGES, STOCK_CAP, STREET_PITCH } from './sim.js';
 
 let pass = 0, fail = 0;
 // ⚠️ the battery is a GATE — the house rule is to run it after every sim
@@ -823,8 +823,16 @@ t('water runs down a channel the player dug', () => {
   const s2 = fixture('hollow', 40);
   const N = s2.N;
   let px = -1, py = -1;
+  // ⚠️ INSIDE THE JAR, TRENCH AND ALL. This scan used to take the first wet
+  // cell from row 6 — which is OUTSIDE the jar (inJar is a 0.455 circle), where
+  // shape() correctly refuses to dig. At 96 the trench happened to run far
+  // enough to cross the rim and the last six cells got dug; at 144 the rim
+  // curves away from row 6 entirely and not one cell moved. The test passed
+  // on geometry luck, not on the feature. Pick a pond cell the player could
+  // actually stand at, with the whole trench inside the jar too.
   for (let y = 6; y < N - 6 && px < 0; y++) for (let x = 6; x < N - 6; x++) {
-    if (s2.water[s2.idx(x, y)] > 0.03) { px = x; py = y; break; }
+    const d = x < N / 2 ? 1 : -1;
+    if (s2.inJar(x, y) && s2.inJar(x + d * 10, y) && s2.water[s2.idx(x, y)] > 0.03) { px = x; py = y; break; }
   }
   ok(px >= 0, 'the world had no pond to dig out of');
   // cut a trench away from the water, digging each cell as we go
@@ -851,8 +859,9 @@ t('a raised ridge sheds the water off itself', () => {
   const s2 = fixture('ridge', 40);
   const N = s2.N;
   let px = -1, py = -1;
+  // same jar guard as the channel test above, for the same reason
   for (let y = 6; y < N - 6 && px < 0; y++) for (let x = 6; x < N - 6; x++) {
-    if (s2.water[s2.idx(x, y)] > 0.05) { px = x; py = y; break; }
+    if (s2.inJar(x, y) && s2.water[s2.idx(x, y)] > 0.05) { px = x; py = y; break; }
   }
   ok(px >= 0, 'no water to push off anything');
   const before = s2.water[s2.idx(px, py)];
@@ -1542,7 +1551,7 @@ t('organization grows with the age — huddle first, streets later', () => {
   b.works.push({ id: 902, kind: WORK_AT.granary, x: b.hearth.x, y: b.hearth.y + 9, prog: 1, by: -1, day: 0, stock: 0 });
   eq(b.ageNow(), 3, 'hut+farm+granary is the kept winter');
   // site from a spot deliberately OFF the street grid, with clear ground
-  const PITCH = 5.6;
+  const PITCH = STREET_PITCH;   // ⚠️ the sim's own number, never a copy
   const nx = b.hearth.x + PITCH * 2, ny = b.hearth.y - PITCH;   // a far corner, clear of the three works
   const [sx, sy] = b._siteWork(WORK_AT.house, nx + 2, ny + 2);
   const lx = (sx - b.hearth.x) / PITCH, ly = (sy - b.hearth.y) / PITCH;

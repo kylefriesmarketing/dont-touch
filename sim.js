@@ -45,7 +45,12 @@ export const tcos = (t) => tsin(t + 0.25);
 // 1. CONSTANTS — all tuning lives here (bible §16.1: data changes touch one file)
 // ---------------------------------------------------------------------------
 export const C = {
-  N: 96,                 // heightfield resolution
+  // ⚠️⚠️ THE BIGGER WORLD (2026-09-09). 144, not 96 — 2.25x the cells. This is
+  // the size of a GENERATED world; a baked world keeps the N it was baked at
+  // and a save is loaded at the N it was written at (fromJSON infers it), so
+  // nothing that already exists changes shape. See S below for why every
+  // radius in the game is untouched by this number.
+  N: 144,                // heightfield resolution of a GENERATED world
   // ⚠️⚠️ TICK_HZ IS THE ONLY REAL-TIME KNOB IN THE WHOLE PROJECT, and it is
   // used in exactly ONE place: the frame accumulator in main.js. Raising it
   // replays the IDENTICAL tick sequence faster in wall-clock — the simulation,
@@ -63,7 +68,10 @@ export const C = {
   // ⚠️ headroom over the observed peak, not a tuning number. The grid battery
   // measured peaks to 318 at N=96; at CAP the spawn simply fails and breeding
   // stops dead, which reads as a bug rather than a limit. Costs one array slot.
-  CAP: 640,              // max kin
+  // ⚠️ 1400, not 640: the 96-grid peaked ~430 alive at day 300 in the trades
+  // battery; a 144-grid has 2.25x the ground. At CAP the spawn silently fails
+  // and breeding stops dead, which reads as a bug rather than a limit.
+  CAP: 1400,             // max kin
 
   // The basement, degrees. ⚠️ A TRUE CONSTANT — never assign to it. The room's
   // real temperature follows the calendar and lives on the Sim instance as
@@ -136,7 +144,14 @@ const HEAD_KEEP = 80;
 // how fast a cloud empties — scale with AREA instead, so they take S².
 // ⚠️ Per-cell RATES (EVAP, MOSS_GROW, DIFFUSE, LOSS) must NOT be scaled: they
 // already apply to every cell, so their totals follow the cell count for free.
-export const S = C.N / 64;
+// ⚠️⚠️ S IS PINNED TO 96 AND NO LONGER FOLLOWS C.N. This is the whole trick of
+// the bigger world: S scales every cell-distance in the game, so if it rose
+// with N a 144-grid would be the SAME world sampled finer (the old 'N is a
+// resolution' law). Pinned, a cell keeps meaning exactly what it meant — same
+// walk speed, same forage reach, same building footprint in cells — and there
+// are simply MORE of them. The view shrinks everything that lives on a cell by
+// 96/N so it all fits the same board. Do not 'fix' this back to C.N / 64.
+export const S = 96 / 64;
 const S2 = S * S;
 C.HAND_RADIUS *= S;
 C.SPEED *= S;
@@ -327,6 +342,11 @@ export const AGES = [
 // effects, the era, the chronicle beat and the view must all agree, or a thing
 // can be finished for one system and unfinished for another.
 export const WORK_DONE = 0.98;
+// ⚠️ THE STREET PITCH, exported so the test reads the same number the town
+// builds on. The organisation test used to carry its own copy (5.6) and
+// failed the day the pitch moved to 7.0 — a house standing exactly on the
+// new street read as 1.98 cells off the old one. See _siteWork for why 7.0.
+export const STREET_PITCH = 7.0;
 
 // ---------------------------------------------------------------------------
 // 5. THE SIM
@@ -341,8 +361,16 @@ export class Sim {
     this.rngGene = makeRNG(this.seed ^ 0x2545F491);
     this.lang = makeLang(this.seed);
 
-    const N = C.N, n2 = N * N;
+    // ⚠️ N is PER INSTANCE: a baked world brings its own, a save brings its
+    // own (fromJSON passes opts.N), and only a brand-new generated world takes
+    // C.N. Everything downstream already reads this.N.
+    const N = (opts.world && opts.world.N) || opts.N || C.N, n2 = N * N;
     this.N = N;
+    // ⚠️ AREA, for the five things that are absolute amounts spread over the
+    // whole board — suspended water, how fast a cloud empties, the breath, the
+    // lid's take. S² used to play this role and was only right at N=96; with S
+    // pinned, the real area lives here. 1 at 96, 2.25 at 144.
+    this.area = (N / 96) * (N / 96);
     this.height = new Float64Array(n2);
     // ⚠️⚠️ DAD'S CORNER. `height` is the ONLY field in this world that does not
     // decay — temp runs back to ambient, water evaporates, moss regrows, memory
@@ -465,7 +493,7 @@ export class Sim {
     this.hand = null;          // {x,y} in cell space, or null
     this.tilt = { x: 0, y: 0 };
     this.fog = 0;              // 0..1, the player's breath on the outside
-    this.humid = 5.0 * S2;     // suspended water in the sealed air
+    this.humid = 5.0 * S2 * this.area;     // suspended water in the sealed air (per board AREA)
     this.rainLeft = 0;         // water still to fall from the current cloud
     this.age = null;           // last-seen age; null = ask the board on tick 1
     this.foundings = 1;        // how many times dad has set figures out here
@@ -907,7 +935,12 @@ export class Sim {
     // ⚠ PITCH must EXCEED the widest common spacing need (house+house+gap =
     // 5.6) or adjacent street corners are illegal and the whole lattice is
     // unusable — the first pitch (4.2) did exactly that.
-    const PITCH = 5.6;
+    // ⚠️ 7.0, not 5.6 — the old pitch was exactly house+house+gap and a HALL
+    // (half 3.2) needed 6.8 beside a house, so every hall blocked its own
+    // neighbouring lattice points and the town fell off the grid around its
+    // most important building. Measured before: 20-43% of works on-grid. The
+    // bigger board is what makes a wider street affordable.
+    const PITCH = STREET_PITCH;
     const ok = (x, y) => {
       const i = this.idx(x, y);
       if (!this.inJar(x, y) || this.water[i] > 0.001) return false;
@@ -1231,12 +1264,12 @@ export class Sim {
     // THE WATER CYCLE. The jar is sealed: what evaporates comes back as rain.
     // Open the lid and it doesn't. That is the whole cost of the lid. (§3.4)
     if (this.rainLeft > 0) {
-      const fall = Math.min(this.rainLeft, C.RAIN_PER_STEP * F);
+      const fall = Math.min(this.rainLeft, C.RAIN_PER_STEP * this.area * F);
       this.rainLeft -= fall;
       const add = fall / cells;
       for (let i = 0; i < cells; i++) { W[i] += add; M[i] = Math.min(1, M[i] + 0.004 * F); }
       if (this.rainLeft <= 0) this.rainLeft = 0;
-    } else if (this.humid > C.CLOUD) {
+    } else if (this.humid > C.CLOUD * this.area) {
       this.rainLeft = this.humid * 0.85; this.humid -= this.rainLeft;
       if (this.day - (this._lastRainLog || -99) > 11) {
         this._lastRainLog = this.day;
@@ -1279,7 +1312,7 @@ export class Sim {
       }
     }
     // the player's breath is a cloud you make on purpose
-    if (this.fog > 0.999) { this.humid += 4.5 * S2; this.fog = 0; this.log('breath', 'the air went heavy all at once, and then it rained.', 1.1); }
+    if (this.fog > 0.999) { this.humid += 4.5 * S2 * this.area; this.fog = 0; this.log('breath', 'the air went heavy all at once, and then it rained.', 1.1); }
   }
 
   // ── TENDED GROUND ─────────────────────────────────────────
@@ -3022,7 +3055,7 @@ export class Sim {
       this.log('scorch', `nothing grows on that ground any more.`, 5.0);
     }
     // COVER — the air stops giving its water back
-    if (!this.lid && this.humid < 2.2 * S * S && since('cover', 20)) {
+    if (!this.lid && this.humid < 2.2 * S * S * this.area && since('cover', 20)) {
       this.log('drought', `the air stopped giving anything back.`, 5.0);
     }
     // LIGHT — a night that never came
@@ -3493,7 +3526,7 @@ export class Sim {
     // system — every drop you pour is drawn out of the air that would have
     // rained later, so a player who waters constantly quietly cancels their
     // own weather. Off the sheet, the hand is bringing it in from the house.
-    if (this.lid) this.humid = Math.max(0, this.humid - 0.9 * S * S);
+    if (this.lid) this.humid = Math.max(0, this.humid - 0.9 * S * S * this.area);
     this.log('drop', 'water came down out of nowhere and soaked into the ground.', 3.0);
     return wet > 0;
   }
@@ -3773,7 +3806,7 @@ export class Sim {
 
   toJSON() {
     return {
-      v: 1, seed: this.seed, tick: this.tick, day: this.day, dayFrac: this.dayFrac,
+      v: 1, seed: this.seed, N: this.N, tick: this.tick, day: this.day, dayFrac: this.dayFrac,
       count: this.count, free: this.free.slice(), names: this.names.slice(),
       graves: this.graves, corpses: this.corpses, stats: this.stats,
       works: this.works, prac: this.prac, workSeq: this.workSeq,
@@ -3857,7 +3890,13 @@ export class Sim {
     if (o.worldName && !world) {
       throw new Error('this colony lives in "' + o.worldName + '" — load worlds/' + o.worldName + '.json and pass it to fromJSON');
     }
-    const s = new Sim({ seed: o.seed, founders: 0, world });
+    // ⚠️⚠️ A SAVE IS LOADED AT THE GRID IT WAS WRITTEN AT. C.N moved 96 -> 144
+    // for new worlds; every existing save is a 96-grid and must keep being
+    // one, or the guard just below would refuse it and boot() would file a
+    // real town away as 'broken'. The grid is inferred from the fields the
+    // save already carries (o.N is also written now, and preferred).
+    const nSave = o.N || (o.fields && o.fields.temp ? Math.round(Math.sqrt(o.fields.temp.length)) : undefined);
+    const s = new Sim({ seed: o.seed, founders: 0, world, N: nSave });
     // refuse a save from a differently-shaped world rather than lay it into
     // this one — boot() catches this, keeps the blob, and starts fresh
     const want = s.N * s.N;

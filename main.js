@@ -682,7 +682,11 @@ class App {
       // not the flat 2.75 this used to be — at 2.75 the board covered only 6-86%
       // of the width and the rest was dead grey.
       const far = v.maxDist || 1.6;
-      v.orbit.tDist = Math.max(0.60, Math.min(far, v.orbit.tDist + Math.sign(e.deltaY) * 0.16));
+      // ⚠️ x v.cs: the near limit and the wheel step follow the cell scale,
+      // or on a 144-grid you could never get close enough to a 2/3-size
+      // figure to watch one person do one thing — the whole appeal.
+      const cs = v.cs || 1;
+      v.orbit.tDist = Math.max(0.60 * cs, Math.min(far, v.orbit.tDist + Math.sign(e.deltaY) * 0.16 * cs));
     }, { passive: false });
 
     addEventListener('keydown', (e) => {

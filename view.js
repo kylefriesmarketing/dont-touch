@@ -60,6 +60,15 @@ export class View {
     this.sim = sim;
     this.canvas = canvas;
     this.t = 0;
+    // ⚠️⚠️ THE CELL SCALE. The board is a fixed physical thing (GR) and the
+    // sim's grid grew 96 -> 144, so a cell is now 2/3 the world-size it was.
+    // Everything that lives ON a cell — a figure, a house, a tree, a grave, a
+    // blade of grass, the height of a hill — shrinks by this so it still fits
+    // its cell, and there is simply more world. Baked worlds and old saves
+    // arrive at 96 and get cs = 1: byte-identical to before. Board-frame
+    // things (track, station, apron, cover, fascia) deliberately do NOT scale.
+    this.cs = 96 / sim.N;
+    this.YSv = YS * this.cs;   // a hill the same cells wide must be the same cells tall
 
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
     this.renderer.setClearColor(0x0a0c10, 1);
@@ -95,7 +104,9 @@ export class View {
     // little glowing people you can tell apart. Nothing else changed between the
     // two frames. "Where are the buildings and civilisation" was answered by a
     // number in this line, not by the art and not by the pacing.
-    this.orbit = { az: 0.35, el: 1.16, dist: 1.25, tAz: 0.35, tEl: 1.16, tDist: 1.25 };
+    // ⚠️ x cs: with 2/3-size figures the opening view has to sit 2/3 as far
+    // out to show the town at the size that was tuned (see the note above).
+    this.orbit = { az: 0.35, el: 1.16, dist: 1.25 * this.cs, tAz: 0.35, tEl: 1.16, tDist: 1.25 * this.cs };
     this.panHold = 0;      // seconds the player's own camera walk owns the view
     this.GR = GR;          // the board half-width, so the pan can clamp to it
     // 'jar' by history: this group is THE BOARD — everything that lifts
@@ -125,7 +136,7 @@ export class View {
     // told you what was ABOUT to happen and then the act itself was invisible,
     // which is most of what "unresponsive" meant. Three pooled objects, three
     // draw calls, parented to `jar` so the spectacle tilts with the plywood.
-    this.vfx = new Vfx(this.jar, this, { GR, YS, EDGE_Y });
+    this.vfx = new Vfx(this.jar, this, { GR, YS: this.YSv, EDGE_Y });
     // ⚠️ seeded from the sim, not from zero: a LOADED save can arrive with
     // crumbs already lying on the board, and starting at 0 would puff dust off
     // every one of them on the first frame as if dad had just come downstairs.
@@ -327,7 +338,7 @@ export class View {
     // 0.47 is chosen so the walkable circle (0.455) is never eased.
     const m = Math.max(Math.abs(dx), Math.abs(dy));
     const t = Math.max(0, Math.min(1, (m - 0.47) / 0.03));
-    const h = this.sim.height[this.sim.idx(cx, cy)] * YS;
+    const h = this.sim.height[this.sim.idx(cx, cy)] * this.YSv;
     return h * (1 - t) + EDGE_Y * t;
   }
 
@@ -347,7 +358,7 @@ export class View {
     const dx = x / (N - 1) - 0.5, dy = y / (N - 1) - 0.5;
     const m = Math.max(Math.abs(dx), Math.abs(dy));
     const t = Math.max(0, Math.min(1, (m - 0.47) / 0.03));
-    return (h * YS) * (1 - t) + EDGE_Y * t;
+    return (h * this.YSv) * (1 - t) + EDGE_Y * t;
   }
 
   // -- the ground ------------------------------------------------------------
@@ -1121,7 +1132,7 @@ export class View {
       if (bd < 1e9) yaw = Math.atan2(bx, by) + jit * 0.3;
     }
     g.rotation.y = yaw;
-    g.scale.setScalar(S);          // everything above is written at the 64-grid scale
+    g.scale.setScalar(S * this.cs); // authored at the 64-grid scale, S to 96, cs to the cell
     return g;
   }
 
@@ -1142,7 +1153,7 @@ export class View {
       // pebbles. The FOOTPRINT now always sits at full authored scale and only
       // the HEIGHT ramps, so a half-built work is a half-raised frame instead of
       // a shrunken finished one.
-      g.scale.set(S, S * (0.55 + f * 0.45), S);
+      g.scale.set(S * this.cs, S * this.cs * (0.55 + f * 0.45), S * this.cs);
       g.visible = f > 0.04;
       // the mill turns while it stands; the angle is absolute view-time, so a
       // reload never jumps and a paused frame never drifts
@@ -1211,7 +1222,7 @@ export class View {
         o.position.set(p[0], p[1], p[2]);
         o.rotation.set((rnd() - 0.5) * 0.62, rnd() * 6.283, (rnd() - 0.5) * 0.62);
         const sc = 0.7 + rnd() * 0.75;
-        o.scale.set(sc, sc * (0.72 + rnd() * 0.9), sc);
+        o.scale.set(sc * this.cs, sc * (0.72 + rnd() * 0.9) * this.cs, sc * this.cs);   // a blade fits its cell
         o.updateMatrix();
         grass.setMatrixAt(nb, o.matrix);
         col.setHSL(hue, 0.46 + rnd() * 0.24, 0.15 + m * 0.13 + rnd() * 0.07);
@@ -1230,7 +1241,7 @@ export class View {
       o.position.set(p[0], p[1] + 0.002, p[2]);
       o.rotation.set(rnd() * 3, rnd() * 6.283, rnd() * 3);
       const sc = 0.5 + rnd() * 0.8;
-      o.scale.set(sc, sc * 0.55, sc);
+      o.scale.set(sc * this.cs, sc * 0.55 * this.cs, sc * this.cs);   // a stone fits its cell
       o.updateMatrix();
       rocks.setMatrixAt(nr, o.matrix);
       const v = 0.15 + rnd() * 0.13;
@@ -1249,7 +1260,7 @@ export class View {
       o.position.set(p[0], p[1] + 0.012 + rnd() * 0.008, p[2]);
       o.rotation.set(0, rnd() * 6.283, 0);
       const sc = 0.7 + rnd() * 0.8;
-      o.scale.set(sc, sc, sc);
+      o.scale.set(sc * this.cs, sc * this.cs, sc * this.cs);   // a bud fits its cell
       o.updateMatrix();
       buds.setMatrixAt(nf, o.matrix);
       // dad's scatter: mostly white, some yellow, a little red
@@ -1483,6 +1494,7 @@ export class View {
       const [wx, wy, wz] = this.cellToLocal(x, y, 0);
       mesh.position.set(wx, wy, wz);
       mesh.rotation.y = rnd() * Math.PI * 2;
+      mesh.scale.multiplyScalar(this.cs);   // a tree fits its cell too
       this.jar.add(mesh);
     };
 
@@ -1573,9 +1585,13 @@ export class View {
       for (let i = 0; i < list.length; i++) {
         const t = list[i];
         const [wx, wy, wz] = this.cellToLocal(t.x, t.y, 0);
-        v3.set(wx, wy + t.cy, wz);
+        // ⚠️ x cs: the forest is INSTANCED and never goes through put(), so it
+        // needs the cell scale here or a 144-board grows 96-sized trees — the
+        // first bigger-world photograph had a tree two houses wide.
+        const cs = this.cs;
+        v3.set(wx, wy + t.cy * cs, wz);
         e.set(0, t.ry, 0); q.setFromEuler(e);
-        sc.set(t.sx, t.sy, t.sz !== undefined ? t.sz : t.sx);
+        sc.set(t.sx * cs, t.sy * cs, (t.sz !== undefined ? t.sz : t.sx) * cs);
         m4.compose(v3, q, sc);
         im.setMatrixAt(i, m4);
         if (tinted) im.setColorAt(i, col.setHex(t.color));
@@ -1757,7 +1773,7 @@ export class View {
     for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
       const i = y * N + x, w = s.water[i];
       const ripple = w > 0.004 ? Math.sin(x * 0.7 + wob) * Math.sin(y * 0.6 - wob * 1.3) * 0.0016 : 0;
-      pos.setY(i, (s.height[i] + w) * YS + ripple);
+      pos.setY(i, (s.height[i] + w) * this.YSv + ripple);
       const o = i * 4;
       // depth reads as colour AND as opacity, so a pond has a shallow edge and
       // a middle you cannot see the bottom of
@@ -2091,7 +2107,7 @@ export class View {
     const x = (cx / (N - 1) - 0.5) * GR * 2;
     const z = (cy / (N - 1) - 0.5) * GR * 2;
     const i = this.sim.idx(cx, cy);
-    const y = (this.sim.height[i] + Math.max(0, this.sim.water[i] * 0.4)) * YS + yOff;
+    const y = (this.sim.height[i] + Math.max(0, this.sim.water[i] * 0.4)) * this.YSv + yOff;
     return [x, y, z];
   }
 
@@ -2127,7 +2143,7 @@ export class View {
     // means "the antenna tip" — pickKin depends on that meaning.
     this.lanternPos[o] = x; this.lanternPos[o + 1] = y + 0.0505 * sz; this.lanternPos[o + 2] = z;
     this.lanternCol[o] = this._col.r; this.lanternCol[o + 1] = this._col.g; this.lanternCol[o + 2] = this._col.b;
-    this.lanternSize[n] = (0.028 + b * 0.048) * grow * (0.85 + (1 - s.daylight) * 0.50);
+    this.lanternSize[n] = (0.028 + b * 0.048) * grow * this.cs * (0.85 + (1 - s.daylight) * 0.50);
   }
 
   _paintKin() {
@@ -2147,10 +2163,10 @@ export class View {
       // and the body starts at 0.008, so 0.004 plants the feet on the flock —
       // the small remainder covers the gap between the coarse cell height used
       // here and the smoothed display terrain.
-      let [x, y, z] = this.cellToLocal(k.x[id], k.y[id], 0.004);
+      let [x, y, z] = this.cellToLocal(k.x[id], k.y[id], 0.004 * this.cs);
       const st = k.stage[id];
       const grow = st === STAGE.EGG ? 0.62 : st === STAGE.NIB ? 0.7 : st === STAGE.HALF ? 0.86 : 1;
-      const sz = k.size[id] * grow;
+      const sz = k.size[id] * grow * this.cs;   // a figure fits its cell
       // toddlers are CHUBBY, not miniature: children compress on y only, so a
       // nib is a squat round thing with the same big head — baby-schema, one
       // multiplier. The antenna-tip call takes sz*chub so the glow stays seated
@@ -2357,10 +2373,10 @@ export class View {
     if (g.length === this._graveN) return;
     const n = Math.min(g.length, 900);
     for (let i = 0; i < n; i++) {
-      const [x, y, z] = this.cellToLocal(g[i].x, g[i].y, 0.010);
+      const [x, y, z] = this.cellToLocal(g[i].x, g[i].y, 0.010 * this.cs);
       this._v.set(x, y, z);
       this._q.set(0, 0, 0, 1);
-      this._sc.set(1, 1, 1);
+      this._sc.set(this.cs, this.cs, this.cs);
       this._m4.compose(this._v, this._q, this._sc);
       this.graveMesh.setMatrixAt(i, this._m4);
     }
@@ -3023,7 +3039,7 @@ export class View {
   portraitOf(id, px = 112) {
     const k = this.sim.k;
     if (!k.alive[id]) return null;
-    const [wx, wy, wz] = this.cellToLocal(k.x[id], k.y[id], 0.004);
+    const [wx, wy, wz] = this.cellToLocal(k.x[id], k.y[id], 0.004 * this.cs);
     const a = Math.atan2(k.tx[id] - k.x[id], k.ty[id] - k.y[id]);
     const sz0 = this.renderer.getSize(new THREE.Vector2());
     const asp0 = this.camera.aspect;
@@ -3060,7 +3076,7 @@ export class View {
     // else exists, shot against the dark, and _paintKin heals everything on
     // the next frame. A flash-lit face against the basement dark — in fiction,
     // and it cannot fail.
-    const D = 0.075, SY = 5;
+    const D = 0.075 * this.cs, SY = 5;   // the lens sits the same number of figure-heights away
     let inst = 0; for (let i = 0; i < id; i++) if (k.alive[i]) inst++;
     const c0b = this.bodies.count, c0f = this.features.count, c0u = this.burden.count;
     this.bodies.getMatrixAt(inst, this._m4);
@@ -3092,8 +3108,8 @@ export class View {
       // verb can transform the jar, so map the studio point across
       const jarG = this.jar || this.scene;
       jarG.updateMatrixWorld(true);
-      const sc = new THREE.Vector3(0, SY + 0.026, 0); jarG.localToWorld(sc);
-      const sp = new THREE.Vector3(Math.sin(a) * D, SY + 0.040, Math.cos(a) * D); jarG.localToWorld(sp);
+      const sc = new THREE.Vector3(0, SY + 0.026 * this.cs, 0); jarG.localToWorld(sc);
+      const sp = new THREE.Vector3(Math.sin(a) * D, SY + 0.040 * this.cs, Math.cos(a) * D); jarG.localToWorld(sp);
       this.camera.position.copy(sp);
       this.camera.lookAt(sc);
       this.camera.aspect = 1; this.camera.near = 0.02; this.camera.updateProjectionMatrix();
@@ -3130,10 +3146,10 @@ export class View {
     // relaxes to EL_NEAR once you are zoomed in past EL_NEAR_DIST, because at
     // that range the board fills the frame and there is no horizon to protect
     // — and it is the only angle from which these creatures have faces.
-    let elFloor = o.dist < EL_NEAR_DIST ? EL_NEAR : EL_MIN;
+    let elFloor = o.dist < EL_NEAR_DIST * this.cs ? EL_NEAR : EL_MIN;
     // ⚠ and never shallower than the zoom can afford. Cached on the zoom for the
     // same reason panLimitNow is — the solve is far too much for every frame.
-    if (o.dist >= EL_NEAR_DIST) {
+    if (o.dist >= EL_NEAR_DIST * this.cs) {
       if (this._elD === undefined || Math.abs(o.dist - this._elD) > 0.02) {
         this._elD = o.dist; this._elFit = this.minElFor(o.dist);
       }
@@ -3450,7 +3466,7 @@ export class View {
       this.lanternPos[n * 3 + 2]);
     this._hoverT = (this._hoverT || 0) + dt;
     const p = 1 + Math.sin(this._hoverT * 4.2) * 0.10;
-    r.scale.set(p, 1, p);
+    r.scale.set(p * this.cs, 1, p * this.cs);
     r.material.opacity = 0.48 + Math.sin(this._hoverT * 4.2) * 0.14;
   }
 }
