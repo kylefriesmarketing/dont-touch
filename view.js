@@ -5,7 +5,7 @@
 // framing belongs to THE ROOM hub. Shape plus lantern glow. (bible §15, pivoted)
 
 import * as THREE from './lib/three.module.js';
-import { STAGE, NEEDS, LANTERN_HUE, LOCI, L, expressed, S, C } from './sim.js';
+import { STAGE, NEEDS, LANTERN_HUE, LOCI, L, expressed, S, C, STREET_PITCH } from './sim.js';
 import { Post } from './post.js';
 import { Vfx } from './vfx.js';
 import { hueOf } from './palette.js';
@@ -760,6 +760,9 @@ export class View {
       tile: mat(0xa8492c, 0.85), slate: mat(0x4a5058, 0.7),
       plasterA: mat(0xd9cfb8, 0.85), plasterB: mat(0xc4b393, 0.85),
       plasterC: mat(0xe0d6c2, 0.85), brick: mat(0x9a6146, 0.9),
+      // the curtain wall — grey cobble, the one thing in the reference that
+      // is not a roof. Lighter than `stone` so it reads against the ground.
+      curtain: mat(0x8d8b83, 0.95),
     };
   }
 
@@ -1066,6 +1069,85 @@ export class View {
       bulb.position.set(w * 0.95, 0.062, 0); g.add(bulb);
       g.userData.bulb = bulb;
 
+    } else if (o.kind === 13) {                          // THE WALL — a ring
+      // ⚠️ THE GROUP SITS AT THE SOUTH GATE (o.x/o.y, where it is raised from)
+      // and the circuit is laid out around o.cx/o.cy in CELLS, converted with
+      // the same mapping cellToLocal uses — so it lines up with the roofs it
+      // encloses on any grid and follows the ground under each stretch. ONE
+      // merged mesh for the stone and one for the tower caps: a circuit of
+      // forty boxes must not be forty draw calls (the per-building merge is
+      // still on the backlog; a ring is not going to make that worse).
+      const [ax, ay, az] = this.cellToLocal(o.x, o.y, 0);
+      const [bx] = this.cellToLocal(o.x + 1, o.y, 0);
+      const [, , bz] = this.cellToLocal(o.x, o.y + 1, 0);
+      const SC = S * this.cs, Kx = (bx - ax) / SC, Kz = (bz - az) / SC, K = Math.abs(Kx);
+      const L = (px, py) => [Kx * (px - o.x), Kz * (py - o.y)];              // sim cells -> local x, z
+      const yAt = (px, py) => (this.cellToLocal(px, py, 0)[1] - ay) / SC;   // ground, relative to the gate
+      const T = 1.3 * K, H = 2.1 * K, MER = 0.45 * K;                       // thickness, height, merlon
+      const stone = [], caps = [];
+      const put = (list, geo, px, py, y0, ry = 0) => { const [lx, lz] = L(px, py); list.push({ geo, x: lx, y: y0, z: lz, ry }); };
+      const hw = o.hw || 7, hh = o.hh || 7, cx = o.cx == null ? o.x : o.cx, cy = o.cy == null ? o.y : o.cy;
+      const west = cx - hw, east = cx + hw, south = cy - hh, north = cy + hh;
+      const P = STREET_PITCH, hx = this.sim.hearth.x, hy = this.sim.hearth.y;
+      // a gate sits where a STREET meets the wall — the street line nearest
+      // the middle of each side, kept a tower's width clear of the corners
+      const gateOn = (v, h0, lo, hi) => {
+        let gx = h0 + (Math.floor((v - h0) / P) + 0.5) * P;
+        if (gx - lo < 4.2) gx += P; if (hi - gx < 4.2) gx -= P;
+        return gx;
+      };
+      const CT = 1.3, GT = 1.0, GW = 1.4;   // corner tower half, gate tower half, gate half-width (cells)
+      // a straight run of wall from (xa, ya) to (xb, yb) along one axis, with merlons
+      const run = (xa, ya, xb, yb) => {
+        const horiz = ya === yb, len = horiz ? Math.abs(xb - xa) : Math.abs(yb - ya);
+        if (len < 0.6) return;
+        const mx = (xa + xb) / 2, my = (ya + yb) / 2, gy = yAt(mx, my);
+        put(stone, new THREE.BoxGeometry(horiz ? len * K : T, H, horiz ? T : len * K), mx, my, gy + H / 2);
+        const nm = Math.max(1, Math.floor(len / 1.25));
+        for (let i = 0; i < nm; i++) {
+          const f2 = (i + 0.5) / nm, px = horiz ? xa + (xb - xa) * f2 : mx, py = horiz ? my : ya + (yb - ya) * f2;
+          put(stone, new THREE.BoxGeometry(horiz ? 0.55 * K : T * 0.72, MER, horiz ? T * 0.72 : 0.55 * K), px, py, gy + H + MER / 2);
+        }
+      };
+      const tower = (px, py, half, h) => {
+        const gy = yAt(px, py);
+        put(stone, new THREE.BoxGeometry(half * 2 * K, h * K, half * 2 * K), px, py, gy + h * K / 2);
+        put(caps, new THREE.ConeGeometry(half * 1.35 * K, half * 1.1 * K, 4), px, py, gy + h * K + half * 0.55 * K, Math.PI / 4);
+      };
+      // south and north: runs along x, broken by a gate on a street line
+      for (const yy of [south, north]) {
+        const gx = gateOn(cx, hx, west, east);
+        run(west + CT, yy, gx - GW - GT * 2, yy); run(gx + GW + GT * 2, yy, east - CT, yy);
+        tower(gx - GW - GT, yy, GT, 2.9); tower(gx + GW + GT, yy, GT, 2.9);
+      }
+      // west and east: runs along y
+      for (const xx of [west, east]) {
+        const gy2 = gateOn(cy, hy, south, north);
+        run(xx, south + CT, xx, gy2 - GW - GT * 2); run(xx, gy2 + GW + GT * 2, xx, north - CT);
+        tower(xx, gy2 - GW - GT, GT, 2.9); tower(xx, gy2 + GW + GT, GT, 2.9);
+      }
+      for (const [px, py] of [[west, south], [east, south], [west, north], [east, north]]) tower(px, py, CT, 3.4);
+      // hand-merge (core three only — no BufferGeometryUtils): non-indexed
+      // position + normal arrays concatenated into one geometry per material
+      const merge = (list) => {
+        const pos = [], nor = []; let cnt = 0;
+        for (const p of list) {
+          const g2 = p.geo.toNonIndexed(); if (p.ry) g2.rotateY(p.ry); g2.translate(p.x, p.y, p.z);
+          pos.push(g2.attributes.position.array); nor.push(g2.attributes.normal.array); cnt += g2.attributes.position.count;
+          p.geo.dispose();
+        }
+        const geo = new THREE.BufferGeometry(), P3 = new Float32Array(cnt * 3), N3 = new Float32Array(cnt * 3);
+        let off = 0; for (let i = 0; i < pos.length; i++) { P3.set(pos[i], off); N3.set(nor[i], off); off += pos[i].length; }
+        geo.setAttribute('position', new THREE.BufferAttribute(P3, 3));
+        geo.setAttribute('normal', new THREE.BufferAttribute(N3, 3));
+        return geo;
+      };
+      const ring = new THREE.Group();
+      ring.add(new THREE.Mesh(merge(stone), M.curtain));
+      ring.add(new THREE.Mesh(merge(caps), M.slate));
+      g.add(ring);
+      g.userData.ring = ring;   // _paintWorks raises it with the work
+
     } else {                                             // THE HALL
       const w = 0.115, d = 0.075, wh = 0.048;
       const body = new THREE.Mesh(new THREE.BoxGeometry(w, wh, d), M.plasterA);
@@ -1131,7 +1213,7 @@ export class View {
       }
       if (bd < 1e9) yaw = Math.atan2(bx, by) + jit * 0.3;
     }
-    g.rotation.y = yaw;
+    g.rotation.y = g.userData.ring ? 0 : yaw;   // a ring is laid to the grid, not turned to the road
     g.scale.setScalar(S * this.cs); // authored at the 64-grid scale, S to 96, cs to the cell
     return g;
   }
@@ -1145,6 +1227,16 @@ export class View {
       const p = this.cellToLocal(o.x, o.y, 0);
       // it RISES as it is made — half-built is half out of the ground
       const f = Math.min(1, o.prog);
+      if (g.userData.ring) {
+        // a ring stands on the ground from the first stone and RISES with the
+        // work — 'a little higher every week' — the whole circuit together,
+        // instead of sinking and stretching the way a roof is made
+        g.position.set(p[0], p[1], p[2]);
+        g.scale.setScalar(S * this.cs);
+        g.userData.ring.scale.y = 0.12 + 0.88 * f;
+        g.visible = f > 0.02;
+        continue;
+      }
       g.position.set(p[0], p[1] - (1 - f) * 0.045, p[2]);
       // ⚠⚠ THIS WAS setScalar(0.55 + f * 0.45), WHICH OVERWROTE THE S THAT
       // _buildWorkView had just set — an assignment, not a multiply. Every work

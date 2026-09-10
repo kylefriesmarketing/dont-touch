@@ -72,6 +72,10 @@ export const C = {
   // battery; a 144-grid has 2.25x the ground. At CAP the spawn silently fails
   // and breeding stops dead, which reads as a bug rather than a limit.
   CAP: 1400,             // max kin
+  // how hard the wall sorts the town: a lattice point on the wrong side of
+  // the ring (a roof outside, a field inside) reads this many street-widths
+  // farther. 0 = no preference (the A/B knob; see the wall entry in HANDOFF).
+  WALL_SORT: 2,
 
   // The basement, degrees. ⚠️ A TRUE CONSTANT — never assign to it. The room's
   // real temperature follows the calendar and lives on the Sim instance as
@@ -292,12 +296,14 @@ export const WORKS = [
   // --- and then the work starts doing itself -------------------------------
   // ⚠⚠ THE 16-BIT CEILING: k.knows is a Uint16Array, so WORKS may never
   // exceed 16 entries without widening it AND migrating every saved mask.
-  // 13 of 16 used. APPEND ONLY — inserting shifts every pre: bitmask and
+  // 14 of 16 used. APPEND ONLY — inserting shifts every pre: bitmask and
   // corrupts every saved k.knows (the standing law since the ladder shipped).
   // Every entry here has a named READ SITE — the five-times-found defect of
   // this codebase is a building nothing consumes. mill → the harvest chain in
   // _sow; mend → the strain decay in the service loop; school → the teach
-  // roll threshold; dynamo → _sow's night gate + the night service trickle.
+  // roll threshold; dynamo → _sow's night gate + the night service trickle;
+  // wall → the ring block in the service loop (safety inside) and the
+  // inside/outside preference + straddle rule in _siteWork.
   { key: 'mill', name: 'the mill', need: 2, pressure: 0.30, effort: 1500, radius: 6.5, cap: 6, per: 26,
     made: 'set the wind to grinding', pre: 0b101000000, preN: 2, near: 1 },
   { key: 'mend', name: 'the mending house', need: 5, pressure: 0.30, effort: 1100, radius: 6.0, cap: 4, per: 30,
@@ -309,6 +315,18 @@ export const WORKS = [
     made: 'sat the young down to be told', pre: 0b110000, preN: 2, near: 1 },
   { key: 'dynamo', name: 'the dynamo', need: 0, pressure: 0.22, effort: 2400, radius: 8.0, cap: 3, per: 44,
     made: 'bottled the lightning and hung it from a pole', pre: 0b101000000000, preN: 2, near: 1 },
+  // --- and then you work out that what you made is worth keeping ------------
+  // ⚠️ THE WALL IS A RING, NOT A POINT (`ring: 1`). It is sited by _siteWall
+  // as a rectangle on the STREET lines one street beyond the outermost roof —
+  // o.cx/o.cy its centre and o.hw/o.hh its half-extents in cells; o.x/o.y is
+  // the south gate, where it is raised from. Later roofs prefer to stand
+  // INSIDE it and fields OUTSIDE (the reference kingdom: packed roofs behind a
+  // grey wall, the farmland beyond) — that preference lives in _siteWork.
+  // READ SITE: the service loop — everyone standing inside the ring is a
+  // little safer and a little out of the wind. radius 0 on purpose: the
+  // circular test there is skipped for a ring. Kyle: 'build the walls next'.
+  { key: 'wall', name: 'the wall', need: 5, pressure: 0.26, effort: 2600, radius: 0, cap: 2, per: 45,
+    made: 'raised a wall around everything they had made', pre: 0b100010000, preN: 2, near: 0, ring: 1 },
 ];
 export const WORK_AT = {}; WORKS.forEach((w, i) => WORK_AT[w.key] = i);
 // ⚠ ONE definition of how much a food store holds. This is read by the fill,
@@ -347,6 +365,9 @@ export const WORK_DONE = 0.98;
 // failed the day the pitch moved to 7.0 — a house standing exactly on the
 // new street read as 1.98 cells off the old one. See _siteWork for why 7.0.
 export const STREET_PITCH = 7.0;
+// footprint half-sizes in cells, by kind. ⚠️ a ring has no footprint of its
+// own — what it forbids is STRADDLING it, see _onWall.
+export const WORK_HALF = [1.0, 1.2, 1.0, 1.6, 2.0, 3.2, 2.2, 0.8, 2.4, 1.4, 1.7, 2.0, 1.6, 0];
 
 // ---------------------------------------------------------------------------
 // 5. THE SIM
@@ -918,8 +939,111 @@ export class Sim {
   // within reach passes, so a founding act is never blocked.
   // ⚠ store/windbreak/channel keep small gaps and NEVER take the lattice: a
   // channel belongs at the water it was scraped from, not on a street.
+  // ── THE WALL ──────────────────────────────────────────────
+  // the biggest ring the town has planned or raised, or null
+  _ring() {
+    let r = null;
+    for (const o of this.works) if (WORKS[o.kind].ring && (!r || o.hw * o.hh > r.hw * r.hh)) r = o;
+    return r;
+  }
+  _inWall(o, x, y) { return Math.abs(x - o.cx) < o.hw && Math.abs(y - o.cy) < o.hh; }
+  // does a square footprint of half-size `pad` at (x, y) straddle the wall band?
+  _onWall(o, x, y, pad) {
+    const T = 0.8, ax = Math.abs(x - o.cx), ay = Math.abs(y - o.cy);
+    const outer = ax <= o.hw + T + pad && ay <= o.hh + T + pad;
+    const inner = ax <= o.hw - T - pad && ay <= o.hh - T - pad;
+    return outer && !inner;
+  }
+  // ⚠️ A WALL IS SITED BY THE TOWN, NOT BY THE INVENTOR'S FEET. It runs on the
+  // STREET lines — hearth + (k + ½) · pitch, the open ground between two rows
+  // of roofs — one street beyond the outermost roof on every side, so every
+  // roof that stands is inside it and the ring lines up with the grid the
+  // town already builds to. Returns [gateX, gateY, cx, cy, hw, hh] in cells
+  // (the gate is the south side's middle, where it is raised from), or null
+  // when there is nothing worth walling yet, the ring would leave the jar,
+  // or a standing ring already holds it all — a second wall is only ever an
+  // OUTER ring around an outgrown first.
+  // ⚠️ no rng: geography must never shift the stream (the siting law).
+  _siteWall() {
+    const P = STREET_PITCH, hx = this.hearth.x, hy = this.hearth.y;
+    // ⚠️ A WALL ENCLOSES THE TOWN, NOT EVERY STRAGGLER. The first version took
+    // the box around EVERY standing roof; on a real day-96 town a hut somebody
+    // had built at the edge of the world dragged the ring out of the jar and
+    // nothing was sited at all. So: trim an eighth of the roofs off each side,
+    // never go more than four streets from the hearth, and let the rest stand
+    // outside — that is what walls do. Then push any side out a street at a
+    // time until no roof is left straddling it (a hall beside a street line
+    // reaches into the band; the old crooked quarter is not on the grid).
+    const xs = [], ys = [];
+    for (const o of this.works) {
+      if (!WORKS[o.kind].near || o.prog < 0.25) continue;   // roofs that are really there
+      const h = WORK_HALF[o.kind] || 1.2;
+      xs.push([o.x - h, o.x + h]); ys.push([o.y - h, o.y + h]);
+    }
+    if (xs.length < 6) return null;
+    const lo = (arr) => { const v = arr.map(e => e[0]).sort((p, q) => p - q); return v[Math.floor(v.length * 0.125)]; };
+    const hi = (arr) => { const v = arr.map(e => e[1]).sort((p, q) => p - q); return v[Math.ceil(v.length * 0.875) - 1]; };
+    const x0 = Math.max(lo(xs), hx - 4 * P), x1 = Math.min(hi(xs), hx + 4 * P);
+    const y0 = Math.max(lo(ys), hy - 4 * P), y1 = Math.min(hi(ys), hy + 4 * P);
+    const M = 1.0;   // clearance between a roof's edge and the wall band
+    const below = (v, h0) => Math.round(h0 + (Math.floor((v - h0) / P - 0.5) + 0.5) * P);
+    const above = (v, h0) => Math.round(h0 + (Math.ceil((v - h0) / P - 0.5) + 0.5) * P);
+    let west = below(x0 - M, hx), east = above(x1 + M, hx);
+    let south = below(y0 - M, hy), north = above(y1 + M, hy);
+    // ⚠️ THE RING NEVER LEAVES THE JAR — IT SHRINKS. The first version refused
+    // the wall outright when a corner fell outside, which on two of four
+    // measured seeds meant a town that had worked out the wall NEVER RAISED
+    // ONE: the straddle push-outs below walked a corner past the rim and the
+    // whole ring was thrown away. A side that cannot move out moves IN (the
+    // straddling roof simply ends up outside, which is allowed), and a corner
+    // past the rim pulls its side in a street at a time.
+    const fits = () => this.inJar(west, south) && this.inJar(east, south) && this.inJar(west, north) && this.inJar(east, north);
+    for (let pass = 0; pass < 12 && !fits(); pass++) {
+      const cx0 = (west + east) / 2, cy0 = (south + north) / 2;
+      // pull in whichever side is furthest from the board's centre
+      const c = (this.N - 1) / 2;
+      const far = [[Math.abs(west - c), 'w'], [Math.abs(east - c), 'e'], [Math.abs(south - c), 's'], [Math.abs(north - c), 'n']].sort((a, b) => b[0] - a[0])[0][1];
+      if (far === 'w') west += P; else if (far === 'e') east -= P; else if (far === 's') south += P; else north -= P;
+      void cx0; void cy0;
+    }
+    for (let pass = 0; pass < 8; pass++) {
+      const r = { cx: (west + east) / 2, cy: (south + north) / 2, hw: (east - west) / 2, hh: (north - south) / 2 };
+      let moved = false;
+      for (const o of this.works) {
+        if (!WORKS[o.kind].near || o.prog < 0.25) continue;
+        if (!this._onWall(r, o.x, o.y, WORK_HALF[o.kind] || 1.2)) continue;
+        const dx = (o.x - r.cx) / r.hw, dy = (o.y - r.cy) / r.hh;
+        // out if the jar allows it, else in
+        if (Math.abs(dx) > Math.abs(dy)) {
+          if (dx < 0) { if (this.inJar(west - P, south) && this.inJar(west - P, north)) west -= P; else west += P; }
+          else { if (this.inJar(east + P, south) && this.inJar(east + P, north)) east += P; else east -= P; }
+        } else {
+          if (dy < 0) { if (this.inJar(west, south - P) && this.inJar(east, south - P)) south -= P; else south += P; }
+          else { if (this.inJar(west, north + P) && this.inJar(east, north + P)) north += P; else north -= P; }
+        }
+        moved = true; break;
+      }
+      if (!moved) break;
+    }
+    const hw = (east - west) / 2, hh = (north - south) / 2;
+    const cx = (west + east) / 2, cy = (south + north) / 2;
+    if (hw < P || hh < P) return null;
+    // the whole ring has to stand on ground they can stand on
+    if (!fits()) return null;
+    // a standing ring that already holds this is not raised twice, and a second
+    // ring is only ever an OUTER one
+    for (const o of this.works) {
+      if (!WORKS[o.kind].ring) continue;
+      if (o.cx - o.hw <= west + 0.5 && o.cx + o.hw >= east - 0.5 && o.cy - o.hh <= south + 0.5 && o.cy + o.hh >= north - 0.5) return null;
+      if (hw * hh <= o.hw * o.hh) return null;
+    }
+    return [cx, south, cx, cy, hw, hh];
+  }
+
   _siteWork(wi, x0, y0) {
-    const HALF = [1.0, 1.2, 1.0, 1.6, 2.0, 3.2, 2.2, 0.8, 2.4, 1.4, 1.7, 2.0, 1.6];
+    const HALF = WORK_HALF;
+    // a ring is not a point — see _siteWall
+    if (WORKS[wi].ring) return this._siteWall();
     const age = this.ageNow();
     // ⚠ the gap stops growing at 1.6: at 2.0 a house-house pair needed 6.0
     // cells while the streets are 5.6 apart, so the grid and the gap rule
@@ -946,6 +1070,8 @@ export class Sim {
       if (!this.inJar(x, y) || this.water[i] > 0.001) return false;
       if (this.height[i] < this.pondLevel + 0.06) return false;
       for (const o of this.works) {
+        // a ring has no footprint; what it forbids is a roof half in, half out
+        if (WORKS[o.kind].ring) { if (this._onWall(o, x, y, HALF[wi] + 0.6)) return false; continue; }
         const need = HALF[wi] + (HALF[o.kind] || 1.2) + gap;
         const dx = o.x - x, dy = o.y - y;
         if (dx * dx + dy * dy < need * need) return false;
@@ -967,12 +1093,22 @@ export class Sim {
     // ⚠️ still no rng — a deterministic ring walk and a first-match.
     if (useLattice) {
       const gx = Math.round((x0 - this.hearth.x) / PITCH), gy = Math.round((y0 - this.hearth.y) / PITCH);
+      // ⚠️ THE WALL SORTS THE TOWN. Once a ring is planned, roofs want to stand
+      // INSIDE it and fields OUTSIDE — the reference kingdom is packed roofs
+      // behind a grey wall with the farmland beyond. A point on the wrong side
+      // pays two street-widths of distance, so it is still taken when the right
+      // side has no room, and nobody walks to the far end of the board to
+      // satisfy a picture (the widening lesson, again).
+      const ring = this._ring(), wantIn = wi !== WORK_AT.farm;
+      const WRONG = (C.WALL_SORT * PITCH) * (C.WALL_SORT * PITCH);
       let best = null, bestD = 1e9;
       for (let ry = -3; ry <= 3; ry++) for (let rx = -3; rx <= 3; rx++) {
         const lx = Math.round(this.hearth.x + (gx + rx) * PITCH);
         const ly = Math.round(this.hearth.y + (gy + ry) * PITCH);
         if (!ok(lx, ly)) continue;
-        const dx = lx - x0, dy = ly - y0, d = dx * dx + dy * dy;
+        const dx = lx - x0, dy = ly - y0;
+        let d = dx * dx + dy * dy;
+        if (ring && this._inWall(ring, lx, ly) !== wantIn) d += WRONG;
         if (d < bestD) { bestD = d; best = [lx, ly]; }
       }
       if (best) {
@@ -1615,6 +1751,16 @@ export class Sim {
       let shelter = 0, mended = false;
       for (const o of this.works) {
         if (o.prog < WORK_DONE) continue;
+        // THE WALL'S READ SITE: inside the ring is a safe place to be, and a
+        // little out of the wind. Nothing fed, nothing warmed outright — the
+        // town simply stops being afraid behind it, which is what a wall is for.
+        if (WORKS[o.kind].ring) {
+          if (this._inWall(o, k.x[id], k.y[id])) {
+            k.need[base + 5] = Math.min(1, k.need[base + 5] + 0.0005);
+            shelter = Math.max(shelter, 0.35);
+          }
+          continue;
+        }
         const dx = o.x - k.x[id], dy = o.y - k.y[id];
         const R2 = WORKS[o.kind].radius * S;
         if (dx * dx + dy * dy > R2 * R2) continue;
@@ -1922,9 +2068,15 @@ export class Sim {
       // KNOWLEDGE, not another pile — somebody looked at a thing nobody
       // understood any more and understood it
       if (mine < W.cap) {
-        // sited by the age's own sense of order — see _siteWork
-        const [sx2, sy2] = this._siteWork(wi, wx, wy);
-        this.works.push({ id: this.workSeq++, kind: wi, x: sx2, y: sy2, prog: 0, by: k.nameId[best], day, stock: 0 });
+        // sited by the age's own sense of order — see _siteWork. A ring may
+        // find nothing worth walling yet; then what they worked out is the
+        // knowledge, and the wall waits for a town to go around.
+        const site = this._siteWork(wi, wx, wy);
+        if (site) {
+          const o = { id: this.workSeq++, kind: wi, x: site[0], y: site[1], prog: 0, by: k.nameId[best], day, stock: 0 };
+          if (site.length > 2) { o.cx = site[2]; o.cy = site[3]; o.hw = site[4]; o.hh = site[5]; }
+          this.works.push(o);
+        }
       }
 
       // ⚠️⚠️ NAME THEM FOR WHAT THEY ACTUALLY DID. This said "who first made X"
@@ -2017,6 +2169,7 @@ export class Sim {
     for (let n = this.works.length - 1; n >= 0; n--) {
       const o = this.works[n], W = WORKS[o.kind];
       if (o.prog >= WORK_DONE) {
+        if (o.done == null && W.ring) this.log('walled', 'the wall closed around them. inside it, they slept differently.', 6.0);
         if (o.done == null) o.done = day;             // it stands. leave it alone a while.
         if (o.kind === WORK_AT.store) {
           // the store fills from the ground under it and empties into the hungry
@@ -2855,6 +3008,7 @@ export class Sim {
         // on its own: the keeper finishes the hut, so the others do not have to.
         const skill = k.job[id] === 3 ? 1.3 : 1;
         o.prog = Math.min(1, o.prog + skill / W.effort);
+        if (W.ring && !o.half && o.prog >= 0.5) { o.half = 1; this.log('halfwall', 'the wall was half around them, and a little higher every week.', 4.0); }
         // ⚠️ WITNESSING IS HOW IT SPREADS. Watching somebody make a thing is
         // how a private trick becomes something the town knows — without this
         // every practice dies with whoever thought of it.
@@ -3754,7 +3908,7 @@ export class Sim {
     // fingerprint fail for a save that had lost nothing at all.
     mix(this.names.length); mix(this.works.length);
     mix(this.workSeq);
-    for (const o of this.works) { mix(o.id || 0); mix(o.kind); mix(o.x); mix(o.y); mix(o.prog); mix(o.stock || 0); }
+    for (const o of this.works) { mix(o.id || 0); mix(o.kind); mix(o.x); mix(o.y); mix(o.prog); mix(o.stock || 0); if (o.hw != null) { mix(o.cx); mix(o.cy); mix(o.hw); mix(o.hh); } }
     for (const p of this.prac) { mix(p.invented); mix(p.lost); mix(p.tradition); mix(p.reinvented); }
     for (const key of Object.keys(this.placeNames).sort()) mix(key.length + this.placeNames[key].length);
     mix(this.humid); mix(this.rainLeft); mix(this.curtain); mix(this.lid ? 1 : 0); mix(this.lampOn ? 1 : 0);

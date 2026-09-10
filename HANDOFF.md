@@ -2645,3 +2645,107 @@ block, so budget ~10 min even for three short tests.
   pitch moved to 7.0 and a house standing exactly on the new street read as
   1.98 cells off the old one. `STREET_PITCH` is exported from sim.js now and
   the test reads it — never copy a tuning number into a test.
+
+---
+
+## 🧱 THE WALL (2026-09-10) — a ring, not a point
+
+Kyle: *"build the walls next"* — the first slice toward the Instagram reference
+(the Minecraft walled city: packed roofs behind a grey curtain wall, fields
+outside, gates where the streets meet it).
+
+**THE DESIGN.** WORKS kind 13 `wall` (**14 of 16 used, APPEND ONLY**), `pre` =
+house + granary settled, `need: 5` (safety), `effort: 2600` (⚠️ 9000 was tried
+for "week by week" and MEASURED OUT — see below), `cap: 2`, `ring: 1`. **A ring is not a point**: `_siteWork` hands a
+ring kind to `_siteWall`, which returns `[gateX, gateY, cx, cy, hw, hh]` in
+cells — `o.x/o.y` is the SOUTH GATE (where it is raised from, and where the
+builders stand), `o.cx/o.cy/o.hw/o.hh` the rectangle. Works are saved raw, so
+the four fields round-trip free; they are folded into `fingerprint()` (only
+when `o.hw != null`, so every wall-less town hashes exactly as before).
+- **Sited by the town, not the inventor's feet.** Sides run on the STREET
+  lines — `hearth + (k + ½) · STREET_PITCH`, the open ground between two rows
+  of roofs — one street beyond the outermost roof, so the ring lines up with
+  the grid the town already builds to and gates fall on street crossings.
+- ⚠️ **A WALL ENCLOSES THE TOWN, NOT EVERY STRAGGLER.** v1 boxed EVERY roof; on
+  a real day-96 town a hut somebody built at the edge of the world dragged a
+  corner out of the jar and NOTHING was sited. v2 trims an eighth of the roofs
+  off each side and caps at four streets from the hearth, then pushes any side
+  out a street at a time until no roof STRADDLES it (a hall beside a street
+  line reaches into the band; the old crooked quarter is not on the grid).
+- ⚠️ **THE RING NEVER LEAVES THE JAR — IT SHRINKS.** v2 still refused the wall
+  when a push-out walked a corner past the rim: on 2 of 4 measured seeds a town
+  that had worked out the wall NEVER RAISED ONE. v3: a side that cannot move
+  out moves in (the straddling roof simply ends up outside, which is allowed),
+  and a corner past the rim pulls its side in. A second ring is only ever an
+  OUTER one around an outgrown first (`cap: 2`).
+- **The wall sorts the town** (the reference's density + farmland-outside):
+  once a ring is planned, the lattice search in `_siteWork` scores a point on
+  the wrong side (roofs want IN, fields want OUT) as two street-widths
+  farther, so it is still taken when the right side is full — nobody walks to
+  the far end of the board for a picture (the widening lesson, again).
+  `ok()` forbids a footprint that straddles the band (`_onWall`).
+- **READ SITE** (this codebase's signature defect is a building nothing
+  consumes): the service loop — everyone standing inside a FINISHED ring gets
+  +0.0005 safety per tick and shelter 0.35. Movement never consults works, so
+  the wall is not a barrier; its power is that they build it together and
+  stop being afraid behind it. Two beats: 'halfwall' at prog 0.5, 'walled'
+  when it closes (the done site).
+- **View**: kind 13 in `_buildWorkView` — ONE merged stone mesh (segments,
+  merlons, 4 corner + 8 gate towers, hand-merged non-indexed boxes; core
+  three has no BufferGeometryUtils) + one cap mesh, laid out in CELLS around
+  `cx/cy` from the gate with the same mapping `cellToLocal` uses and each
+  stretch on its own ground height; gates on the street line nearest each
+  side's middle. `g.userData.ring` exempts it from the road-facing yaw and
+  from the sink-and-stretch build ramp — a ring stands on the ground from the
+  first stone and RISES (`ring.scale.y = 0.12 + 0.88·prog`).
+- ⚠️ **TESTS THAT LIED, ALL MINE**: an rng comparison off by one draw; a
+  safety read site tested on kin whose safety was already 1.0; the preference
+  tested on a hearth beside low ground where EVERY inside point is refused for
+  the pond (made buildable first — it is a test of the preference, not the
+  terrain); "the ring adds no rng so positions match" — false, a safer kin
+  DECIDES differently within a day (one tick, not a day); a made-up work id
+  5000 (the loader repairs `workSeq` past the highest id → round-trip fails);
+  and `find(kind === 13)` on a fixture that had already raised its OWN wall by
+  day 48. Six wrong tests, zero wrong sim. Find works by id.
+- Follow-ups: a side can run across the pond (looks odd, medieval walls did);
+  builders gather at the south gate rather than walking the circuit; walls
+  are not yet an AGE (the ladder's `at` must stay strictly increasing and 13
+  would land above the little lights).
+
+**MEASURED, four seeds (3/11/42/77), 300 days at 144, alive at the end:**
+| variant | alive | mean |
+|---|---|---|
+| no wall (`WORKS[13].cap = 0`, same sim) | 142 / 295 / 292 / 221 | 238 |
+| the wall, effort 9000, sorted | 232 / 253 / 269 / 202 | 239 |
+| the wall, effort 9000, no sorting (`C.WALL_SORT` 0) | 150 / 253 / 269 / 202 | 219 |
+| **the wall as shipped** (effort 2600, `C.WALL_SORT` 2) | 575 / 273 / 317 / 226 | **348** |
+
+Kyle: *"pick the variant that keeps the population and ship it."* Effort 2600
+wins on ALL FOUR seeds over 9000 (+343 / +20 / +48 / +24) and beats no wall on
+three — and its first ring still closes in the same 2-5 days (with two hundred
+hands a wall goes up fast whatever the number; 9000 only slowed the OUTER ring,
+13 days vs 1-2, and cost that labour to the fields). The sorting is not a cost
+either — without it seed 3 loses 82. Every seed raises a ring (days 72-125), all
+four raise an outer ring at 2600, roofs inside 54-65 of 79-88, fields inside 12-17 of
+12-24 (the ones laid BEFORE the ring stay where they are), safety inside 0.96-1.0
+against 0.67-0.98 outside, works 120-141 vs 124-146. Hunger is 82-92% of all
+deaths in EVERY variant, walls or not — that is this town's death mode at 144,
+not something the wall brought.
+⚠️⚠️ **SINGLE-SEED COMPARISONS BURNED A FOURTH TIME, and this one is subtler:**
+the first wall run read as "population down 13-30% on every seed" against the
+PRE-WALL baseline (319/290/386/289). But merely ADDING the wall to WORKS shifts
+the rng stream — the weave rolls for it whether or not one is ever raised — and
+that shift alone moves seed 3 from 319 to 142 with no wall standing. **A
+baseline measured on a different sim is not a baseline.** A/B on the SAME sim
+with the feature switched off (`cap = 0`), never against yesterday's table.
+`C.WALL_SORT` exists for exactly this: a test knob, default-identical.
+⚠️ **TWO OLDER TESTS FAILED THE GATE ON THIS SLICE, BOTH TEST-SIDE:** the hunger
+test flagged whoever happened to be starving beside food at day 300 of 'bat0' —
+a precondition living in the world that had shrunk from ~30 to ~10 across the
+ages and reached ZERO once the wall's weave rolls moved the stream. It now MAKES
+its starving kin (grown, unglued, beside rich moss, food set to 0.1 — no rng) and
+tests what they do. And the wall read-site test compared kin outside the ring
+between the two clones with no slack: a kin ON the wall line (y 69.0, edge 69)
+was inside when the service loop read it and outside when sampled. A cell of
+slack either side. **A test whose precondition is found in the world fails the
+day the world moves; make the precondition.**

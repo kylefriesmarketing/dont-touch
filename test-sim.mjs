@@ -3,7 +3,7 @@
 // Invariant 4: every era gets a soak, zero errors, no NaN, nothing outside the jar.
 
 import { readFileSync } from 'node:fs';
-import { Sim, C, LOCI, L, expressed, NEEDS, STAGE, makeRNG, S, WORKS, WORK_AT, WORK_DONE, AGES, STOCK_CAP, STREET_PITCH } from './sim.js';
+import { Sim, C, LOCI, L, expressed, NEEDS, STAGE, makeRNG, S, WORKS, WORK_AT, WORK_DONE, AGES, STOCK_CAP, STREET_PITCH, WORK_HALF } from './sim.js';
 
 let pass = 0, fail = 0;
 // ⚠️ the battery is a GATE — the house rule is to run it after every sim
@@ -1282,16 +1282,23 @@ t('hunger is not a stuck state — kin starving near food go and eat', () => {
   const s = clone(fixture('bat0', 300));
   const NN = NEEDS.length;
   const flagged = [];
-  for (let id = 0; id < s.count; id++) {
-    if (!s.k.alive[id] || s.k.need[id * NN + 2] > 0.15) continue;
+  // ⚠️ THE PRECONDITION IS MADE, NOT FOUND. This used to flag whoever happened
+  // to be starving beside food at day 300 — a precondition that lives in the
+  // world, which shrank from ~30 to ~10 across the ages and hit ZERO the day
+  // the wall's rng draws moved the stream ('nobody was hungry at all'). The
+  // invariant is about what a starving kin DOES beside food, so make some:
+  // grown, unglued kin standing within eight cells of rich moss have their
+  // food set to 0.1. No rng, and the town is otherwise the town.
+  for (let id = 0; id < s.count && flagged.length < 24; id++) {
+    if (!s.k.alive[id] || s.k.stage[id] < STAGE.WHOLE || s.k.glued[id]) continue;
     let best = 0;
     for (let dy = -8; dy <= 8; dy++) for (let dx = -8; dx <= 8; dx++) {
       const m = s.moss[s.idx(s.k.x[id] + dx, s.k.y[id] + dy)];
       if (m > best) best = m;
     }
-    if (best > 0.5) flagged.push(id);
+    if (best > 0.5) { s.k.need[id * NN + 2] = 0.1; flagged.push(id); }
   }
-  ok(flagged.length > 0, 'nobody was hungry at all — the fixture stopped being a test');
+  ok(flagged.length >= 8, `too few grown kin stand beside rich moss to test with: ${flagged.length}`);
   run(s, 3);
   let fed = 0, died = 0, managing = 0;
   for (const id of flagged) {
@@ -1567,6 +1574,122 @@ t('organization grows with the age — huddle first, streets later', () => {
   c1.works.push({ id: 900, kind: WORK_AT.hut, x: 40, y: 40, prog: 1, by: -1, day: 0, stock: 0 });
   c1._siteWork(WORK_AT.hut, 44, 40);
   for (let i = 0; i < 50; i++) { const r1 = c1.rng(), r2 = c2.rng(); eq(r1, r2, 'siting consumed rng'); }
+});
+
+
+// ── THE WALL ──────────────────────────────────────────────
+t('the town raises its wall on its own street lines, around every roof', () => {
+  const P = STREET_PITCH;
+  const s2 = new Sim({ seed: 'wallt', founders: 0 });
+  s2.works.length = 0;   // the endowed huddle out of the way: this is about geometry
+  const hx = s2.hearth.x, hy = s2.hearth.y;
+  // six roofs on lattice points, one of them a hall, one crooked old hut off-grid
+  const lay = (kind, i, j) => s2.works.push({ id: 900 + s2.works.length, kind, x: Math.round(hx + i * P), y: Math.round(hy + j * P), prog: 1, by: -1, day: 0, stock: 0 });
+  lay(WORK_AT.house, -1, -1); lay(WORK_AT.house, 0, -1); lay(WORK_AT.house, 1, 0);
+  lay(WORK_AT.hall, 0, 1); lay(WORK_AT.house, -1, 1); lay(WORK_AT.farm, 1, 1);
+  s2.works.push({ id: 990, kind: WORK_AT.hut, x: Math.round(hx + 2.4), y: Math.round(hy - 3.1), prog: 1, by: -1, day: 0, stock: 0 });
+  const site = s2._siteWall();
+  ok(site && site.length === 6, 'no ring was sited around seven standing roofs');
+  const [gx, gy, cx, cy, hw, hh] = site;
+  const ring = { kind: 13, x: gx, y: gy, cx, cy, hw, hh, prog: 1 };
+  // every side runs on a STREET line: hearth + (k + 1/2) * pitch
+  for (const [v, h0, side] of [[cx - hw, hx, 'west'], [cx + hw, hx, 'east'], [cy - hh, hy, 'south'], [cy + hh, hy, 'north']]) {
+    const k = (v - h0) / P - 0.5;
+    ok(Math.abs(k - Math.round(k)) < 0.1, `the ${side} wall is not on a street line: ${v.toFixed(2)} (k ${k.toFixed(3)})`);
+  }
+  // the gate is the middle of the south side
+  eq(gy, cy - hh, 'the gate is not on the south wall'); eq(gx, cx, 'the gate is not at the middle');
+  // every roof that stands is inside, and none straddles the band
+  for (const o of s2.works) {
+    ok(s2._inWall(ring, o.x, o.y), `${WORKS[o.kind].key} at (${o.x},${o.y}) is outside the ring`);
+    ok(!s2._onWall(ring, o.x, o.y, WORK_HALF[o.kind]), `${WORKS[o.kind].key} straddles the wall`);
+  }
+  // and not a stone wider than it needs to be: the ring is within one street of the outermost roof
+  ok(hw <= 2.5 * P + 1 && hh <= 2.5 * P + 1, `the ring is oversized: ${(hw * 2).toFixed(1)} x ${(hh * 2).toFixed(1)}`);
+  // siting consumed NO rng — geography must never shift the stream
+  const s3 = new Sim({ seed: 'wallt', founders: 0 });
+  for (let i = 0; i < 20; i++) eq(s2.rng(), s3.rng(), 'siting the wall consumed rng');
+  // a standing ring that holds everything is not raised twice
+  s2.works.push({ id: 991, kind: 13, x: gx, y: gy, cx, cy, hw, hh, prog: 1, by: -1, day: 0, stock: 0 });
+  ok(s2._siteWall() === null, 'a second ring was sited inside a wall that already holds the town');
+});
+
+t('the wall sorts the town: roofs inside, fields outside, nothing on the wall', () => {
+  const P = STREET_PITCH;
+  const s2 = new Sim({ seed: 'wallt2', founders: 0 });
+  s2.works.length = 0;
+  const hx = s2.hearth.x, hy = s2.hearth.y;
+  // the kept winter, so the lattice is in force (see the organisation test)
+  s2.works.push({ id: 900, kind: WORK_AT.hut, x: Math.round(hx), y: Math.round(hy), prog: 1, by: -1, day: 0, stock: 0 });
+  s2.works.push({ id: 901, kind: WORK_AT.farm, x: Math.round(hx + P), y: Math.round(hy), prog: 1, by: -1, day: 0, stock: 0 });
+  s2.works.push({ id: 902, kind: WORK_AT.granary, x: Math.round(hx), y: Math.round(hy + P), prog: 1, by: -1, day: 0, stock: 0 });
+  eq(s2.ageNow(), 3, 'hut+farm+granary is the kept winter');
+  // a ring two streets out on every side
+  const cx = Math.round(hx), cy = Math.round(hy), hw = 1.5 * P, hh = 1.5 * P;
+  // ⚠️ this is a test of the PREFERENCE, not of the terrain: seed 'wallt2' puts
+  // the hearth beside low ground, where every inside point is refused for the
+  // pond (measured: L/B on all nine) — so the ground inside is made buildable first
+  for (let y = Math.floor(cy - hh - 6); y <= cy + hh + 6; y++) for (let x = Math.floor(cx - hw - 6); x <= cx + hw + 6; x++) {
+    const i = s2.idx(x, y); s2.height[i] = Math.max(s2.height[i], s2.pondLevel + 0.2); s2.water[i] = 0;
+  }
+  const ring = { id: 950, kind: 13, x: cx, y: cy - hh, cx, cy, hw, hh, prog: 1, by: -1, day: 0, stock: 0 };
+  s2.works.push(ring);
+  // a house thought of just OUTSIDE the wall is built just INSIDE it
+  const [ax, ay] = s2._siteWork(WORK_AT.house, cx + hw + 3, cy - P);
+  ok(s2._inWall(ring, ax, ay), `a house went up outside the wall at (${ax},${ay})`);
+  // a field thought of in the middle of town is laid OUTSIDE the wall
+  const [fx, fy] = s2._siteWork(WORK_AT.farm, cx - P, cy - P);
+  ok(!s2._inWall(ring, fx, fy), `a field was dug inside the wall at (${fx},${fy})`);
+  // and neither of them stands on the wall
+  ok(!s2._onWall(ring, ax, ay, WORK_HALF[WORK_AT.house]), 'the house straddles the wall');
+  ok(!s2._onWall(ring, fx, fy, WORK_HALF[WORK_AT.farm]), 'the field straddles the wall');
+  // a house aimed exactly at the wall line still lands clear of it
+  const [wx2, wy2] = s2._siteWork(WORK_AT.house, cx + hw, cy);
+  ok(!s2._onWall(ring, wx2, wy2, WORK_HALF[WORK_AT.house]), `a house was built on the wall at (${wx2},${wy2})`);
+});
+
+t('inside the wall is a safer place to be — the ring has a read site', () => {
+  // the same town, with and without a standing ring around its middle; the
+  // ring adds no rng, so every kin walks the same path in both and the only
+  // difference a day later is what the wall did for the ones inside it
+  // ⚠️ a calm town's safety sits at 1.0, where an additive read site cannot
+  // show — give everyone something to be afraid of first, in both clones
+  const base = fixture('live', 60);
+  const a = clone(base), b = clone(base);
+  { const NN0 = NEEDS.length; for (const s of [a, b]) for (let id = 0; id < s.count; id++) if (s.k.alive[id]) s.k.need[id * NN0 + 5] = 0.5; }
+  const hx = Math.round(a.hearth.x), hy = Math.round(a.hearth.y), R = 2 * STREET_PITCH;
+  // ⚠️ the sim's own id: the loader repairs workSeq past the highest id, so a made-up 5000 fails the round-trip
+  const myId = a.workSeq;   // ⚠️ by id: the 'live' fixture has raised its OWN wall by day 48, so find(kind) returns the town's ring, not this one
+  a.works.push({ id: a.workSeq++, kind: 13, x: hx, y: hy - R, cx: hx, cy: hy, hw: R, hh: R, prog: 1, by: -1, day: a.day, stock: 0, done: a.day });
+  // ⚠️ ONE tick, not a day. A safer kin DECIDES differently, so within a day
+  // the two towns walk apart (measured: the first version asserted equal
+  // positions after a day and failed on it). After one tick everyone is
+  // still where they were, and the ones inside must read exactly +0.0005.
+  a.step(); b.step();
+  const NN = NEEDS.length;
+  let inA = 0, inB = 0, nIn = 0, outA = 0, outB = 0, nOut = 0;
+  for (let id = 0; id < a.count; id++) {
+    if (!a.k.alive[id] || !b.k.alive[id]) continue;
+    if (a.k.x[id] !== b.k.x[id] || a.k.y[id] !== b.k.y[id]) continue;   // a decision already diverged: not this test's business
+    // ⚠️ a cell of slack either side of the wall line: the read happens before
+    // the tick's movement, and a kin ON the line (measured: y 69.0 against an
+    // edge at 69) was a hair inside when read and outside when sampled
+    const ax = Math.abs(a.k.x[id] - hx), ay = Math.abs(a.k.y[id] - hy);
+    if (ax < R - 1 && ay < R - 1) { inA += a.k.need[id * NN + 5]; inB += b.k.need[id * NN + 5]; nIn++; }
+    else if (ax > R + 1 || ay > R + 1) { outA += a.k.need[id * NN + 5]; outB += b.k.need[id * NN + 5]; nOut++; }
+  }
+  ok(nIn >= 3, `too few kin inside the ring to read anything: ${nIn}`);
+  ok(inA - inB > nIn * 0.0004, `the wall did nothing for the ones inside it: ${(inA / nIn).toFixed(4)} vs ${(inB / nIn).toFixed(4)}`);
+  if (nOut) ok(Math.abs(outA - outB) < 1e-6, 'the wall reached the ones outside it');
+  // the rectangle is state: it is hashed, and it survives a save
+  const h1 = a.fingerprint();
+  a.works[a.works.length - 1].hw += 1; const h2 = a.fingerprint(); a.works[a.works.length - 1].hw -= 1;
+  ok(h1 !== h2, 'the ring\'s size is not in the fingerprint');
+  eq(a.fingerprint(), h1, 'the fingerprint did not restore');
+  saveEqual(a, 'a town with a wall');
+  const back = Sim.fromJSON(JSON.parse(JSON.stringify(a.toJSON())));
+  const w = back.works.find(o => o.id === myId);
+  ok(w && w.hw === R && w.cx === hx, 'the ring lost its rectangle in the save');
 });
 
 t('a dead town can be refounded on its own ruins', () => {
