@@ -5,7 +5,17 @@
 // framing belongs to THE ROOM hub. Shape plus lantern glow. (bible §15, pivoted)
 
 import * as THREE from './lib/three.module.js';
-import { STAGE, NEEDS, LANTERN_HUE, LOCI, L, expressed, S, C, STREET_PITCH } from './sim.js';
+import { STAGE, NEEDS, LANTERN_HUE, LOCI, L, expressed, S, C, STREET_PITCH, WORKS } from './sim.js';
+
+// ⚠️ ONE LAW FOR WHERE A STREET MEETS THE WALL. The wall builder and the street
+// painter both ask "which street line crosses here" — the street nearest v
+// that is clear of the corners — and they MUST agree, or the gate stands in
+// the wall while the road runs to a blank stretch of stone beside it.
+function gateLine(v, h0, lo, hi, P) {
+  let gx = h0 + (Math.floor((v - h0) / P) + 0.5) * P;
+  if (gx - lo < 4.2) gx += P; if (hi - gx < 4.2) gx -= P;
+  return gx;
+}
 import { Post } from './post.js';
 import { Vfx } from './vfx.js';
 import { hueOf } from './palette.js';
@@ -369,6 +379,8 @@ export class View {
     // what _paintGround writes every frame, and it stays cheap because it is
     // small. LinearFilter is doing a lot of work here — it is the difference
     // between a chequerboard and a wash.
+    this.street = new Float32Array(N * N);   // the town's own streets — see _paintStreets
+    this._streetSig = '';
     this.groundData = new Uint8Array(N * N * 4);
     this.groundTex = new THREE.DataTexture(this.groundData, N, N, THREE.RGBAFormat);
     this.groundTex.needsUpdate = true;
@@ -1091,11 +1103,7 @@ export class View {
       const P = STREET_PITCH, hx = this.sim.hearth.x, hy = this.sim.hearth.y;
       // a gate sits where a STREET meets the wall — the street line nearest
       // the middle of each side, kept a tower's width clear of the corners
-      const gateOn = (v, h0, lo, hi) => {
-        let gx = h0 + (Math.floor((v - h0) / P) + 0.5) * P;
-        if (gx - lo < 4.2) gx += P; if (hi - gx < 4.2) gx -= P;
-        return gx;
-      };
+      const gateOn = (v, h0, lo, hi) => gateLine(v, h0, lo, hi, P);   // the street painter reads the same law
       const CT = 1.3, GT = 1.0, GW = 1.4;   // corner tower half, gate tower half, gate half-width (cells)
       // a straight run of wall from (xa, ya) to (xb, yb) along one axis, with merlons
       const run = (xa, ya, xb, yb) => {
@@ -1702,7 +1710,68 @@ export class View {
     mkIM(new THREE.CylinderGeometry(0.0032, 0.0052, 0.020, 5), trunkM, trunks, false);
   }
 
+  // ── THE STREETS, WORN IN ─────────────────────────────────────
+  // ⚠️ THE GRID IS ONLY LEGIBLE IF YOU CAN SEE THE STREETS. The town builds on
+  // lattice points (_siteWork), so the open ground between two rows of roofs —
+  // hearth + (k + ½) · pitch — IS a street, and the reference reads as a planned
+  // city because those streets are visible from above. Painted the way a baked
+  // world's OpenStreetMap roads are painted (albedo, never simulated), from the
+  // SAME numbers the sim sites by, so paint and placement can never disagree.
+  // Inside a ring the streets stop a cell short of the wall band and run out
+  // through the gates; without a ring they cover the trimmed box around the
+  // roofs. They wear in over two weeks from the day the town first built to a
+  // line. View-only, and recomputed only when the town changes shape (day /
+  // works / ring) — never per frame.
+  _paintStreets() {
+    const s = this.sim, N = s.N, P = STREET_PITCH, st = this.street;
+    const ring = s._ring ? s._ring() : null;
+    const sig = s.day + ':' + s.works.length + ':' + (ring ? ring.id + ':' + ring.prog.toFixed(1) : '-');
+    if (sig === this._streetSig) return;
+    this._streetSig = sig;
+    st.fill(0);
+    const hx = s.hearth.x, hy = s.hearth.y;
+    const roofs = s.works.filter(o => WORKS[o.kind] && WORKS[o.kind].near && o.prog >= 0.25);
+    // the day they first built to a line — the beat, or the roofs themselves
+    let rowsDay = s._beat && s._beat.rows != null ? s._beat.rows : null;
+    if (rowsDay == null) for (const o of roofs) {
+      const lx = Math.round(hx + Math.round((o.x - hx) / P) * P), ly = Math.round(hy + Math.round((o.y - hy) / P) * P);
+      if (Math.abs(o.x - lx) < 0.5 && Math.abs(o.y - ly) < 0.5 && (rowsDay == null || o.day < rowsDay)) rowsDay = o.day;
+    }
+    if (rowsDay == null || roofs.length < 4) return;
+    const strength = Math.min(1, Math.max(0, (s.day - rowsDay) / 14));
+    if (strength <= 0) return;
+    let x0, x1, y0, y1;
+    if (ring) { x0 = ring.cx - ring.hw + 1.2; x1 = ring.cx + ring.hw - 1.2; y0 = ring.cy - ring.hh + 1.2; y1 = ring.cy + ring.hh - 1.2; }
+    else {
+      const xs = roofs.map(o => o.x).sort((a, b) => a - b), ys = roofs.map(o => o.y).sort((a, b) => a - b);
+      const q = (v, f) => v[Math.min(v.length - 1, Math.floor(v.length * f))];
+      x0 = q(xs, 0.125) - P / 2; x1 = q(xs, 0.875) + P / 2; y0 = q(ys, 0.125) - P / 2; y1 = q(ys, 0.875) + P / 2;
+    }
+    const HALF = 0.95;   // half-width of a street, in cells
+    const near = (v, h0) => { const u = (v - h0) / P - 0.5; return Math.abs(u - Math.round(u)) * P; };   // cells to the nearest street line
+    // ⚠️ TWO LEVELS, NOT A FALLOFF. A soft-edged strip two cells wide under a
+    // linear-filtered 144² texture washes into the dirt (photographed: a faint
+    // paler band). A street reads as a street because it has EDGES: 1 = the
+    // beaten body, 0.3 = a darker packed rim a cell wide either side.
+    const band = (dd) => dd <= HALF ? 1 : dd <= HALF + 0.9 ? 0.3 : 0;
+    const paint = (x, y, v) => { if (x < 0 || y < 0 || x >= N || y >= N || v <= 0) return; const i = y * N + x; if (s.water[i] > 0.002) return; if (v > st[i]) st[i] = v; };
+    for (let y = Math.max(0, Math.ceil(y0)); y <= Math.min(N - 1, Math.floor(y1)); y++)
+      for (let x = Math.max(0, Math.ceil(x0)); x <= Math.min(N - 1, Math.floor(x1)); x++)
+        paint(x, y, Math.max(band(near(x, hx)), band(near(y, hy))) * strength);
+    // the roads out: through each gate, three streets into the country
+    if (ring) {
+      const west = ring.cx - ring.hw, east = ring.cx + ring.hw, south = ring.cy - ring.hh, north = ring.cy + ring.hh;
+      const gx = gateLine(ring.cx, hx, west, east, P), gy = gateLine(ring.cy, hy, south, north, P);
+      for (let d = -2; d <= 3 * P; d++) for (let w = -1; w <= 1; w++) {
+        const bw = (w === 0 ? 1 : 0.3) * strength;
+        paint(Math.round(gx + w), Math.round(south - d), bw); paint(Math.round(gx + w), Math.round(north + d), bw);
+        paint(Math.round(west - d), Math.round(gy + w), bw); paint(Math.round(east + d), Math.round(gy + w), bw);
+      }
+    }
+  }
+
   _paintGround() {
+    this._paintStreets();
     // ⚠️ THIS WRITES ALBEDO, NOT A LIT PIXEL. It used to bake a fake
     // height-gradient shade and the daylight level straight into the colour,
     // which was right for an unlit MeshBasicMaterial and doubles up the moment
@@ -1789,6 +1858,14 @@ export class View {
         // strongest cue that this is somewhere rather than anywhere.
         // Under water it is skipped -- a road does not show through a lake.
         if (RD && RD[i] && w <= 0.002) { r = r * 0.55 + 118 * 0.45; g = g * 0.55 + 108 * 0.45; b = b * 0.55 + 96 * 0.45; }
+        // the town's own streets — packed earth, a shade paler and warmer than a
+        // real road, with the flock bag lending a little cobble variance
+        const stv = this.street[i];
+        if (stv > 0.01 && w <= 0.002) {
+          const nz = (fl & 1) ? 5 : -5;
+          if (stv >= 0.5) { const a = Math.min(1, stv) * 0.72; r = r * (1 - a) + (152 + nz) * a; g = g * (1 - a) + (137 + nz) * a; b = b * (1 - a) + (108 + nz) * a; }   // the beaten body: pale sand, like the worn tracks
+          else { const a = stv * 1.4; r = r * (1 - a) + 92 * a; g = g * (1 - a) + 80 * a; b = b * (1 - a) + 60 * a; }   // the packed rim: darker than the ground either side
+        }
         // water darkens and cools the ground beneath it
         if (w > 0.002) { const a = Math.min(1, w * 7); r = r * (1 - a) + 18 * a; g = g * (1 - a) + 34 * a; b = b * (1 - a) + 44 * a; }
 

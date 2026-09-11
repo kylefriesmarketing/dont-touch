@@ -2749,3 +2749,33 @@ between the two clones with no slack: a kin ON the wall line (y 69.0, edge 69)
 was inside when the service loop read it and outside when sampled. A cell of
 slack either side. **A test whose precondition is found in the world fails the
 day the world moves; make the precondition.**
+
+---
+
+## 🛣️ THE STREETS, WORN IN (2026-09-11) — view-only, the grid made legible
+
+Kyle: *"next!"* after the wall. The reference reads as a PLANNED city because you
+can see its streets from above; ours existed only as the empty ground between
+two rows of roofs. Now they are painted.
+- `_paintStreets()` (view.js) builds a mask `this.street` (N²) from the SAME
+  numbers the sim sites by — `hearth + (k + ½) · STREET_PITCH` — so paint and
+  placement can never disagree (the ridge-paint law from Age of Toys). Inside a
+  ring the streets fill the rectangle and stop a cell short of the wall band;
+  without one they cover the trimmed box around the roofs; roads run out
+  through each gate three streets into the country. `gateLine()` is ONE module
+  function shared by the wall builder and the painter, or the gate would stand
+  in the wall while the road ran to blank stone beside it.
+- They wear in over two weeks from the day the town first built to a line
+  (`_beat.rows`, saved; falls back to the earliest on-lattice roof's day).
+- Recomputed only when the town changes shape (signature = day / works count /
+  ring id+prog), never per frame; painted in `_paintGround`'s albedo pass
+  beside the OpenStreetMap roads a baked world already gets.
+- ⚠️ **TWO LEVELS, NOT A FALLOFF.** The first version was a soft-edged strip and
+  photographed as a faint paler band — a two-cell strip under a linear-filtered
+  144² texture washes into the dirt. A street reads as a street because it has
+  EDGES: 1 = the beaten body (pale sand, the `worn` track colour, alpha 0.72),
+  0.3 = a darker packed rim a cell wide either side. Photographed at day 143 on
+  a natural town (wall raised day 136, closed by 143): the grid is legible from
+  the opening camera.
+- View-only, no sim change, no gate run; 0 console errors; N=96 saves and baked
+  worlds allocate the mask from their own N and paint both road kinds.
