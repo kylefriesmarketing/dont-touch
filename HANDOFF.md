@@ -2779,3 +2779,183 @@ two rows of roofs. Now they are painted.
   the opening camera.
 - View-only, no sim change, no gate run; 0 console errors; N=96 saves and baked
   worlds allocate the mask from their own N and paint both road kinds.
+
+---
+
+## 🧱 THE CIRCUIT (2026-09-12) — the wall is raised from the gate, round, and back
+
+Kyle: *"build the circuit and ship when the gate is green."* Before this the ring
+rose uniformly all the way round while the crew stood at the south gate — a
+finished-looking wall beside builders who had not reached it. Now the WORK walks
+the perimeter and the wall closes behind it.
+- **Sim**: `ringPoint(o, f)` / `ringArc(o, x, y)` (exported, pure) parametrise
+  the circuit from the south gate eastward, round, and back to the gate — f in
+  [0,1] ↔ a point on the perimeter. `_ringSite(o)` sets `o.x/o.y` from `o.prog`
+  and is called at EVERY writer of prog: the build act, the knock's 0.042 fall,
+  and the slow `_weave` decay (a falling ring falls from its far end). The ring
+  now carries its gate (`o.gx/o.gy`, fingerprinted when present); `_siteWall`
+  puts it on the street line nearest the middle via `gateLine`, which moved
+  from the view INTO sim.js so gate, road and crew share one law.
+- **View**: the builder lays parts out in CIRCUIT ORDER (runs cut into
+  one-street stretches, each tagged with the `ringArc` of its FAR end), merges
+  them in that order and keeps a table of where each part ends in the vertex
+  array; `_paintWorks` sets `geometry.setDrawRange(0, n)` from prog — ONE draw
+  call, and the wall closes a stretch at a time behind the crew. The footings
+  of the whole circuit are a second mesh (ankle-high, `M.cut`) drawn ahead of
+  them. ⚠️ the footings need their OWN geometry — a draw range lives on the
+  geometry, so a shared one hides the footings with the unbuilt wall. The
+  group sits at the ring's CENTRE now, not at `o.x/o.y` (which moves).
+- ⚠️ **f = 1 is the gate again.** On a closed loop the gate point is both the
+  start and the end; `ringArc` reads it as 0 (the sim's start), the last
+  stretch and the last gate tower end just WEST of it, and the round-trip
+  test runs up to f = 1, not onto it.
+- ⚠️ Rings raised before the circuit carry no gate: `ringPoint`/the builder
+  use the middle of the south side, so a live save from the wall's first day
+  still draws and still moves its crew.
+- Photographed: a ring wound back to 46% — 59 kin within six cells of the
+  moving site, the crenellated wall ending exactly where they stand, footings
+  ahead. Tests: the circuit round-trips at 40 points, is monotone, starts at
+  the gate, returns to it, an old ring starts mid-south, a decaying ring walks
+  its site back from the gate by exactly the fallen fraction, the gate hashes
+  and saves.
+
+---
+
+## 🏰 THE KEEP (2026-09-12) — the first Blender kit, and the pipeline
+
+Kyle: *"continue to improve the game using your best abilities including blender
+etc etc everything premium at your disposal."* Balance was 25 credits, so
+Higgsfield's image-to-3D (30/model) was out — and it turns out the better tool
+is free: **3D Jutsu (`scene_builder_3d_*`) runs Blender 5.2 headless on
+procedural bpy code and bills nothing** (checked `transactions` before and
+after the first edit). The reference has a castle in the middle; ours was a
+big house. Now the hall wears **the keep**: a stone body on a battered
+plinth, string course, parapet and merlons, four capped corner turrets, a
+tiled great roof with a ridge beam, a central tower with a slate pyramid and
+banner, a great door with arch, windows, door banners. 583 verts, 7
+material primitives, 69 KB, `assets/keep.glb`.
+**THE PIPELINE** (repeat for any kit):
+1. `scene_builder_3d_create_project` → `get_project` for the guards (revision,
+   sceneSequence) → `run_python` with bpy that builds the parts with
+   `primitive_*_add`, assigns Principled materials by role (stone / stone_dark
+   / tile / slate / timber / banner / dark), then JOINS everything into ONE
+   object (`temp_override` + `object.join`, `transform_apply`) so material
+   slots become one glTF mesh with a primitive per material — a handful of
+   draw calls per building, not one per box. No lights, no camera in the
+   scene (glb.js's contract); render previews from `query_python` with a
+   temporary camera that is discarded.
+2. `get_glb` → curl the signed URL into `assets/<kit>.glb` → inspect the JSON
+   chunk: no `extensionsRequired`, indexed, POSITION/NORMAL. glb.js reads
+   `baseColorFactor` per material and node transforms; that is all a kit needs.
+3. View: `this.kits` loads once; `_buildWorkView` prefers the kit for its kind
+   (`clone()` shares geometry), footprint-scaled the way `_placeKit` does
+   (0.135 for the hall's 3.2-half plot → ~3 house-heights tall), base on the
+   ground, turned so the kit's door faces the same way the procedural door
+   did (Blender +y = glTF −z; the hall's door is +z → rotate π), and the
+   road-facing yaw still applies. Views drawn before the kit lands are
+   dropped when it does and rebuilt next frame.
+⚠️ **A KIT'S GEOMETRY IS SHARED — the removal path must not dispose it.**
+`_paintWorks` disposes every mesh geometry of a removed work view; kit meshes
+carry `userData.shared` and are skipped, or the second hall would render as
+nothing the moment the first one fell.
+⚠️ The Blender `primitive_*_add` operators work in the worker with a plain
+context; `join`/`transform_apply` need `temp_override(active_object,
+selected_editable_objects, selected_objects, object)`.
+Photographed in the town at day 146: reads as a castle among houses.
+
+## 🏘️ THE HOUSES AND THE CIVIC KIT (2026-09-12) — the town in Blender
+
+Same pipeline, two more files, all free:
+- **`assets/houses.glb`** — three timber-frame variants in one file, picked per
+  house from the view-local stream (house_a jettied two-storey ×2 weight,
+  house_b thatched cottage, house_c gable-to-the-street townhouse), footprint
+  0.066–0.076 authored. **Roof variety without new geometry**: glb.js keeps no
+  material names, so the roof primitive is found by its BASE COLOUR and a
+  per-house CLONE of that material is recoloured (tile / tile / slate / thatch
+  / dark tile); the cottage keeps its thatch. One material per house, zero
+  extra draw calls. ⚠️ glb.js now sets `grp.name = nd.name` at the NODE (not
+  the per-mesh group — the first patch landed there, where `nd` is out of
+  scope, and would have nulled every kit at load; caught by a headless load
+  of all three files before the browser saw it).
+- **`assets/civic.glb`** — granary (a stone-footed barn, double doors, hayloft
+  hood), school (two storeys, rows of tall windows, a bell-cote with a brass
+  bell on the ridge), mending house (long and low under thatch, a porch with a
+  lantern, a white cloth sign), mill (a tapered stone tower with a slate cap
+  and a CHILD node `sails` — four lattice blades on a hub, parented in Blender
+  with `matrix_parent_inverse`, so the clone's `sails` child has its origin at
+  the hub and `_paintWorks`' existing `sails.rotation.z = t · 0.85` spins it).
+  `_placeKitPiece(g, src, footprint)` is the one placer for every piece.
+- ⚠️ **ONE KEEP PER TOWN.** Four halls made four castles; the reference has
+  one. `_isKeep(o)`: the OLDEST standing hall by (day, id) wears the keep,
+  every later hall is a hall; `_paintWorks` rebuilds a hall whose keep-ness
+  changed (the keep fell, the next-oldest inherits).
+- Photographed at day 147–148: the jettied house with its red roof and timber
+  frame beside the slate townhouse; the barn's hayloft; the school's window
+  rows; sails turning over the fields. Work meshes 893 → the kit buildings
+  cost 5–8 draw calls each, fewer than the boxes they replaced.
+- **The great hall** (`hall` in civic.glb, revision 2): every hall that is NOT
+  the keep — a long half-timbered hall under a tiled roof with a louvre on the
+  ridge, a stone stair tower with a slate cap at one end, a great door with
+  banners. Added to the civic project WITHOUT clearing the scene (guards
+  revision 1 / sequence 0; materials looked up by name first).
+- **The hut and the store** (civic.glb revision 3): the old crooked quarter's
+  sixteen huts are wattle rounds on a stone footing under a steep thatch cone
+  with stakes and a low door; the twelve stores are a thatched lean-to over
+  sacks and a barrel. With these, every kind the town builds in numbers wears
+  a kit (store / hut / house / hall+keep / granary / mill / mend / school);
+  windbreak, channel, field, well and dynamo stay procedural. Work meshes
+  893 → 766 at day 150.
+
+---
+
+## 🔍 THE WALL / STREETS / CIRCUIT REVIEW (2026-09-12) — 40 agents, 17 findings, 22 verdicts, none refuted
+
+Six lenses (save law, siting geometry, circuit, view, tests, fiction) found 17
+defects; two independent skeptics per finding (a code refuter and a
+reproducer) confirmed every one they reached. ⚠️ **The workflow's own result
+was `confirmed: []`** — the verify stage passed promises to `parallel()`
+instead of thunks, so every verdict was thrown away and the run reported
+clean. The verdicts were in `journal.jsonl`. **An empty review is a harness
+failure until the journal says otherwise** (this is the second time).
+**SIM (all fixed, gated):**
+- **A ring the jar accepts can run where no kin may stand → the wall stalls
+  forever.** `fits()` used `inJar` (0.455 of the radius) but `_decide` clamps
+  targets to 0.43 and the build act wants the site within 1.6·S. Reproduced on
+  seed 10: the crew stood at the clamp with the wall at 40%. `_siteWall` now
+  sites against `reach()` = 0.43·(N−1) − 1.6·S − 0.6, in `fits()` and the
+  push-out loop. The corners are the circuit's farthest points, so a ring
+  whose corners are reachable is reachable throughout.
+- **The "outer ring only" guard compared AREAS**, so a town that grew along
+  one side sited a bigger ring whose far side cut through the standing wall.
+  Now the roof box is UNIONED with every standing ring before snapping (an
+  outer ring contains the old by construction), a standing ring that already
+  holds the roof box means nothing to wall, and a final containment guard
+  catches a pull-in at the rim dragging a side back through the old wall.
+- **Builders cached the site at decide time** while `_ringSite` walked it, so
+  half the crew idled out of reach (5.8× slower). The goal-10 act re-aims
+  `k.tx/k.ty` at the work as it is now when out of reach — deterministic.
+**VIEW (fixed):** the footings were the stone geometry cloned and y-scaled
+0.10, which scaled each stretch's baked ground offset — buried uphill,
+floating downhill; they are their own parts on their own ground now. A
+gateless legacy ring used `gateLine` in the view and `cx` in the sim (half a
+street apart) — one stand-in, the sim's. Gate roads landed half a cell off
+their street (`Math.round` on a half-integer axis) — painted floor/ceil.
+Two rings: streets ran under the inner wall — inner bands are cleared except
+at their gates.
+**TESTS (fixed):** the straddle assertions could not fail (a house from a
+lattice point never reaches the band; a HALL does — the aimed column is now
+proven to straddle and the result proven not to be it); the read-site test
+FOUND its kin — six are PLACED inside and six outside, homeless, in three
+clones; an UNFINISHED ring is asserted inert; the 'walled' beat has a test.
+⚠️ **STILL UNTESTED, measured:** the shelter half of the read site. The
+thermal pass relaxes any temperature a test writes before the service loop
+reads it (a filled −10 reads ~17 by then), and at the cold a slow room gives
+0.35 shelter is worth slightly LESS than a degree under the band (the
+formula: `(1 − d/14)(1 − s) + 0.92s`). It shows only in deep cold. Also the
+'halfwall' beat (needs a builder's act).
+⚠️ **THE HUNGER TEST'S DENOMINATOR.** On the circuit stream it read "11 fed +
+3 managing of 24" with 8 dead — but its second assertion divided by ALL
+flagged kin, so once deaths neared their own 35% ceiling it could not pass.
+Its comment says "everyone LEFT": the denominator is survivors now (14/16).
+The diagnosis showed the eight died at the town's own famine rate (the last
+forty graves in that town were all hunger) — not in place beside food.

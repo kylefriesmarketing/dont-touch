@@ -5,17 +5,9 @@
 // framing belongs to THE ROOM hub. Shape plus lantern glow. (bible §15, pivoted)
 
 import * as THREE from './lib/three.module.js';
-import { STAGE, NEEDS, LANTERN_HUE, LOCI, L, expressed, S, C, STREET_PITCH, WORKS } from './sim.js';
-
-// ⚠️ ONE LAW FOR WHERE A STREET MEETS THE WALL. The wall builder and the street
-// painter both ask "which street line crosses here" — the street nearest v
-// that is clear of the corners — and they MUST agree, or the gate stands in
-// the wall while the road runs to a blank stretch of stone beside it.
-function gateLine(v, h0, lo, hi, P) {
-  let gx = h0 + (Math.floor((v - h0) / P) + 0.5) * P;
-  if (gx - lo < 4.2) gx += P; if (hi - gx < 4.2) gx -= P;
-  return gx;
-}
+import { STAGE, NEEDS, LANTERN_HUE, LOCI, L, expressed, S, C, STREET_PITCH, WORKS, gateLine, ringArc } from './sim.js';
+// ⚠️ gateLine / ringArc come from sim.js: the gate, the road to it and the
+// order the wall closes in are ONE law shared with the crew that builds it.
 import { Post } from './post.js';
 import { Vfx } from './vfx.js';
 import { hueOf } from './palette.js';
@@ -776,6 +768,64 @@ export class View {
       // is not a roof. Lighter than `stone` so it reads against the ground.
       curtain: mat(0x8d8b83, 0.95),
     };
+    // ⚠️ THE KITS. Buildings that matter more than a box can carry get a real
+    // model, built in Blender (3D Jutsu, procedural bpy — free on the plan) and
+    // read by our own glb.js: no extensions, one mesh, a primitive per material.
+    // The keep is the first: the hall is the town's landmark and the reference
+    // has a castle in the middle, not a big house. A kit arrives async, so any
+    // hall drawn before it lands is procedural; those views are dropped here
+    // and _paintWorks rebuilds them with the kit on the next frame.
+    this.kits = {};
+    loadGLB('assets/keep.glb', THREE).then((model) => {
+      if (!model) return;
+      model.traverse(o2 => { if (o2.isMesh) { o2.castShadow = true; o2.receiveShadow = true; o2.userData.shared = true; } });
+      this.kits.keep = model;
+      for (const [o, g] of this.workViews) if (o.kind === 5) { this.workRoot.remove(g); g.traverse(n2 => { if (n2.geometry && !n2.userData.shared) n2.geometry.dispose(); }); this.workViews.delete(o); }
+    });
+    // the houses: three timber-frame variants in one file (house_a jettied two-
+    // storey, house_b thatched cottage, house_c gable-to-the-street townhouse)
+    loadGLB('assets/houses.glb', THREE).then((model) => {
+      if (!model) return;
+      model.traverse(o2 => { if (o2.isMesh) { o2.castShadow = true; o2.receiveShadow = true; o2.userData.shared = true; } });
+      const byName = {};
+      model.traverse(o2 => { if (/^house_[abc]$/.test(o2.name)) byName[o2.name] = o2; });
+      if (!byName.house_a || !byName.house_b || !byName.house_c) { console.error('houses.glb: variants missing', Object.keys(byName)); return; }
+      this.kits.houses = byName;
+      for (const [o, g] of this.workViews) if (o.kind === 4) { this.workRoot.remove(g); g.traverse(n2 => { if (n2.geometry && !n2.userData.shared) n2.geometry.dispose(); }); this.workViews.delete(o); }
+    });
+    // the civic kit: granary (8), mill (9, sails as a child node), mending house (10), school (11)
+    loadGLB('assets/civic.glb', THREE).then((model) => {
+      if (!model) return;
+      model.traverse(o2 => { if (o2.isMesh) { o2.castShadow = true; o2.receiveShadow = true; o2.userData.shared = true; } });
+      const byName = {};
+      model.traverse(o2 => { if (/^(granary|school|mend|mill|hall|hut|store)$/.test(o2.name)) byName[o2.name] = o2; });
+      if (Object.keys(byName).length < 7) { console.error('civic.glb: pieces missing', Object.keys(byName)); return; }
+      this.kits.civic = byName;
+      for (const [o, g] of this.workViews) if ((o.kind >= 8 && o.kind <= 11) || o.kind === 5 || o.kind === 3 || o.kind === 0) { this.workRoot.remove(g); g.traverse(n2 => { if (n2.geometry && !n2.userData.shared) n2.geometry.dispose(); }); this.workViews.delete(o); }
+    });
+  }
+
+  // ⚠️ ONE KEEP PER TOWN. The reference has a castle in the middle, not four;
+  // the town's OLDEST standing hall is the keep and every later hall is a hall.
+  // Stable by (day, id), so a save reloads with the same keep; if the keep
+  // falls, the next-oldest hall is rebuilt as the keep by _paintWorks.
+  _isKeep(o) {
+    let first = null;
+    for (const w of this.sim.works) if (w.kind === 5 && (first == null || w.day < first.day || (w.day === first.day && w.id < first.id))) first = w;
+    return first === o;
+  }
+
+  // place a kit piece in a work's group: footprint-scaled, base on the ground,
+  // turned so Blender's +y front faces the procedural door's +z
+  _placeKitPiece(g, src, footprint) {
+    const m = src.clone(); m.position.set(0, 0, 0); m.rotation.set(0, 0, 0);
+    const box = new THREE.Box3().setFromObject(m), size = box.getSize(new THREE.Vector3());
+    const k = footprint / Math.max(size.x, size.z);
+    m.scale.setScalar(k); m.rotation.y = Math.PI;
+    box.setFromObject(m); const mid = box.getCenter(new THREE.Vector3());
+    m.position.set(-mid.x, -box.min.y, -mid.z);
+    g.add(m);
+    return m;
   }
 
   _buildWorkView(o) {
@@ -869,7 +919,9 @@ export class View {
       }
     };
 
-    if (o.kind === 0) {                                  // the store — a heap
+     if (o.kind === 0 && this.kits && this.kits.civic) {   // the store — THE KIT: a lean-to over sacks
+      this._placeKitPiece(g, this.kits.civic.store, 0.048); g.userData.kit = 'store';
+    } else if (o.kind === 0) {                           // the store — a heap
       const base = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.050, 0.012, 9), M.heap);
       base.position.y = 0.006; g.add(base);
       for (let i = 0; i < 7; i++) {
@@ -903,6 +955,8 @@ export class View {
         new THREE.MeshStandardMaterial({ color: 0x2f5a72, roughness: 0.2, metalness: 0.1 }));
       w.position.y = 0.003; g.add(w);
 
+     } else if (o.kind === 3 && this.kits && this.kits.civic) {   // THE FIRST HUT — THE KIT: wattle under thatch
+      this._placeKitPiece(g, this.kits.civic.hut, 0.052); g.userData.kit = 'hut';
     } else if (o.kind === 3) {                           // THE FIRST HUT
       // bent sticks and turf. This is the first night any of them slept dry.
       const wall = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.031, 0.020, 7), M.turf);
@@ -917,7 +971,31 @@ export class View {
         g.add(p);
       }
 
-    } else if (o.kind === 4) {                           // A HOUSE
+    } else if (o.kind === 4 && this.kits && this.kits.houses) {   // A HOUSE — THE KIT
+      // one of three variants, footprint-scaled to the plot a house gets (HALF
+      // 1.2 cells ≈ 0.063 authored), base on the ground, door turned to +z like
+      // the procedural door; the roof primitive is found by its base colour
+      // (glb.js keeps no material names) and recoloured on a per-house CLONE of
+      // that material — geometry stays shared, so this costs one material per
+      // house and no draw calls beyond the kit's own primitives.
+      const src = pick([this.kits.houses.house_a, this.kits.houses.house_a, this.kits.houses.house_b, this.kits.houses.house_c]);
+      const m = src.clone(); m.position.set(0, 0, 0); m.rotation.set(0, 0, 0);
+      const box = new THREE.Box3().setFromObject(m), size = box.getSize(new THREE.Vector3());
+      const k = (0.066 + rnd() * 0.010) / Math.max(size.x, size.z);
+      m.scale.setScalar(k); m.rotation.y = Math.PI;
+      box.setFromObject(m); const mid = box.getCenter(new THREE.Vector3());
+      m.position.set(-mid.x, -box.min.y, -mid.z);
+      const roofHex = pick([0xa8492c, 0xa8492c, 0x4a5058, 0xa88748, 0x8b3a24]);
+      m.traverse(o2 => {
+        if (!o2.isMesh || !o2.material || !o2.material.color) return;
+        const c = o2.material.color;
+        const isRoof = (Math.abs(c.r - 0.64) < 0.08 && Math.abs(c.g - 0.27) < 0.08 && Math.abs(c.b - 0.16) < 0.08) || (Math.abs(c.r - 0.62) < 0.08 && Math.abs(c.g - 0.50) < 0.08 && Math.abs(c.b - 0.28) < 0.08);
+        if (isRoof && src !== this.kits.houses.house_b) { o2.material = o2.material.clone(); o2.material.color.setHex(roofHex); }
+      });
+      g.add(m);
+      g.userData.kit = 'house';
+
+    } else if (o.kind === 4) {                           // A HOUSE (procedural, until the kit lands)
       const w = 0.052 + rnd() * 0.022, d = 0.044 + rnd() * 0.018;
       const wh = 0.030 + rnd() * 0.016;
       const wallMat = pick([M.plasterA, M.plasterB, M.plasterC, M.brick]);
@@ -991,6 +1069,8 @@ export class View {
       const bar = new THREE.Mesh(new THREE.BoxGeometry(r * 1.9, 0.003, 0.003), M.timber);
       bar.position.y = 0.052; g.add(bar);
 
+    } else if (o.kind === 8 && this.kits && this.kits.civic) {   // THE GRANARY — THE KIT
+      this._placeKitPiece(g, this.kits.civic.granary, 0.105); g.userData.kit = 'granary';
     } else if (o.kind === 8) {                           // THE GRANARY
       // the biggest thing a town builds that is not the hall, and it should
       // look like the town has something worth keeping
@@ -1013,6 +1093,10 @@ export class View {
       const step = new THREE.Mesh(new THREE.BoxGeometry(w * 0.30, 0.008, 0.010), M.stone);
       step.position.set(0, 0.004, d * 0.52); g.add(step);
 
+    } else if (o.kind === 9 && this.kits && this.kits.civic) {   // THE MILL — THE KIT
+      const m = this._placeKitPiece(g, this.kits.civic.mill, 0.085);
+      m.traverse(o2 => { if (o2.name === 'sails') g.userData.sails = o2; });   // _paintWorks spins it, as before
+      g.userData.kit = 'mill';
     } else if (o.kind === 9) {                           // THE MILL
       const tower = new THREE.Mesh(new THREE.CylinderGeometry(0.020, 0.030, 0.062, 8), M.plasterB);
       tower.position.y = 0.031; g.add(tower);
@@ -1031,6 +1115,8 @@ export class View {
       }
       g.add(sails); g.userData.sails = sails;
 
+    } else if (o.kind === 10 && this.kits && this.kits.civic) {   // THE MENDING HOUSE — THE KIT
+      this._placeKitPiece(g, this.kits.civic.mend, 0.095); g.userData.kit = 'mend';
     } else if (o.kind === 10) {                          // THE MENDING HOUSE
       const w = 0.058, d = 0.046, wh = 0.030;
       const body = new THREE.Mesh(new THREE.BoxGeometry(w, wh, d), M.plasterC);
@@ -1042,6 +1128,8 @@ export class View {
       rf.position.y = wh; g.add(rf);
       g.add(chimney(-w * 0.32, d * 0.2, wh + 0.026, 0.008));
 
+    } else if (o.kind === 11 && this.kits && this.kits.civic) {   // THE SCHOOL — THE KIT
+      this._placeKitPiece(g, this.kits.civic.school, 0.10); g.userData.kit = 'school';
     } else if (o.kind === 11) {                          // THE SCHOOL
       const w = 0.064, d = 0.048, wh = 0.034;
       const body = new THREE.Mesh(new THREE.BoxGeometry(w, wh, d), M.plasterA);
@@ -1082,81 +1170,121 @@ export class View {
       g.userData.bulb = bulb;
 
     } else if (o.kind === 13) {                          // THE WALL — a ring
-      // ⚠️ THE GROUP SITS AT THE SOUTH GATE (o.x/o.y, where it is raised from)
-      // and the circuit is laid out around o.cx/o.cy in CELLS, converted with
-      // the same mapping cellToLocal uses — so it lines up with the roofs it
-      // encloses on any grid and follows the ground under each stretch. ONE
-      // merged mesh for the stone and one for the tower caps: a circuit of
-      // forty boxes must not be forty draw calls (the per-building merge is
-      // still on the backlog; a ring is not going to make that worse).
-      const [ax, ay, az] = this.cellToLocal(o.x, o.y, 0);
-      const [bx] = this.cellToLocal(o.x + 1, o.y, 0);
-      const [, , bz] = this.cellToLocal(o.x, o.y + 1, 0);
+      // ⚠️ THE GROUP SITS AT THE RING'S CENTRE (o.cx/o.cy) — NOT at o.x/o.y,
+      // which is the BUILD SITE and walks the circuit as the work goes up
+      // (_ringSite). The circuit is laid out around the centre in CELLS with
+      // the same mapping cellToLocal uses, each stretch on its own ground. ONE
+      // merged mesh for the stone and one for the caps, both in CIRCUIT ORDER
+      // from the south gate eastward, so a draw range over the vertex array IS
+      // 'how much of the wall stands': _paintWorks sets it from o.prog through
+      // the table below, the wall closes a stretch at a time behind the crew,
+      // and the footings of what is still to come are drawn ahead of them.
+      const cx = o.cx == null ? o.x : o.cx, cy = o.cy == null ? o.y : o.cy;
+      const hw = o.hw || 7, hh = o.hh || 7;
+      const [ax, ay, az] = this.cellToLocal(cx, cy, 0);
+      const [bx] = this.cellToLocal(cx + 1, cy, 0);
+      const [, , bz] = this.cellToLocal(cx, cy + 1, 0);
       const SC = S * this.cs, Kx = (bx - ax) / SC, Kz = (bz - az) / SC, K = Math.abs(Kx);
-      const L = (px, py) => [Kx * (px - o.x), Kz * (py - o.y)];              // sim cells -> local x, z
-      const yAt = (px, py) => (this.cellToLocal(px, py, 0)[1] - ay) / SC;   // ground, relative to the gate
+      const L = (px, py) => [Kx * (px - cx), Kz * (py - cy)];              // sim cells -> local x, z
+      const yAt = (px, py) => (this.cellToLocal(px, py, 0)[1] - ay) / SC;   // ground, relative to the centre
       const T = 1.3 * K, H = 2.1 * K, MER = 0.45 * K;                       // thickness, height, merlon
-      const stone = [], caps = [];
-      const put = (list, geo, px, py, y0, ry = 0) => { const [lx, lz] = L(px, py); list.push({ geo, x: lx, y: y0, z: lz, ry }); };
-      const hw = o.hw || 7, hh = o.hh || 7, cx = o.cx == null ? o.x : o.cx, cy = o.cy == null ? o.y : o.cy;
       const west = cx - hw, east = cx + hw, south = cy - hh, north = cy + hh;
       const P = STREET_PITCH, hx = this.sim.hearth.x, hy = this.sim.hearth.y;
-      // a gate sits where a STREET meets the wall — the street line nearest
-      // the middle of each side, kept a tower's width clear of the corners
-      const gateOn = (v, h0, lo, hi) => gateLine(v, h0, lo, hi, P);   // the street painter reads the same law
+      // ⚠️ the SAME stand-in as ringPoint/ringArc for a ring raised before the
+      // circuit (no gate saved): the middle of the side, not gateLine — the two
+      // disagreed by half a street and the crew stood beside a drawn wall
+      const gx = o.gx != null ? o.gx : cx;
+      const gy = o.gy != null ? o.gy : cy;
+      const ringRef = { cx, cy, hw, hh, gx };
       const CT = 1.3, GT = 1.0, GW = 1.4;   // corner tower half, gate tower half, gate half-width (cells)
-      // a straight run of wall from (xa, ya) to (xb, yb) along one axis, with merlons
+      const stone = [], caps = [], foots = [];   // {geo, x, y, z, ry, t}
+      const FH = 0.22 * K;                  // the footings' height
+      const put = (list, geo, px, py, y0, tt, ry = 0) => { const [lx, lz] = L(px, py); list.push({ geo, x: lx, y: y0, z: lz, ry, t: tt }); };
+      // a straight run, cut into stretches of at most one street so the wall
+      // closes a stretch at a time; a stretch stands once the crew has passed
+      // its FAR end (ringArc is monotone round the circuit, so that is the max)
       const run = (xa, ya, xb, yb) => {
         const horiz = ya === yb, len = horiz ? Math.abs(xb - xa) : Math.abs(yb - ya);
         if (len < 0.6) return;
-        const mx = (xa + xb) / 2, my = (ya + yb) / 2, gy = yAt(mx, my);
-        put(stone, new THREE.BoxGeometry(horiz ? len * K : T, H, horiz ? T : len * K), mx, my, gy + H / 2);
-        const nm = Math.max(1, Math.floor(len / 1.25));
-        for (let i = 0; i < nm; i++) {
-          const f2 = (i + 0.5) / nm, px = horiz ? xa + (xb - xa) * f2 : mx, py = horiz ? my : ya + (yb - ya) * f2;
-          put(stone, new THREE.BoxGeometry(horiz ? 0.55 * K : T * 0.72, MER, horiz ? T * 0.72 : 0.55 * K), px, py, gy + H + MER / 2);
+        const nseg = Math.max(1, Math.ceil(len / P));
+        for (let si = 0; si < nseg; si++) {
+          const f0 = si / nseg, f1 = (si + 1) / nseg;
+          const x0 = xa + (xb - xa) * f0, x1 = xa + (xb - xa) * f1, y0 = ya + (yb - ya) * f0, y1 = ya + (yb - ya) * f1;
+          const mx = (x0 + x1) / 2, my = (y0 + y1) / 2, slen = len / nseg, gy2 = yAt(mx, my);
+          const tt = Math.max(ringArc(ringRef, x0, y0), ringArc(ringRef, x1, y1));
+          put(stone, new THREE.BoxGeometry(horiz ? slen * K : T, H, horiz ? T : slen * K), mx, my, gy2 + H / 2, tt);
+          put(foots, new THREE.BoxGeometry(horiz ? slen * K : T * 1.15, FH, horiz ? T * 1.15 : slen * K), mx, my, gy2 + FH / 2, tt);
+          const nm = Math.max(1, Math.floor(slen / 1.25));
+          for (let i = 0; i < nm; i++) {
+            const f2 = (i + 0.5) / nm, px = horiz ? x0 + (x1 - x0) * f2 : mx, py = horiz ? my : y0 + (y1 - y0) * f2;
+            put(stone, new THREE.BoxGeometry(horiz ? 0.55 * K : T * 0.72, MER, horiz ? T * 0.72 : 0.55 * K), px, py, gy2 + H + MER / 2, tt);
+          }
         }
       };
       const tower = (px, py, half, h) => {
-        const gy = yAt(px, py);
-        put(stone, new THREE.BoxGeometry(half * 2 * K, h * K, half * 2 * K), px, py, gy + h * K / 2);
-        put(caps, new THREE.ConeGeometry(half * 1.35 * K, half * 1.1 * K, 4), px, py, gy + h * K + half * 0.55 * K, Math.PI / 4);
+        const gy3 = yAt(px, py), tt = ringArc(ringRef, px, py);
+        put(stone, new THREE.BoxGeometry(half * 2 * K, h * K, half * 2 * K), px, py, gy3 + h * K / 2, tt);
+        put(foots, new THREE.BoxGeometry(half * 2.2 * K, FH, half * 2.2 * K), px, py, gy3 + FH / 2, tt);
+        put(caps, new THREE.ConeGeometry(half * 1.35 * K, half * 1.1 * K, 4), px, py, gy3 + h * K + half * 0.55 * K, tt, Math.PI / 4);
       };
-      // south and north: runs along x, broken by a gate on a street line
-      for (const yy of [south, north]) {
-        const gx = gateOn(cx, hx, west, east);
-        run(west + CT, yy, gx - GW - GT * 2, yy); run(gx + GW + GT * 2, yy, east - CT, yy);
-        tower(gx - GW - GT, yy, GT, 2.9); tower(gx + GW + GT, yy, GT, 2.9);
-      }
-      // west and east: runs along y
-      for (const xx of [west, east]) {
-        const gy2 = gateOn(cy, hy, south, north);
-        run(xx, south + CT, xx, gy2 - GW - GT * 2); run(xx, gy2 + GW + GT * 2, xx, north - CT);
-        tower(xx, gy2 - GW - GT, GT, 2.9); tower(xx, gy2 + GW + GT, GT, 2.9);
-      }
-      for (const [px, py] of [[west, south], [east, south], [west, north], [east, north]]) tower(px, py, CT, 3.4);
-      // hand-merge (core three only — no BufferGeometryUtils): non-indexed
-      // position + normal arrays concatenated into one geometry per material
+      // the circuit: from the south gate eastward, round, and back to the gate
+      run(gx + GW + GT * 2, south, east - CT, south); tower(gx + GW + GT, south, GT, 2.9);
+      tower(east, south, CT, 3.4);
+      run(east, south + CT, east, gy - GW - GT * 2); tower(east, gy - GW - GT, GT, 2.9); tower(east, gy + GW + GT, GT, 2.9); run(east, gy + GW + GT * 2, east, north - CT);
+      tower(east, north, CT, 3.4);
+      run(east - CT, north, gx + GW + GT * 2, north); tower(gx + GW + GT, north, GT, 2.9); tower(gx - GW - GT, north, GT, 2.9); run(gx - GW - GT * 2, north, west + CT, north);
+      tower(west, north, CT, 3.4);
+      run(west, north - CT, west, gy + GW + GT * 2); tower(west, gy + GW + GT, GT, 2.9); tower(west, gy - GW - GT, GT, 2.9); run(west, gy - GW - GT * 2, west, south + CT);
+      tower(west, south, CT, 3.4);
+      run(west + CT, south, gx - GW - GT * 2, south); tower(gx - GW - GT, south, GT, 2.9);
+      // hand-merge in circuit order (core three only — no BufferGeometryUtils),
+      // keeping where each part ENDS in the vertex array and at what fraction
+      // of the circuit it belongs
       const merge = (list) => {
-        const pos = [], nor = []; let cnt = 0;
+        list.sort((p, q) => p.t - q.t);
+        const pos = [], nor = [], ends = [], ts = []; let cnt = 0;
         for (const p of list) {
           const g2 = p.geo.toNonIndexed(); if (p.ry) g2.rotateY(p.ry); g2.translate(p.x, p.y, p.z);
           pos.push(g2.attributes.position.array); nor.push(g2.attributes.normal.array); cnt += g2.attributes.position.count;
-          p.geo.dispose();
+          ends.push(cnt); ts.push(p.t); p.geo.dispose();
         }
         const geo = new THREE.BufferGeometry(), P3 = new Float32Array(cnt * 3), N3 = new Float32Array(cnt * 3);
         let off = 0; for (let i = 0; i < pos.length; i++) { P3.set(pos[i], off); N3.set(nor[i], off); off += pos[i].length; }
         geo.setAttribute('position', new THREE.BufferAttribute(P3, 3));
         geo.setAttribute('normal', new THREE.BufferAttribute(N3, 3));
-        return geo;
+        return { geo, ends, ts, total: cnt };
       };
+      const ms = merge(stone), mc = merge(caps), mf = merge(foots);
       const ring = new THREE.Group();
-      ring.add(new THREE.Mesh(merge(stone), M.curtain));
-      ring.add(new THREE.Mesh(merge(caps), M.slate));
+      const stoneMesh = new THREE.Mesh(ms.geo, M.curtain), capMesh = new THREE.Mesh(mc.geo, M.slate);
+      // the footings: the whole circuit ankle-high and dark, drawn ahead of the
+      // crew — their OWN parts on their OWN ground. ⚠️ the first version was the
+      // stone geometry cloned and y-scaled 0.10, which scaled each stretch's
+      // baked ground offset too: buried uphill, floating downhill (review).
+      const foot = new THREE.Mesh(mf.geo, M.cut);
+      ring.add(foot, stoneMesh, capMesh);
       g.add(ring);
-      g.userData.ring = ring;   // _paintWorks raises it with the work
+      g.userData.ring = ring;
+      g.userData.circuit = { stone: stoneMesh, caps: capMesh, sEnds: ms.ends, sTs: ms.ts, cEnds: mc.ends, cTs: mc.ts, sTotal: ms.total, cTotal: mc.total, shown: -1 };
 
-    } else {                                             // THE HALL
+    } else if (this.kits && this.kits.keep && this._isKeep(o)) {   // THE FIRST HALL — THE KEEP KIT
+      // footprint-scaled like _placeKit: the procedural hall is 0.115 x 0.075
+      // authored with HALF 3.2 cells to stand in, so 0.135 fills its plot; the
+      // keep's height then lands at ~3 house-heights, which is what a keep is.
+      // The kit's door faces Blender +y = glTF -z; the hall's door faces +z, so
+      // the model turns half round and the road-facing yaw below still applies.
+      const m = this.kits.keep.clone();
+      const box = new THREE.Box3().setFromObject(m), size = box.getSize(new THREE.Vector3());
+      const k = 0.135 / Math.max(size.x, size.z);
+      m.scale.setScalar(k); m.rotation.y = Math.PI;
+      box.setFromObject(m); const mid = box.getCenter(new THREE.Vector3());
+      m.position.set(-mid.x, -box.min.y, -mid.z);
+      g.add(m);
+      g.userData.kit = 'keep';
+
+    } else if (this.kits && this.kits.civic && this.kits.civic.hall) {   // A LATER HALL — THE GREAT-HALL KIT
+      this._placeKitPiece(g, this.kits.civic.hall, 0.12); g.userData.kit = 'hall';
+    } else {                                             // THE HALL (procedural, until the kits land)
       const w = 0.115, d = 0.075, wh = 0.048;
       const body = new THREE.Mesh(new THREE.BoxGeometry(w, wh, d), M.plasterA);
       body.position.y = wh / 2; g.add(body);
@@ -1231,18 +1359,31 @@ export class View {
     for (const o of s.works) {
       live.add(o);
       let g = this.workViews.get(o);
+      if (g && o.kind === 5 && this.kits && this.kits.keep && (g.userData.kit === 'keep') !== this._isKeep(o)) {   // the keep moved to another hall
+        this.workRoot.remove(g); g.traverse(n2 => { if (n2.geometry && !n2.userData.shared) n2.geometry.dispose(); }); this.workViews.delete(o); g = null;
+      }
       if (!g) { g = this._buildWorkView(o); this.workRoot.add(g); this.workViews.set(o, g); }
       const p = this.cellToLocal(o.x, o.y, 0);
       // it RISES as it is made — half-built is half out of the ground
       const f = Math.min(1, o.prog);
       if (g.userData.ring) {
-        // a ring stands on the ground from the first stone and RISES with the
-        // work — 'a little higher every week' — the whole circuit together,
-        // instead of sinking and stretching the way a roof is made
-        g.position.set(p[0], p[1], p[2]);
+        // a ring sits at its CENTRE (o.x/o.y is the crew's site on the circuit)
+        // and CLOSES A STRETCH AT A TIME as far round as the crew has got: the
+        // draw range over the circuit-ordered merge is set from prog. ⚠️ it used
+        // to rise uniformly all the way round — which put a finished-looking
+        // wall beside a crew that had not reached it yet.
+        const pc = this.cellToLocal(o.cx == null ? o.x : o.cx, o.cy == null ? o.y : o.cy, 0);
+        g.position.set(pc[0], pc[1], pc[2]);
         g.scale.setScalar(S * this.cs);
-        g.userData.ring.scale.y = 0.12 + 0.88 * f;
-        g.visible = f > 0.02;
+        const cir = g.userData.circuit;
+        if (cir && cir.shown !== f) {
+          cir.shown = f;
+          let sn = 0; for (let i = 0; i < cir.sTs.length; i++) { if (cir.sTs[i] <= f + 1e-6) sn = cir.sEnds[i]; else break; }
+          let cn = 0; for (let i = 0; i < cir.cTs.length; i++) { if (cir.cTs[i] <= f + 1e-6) cn = cir.cEnds[i]; else break; }
+          cir.stone.geometry.setDrawRange(0, f >= 0.98 ? cir.sTotal : sn);
+          cir.caps.geometry.setDrawRange(0, f >= 0.98 ? cir.cTotal : cn);
+        }
+        g.visible = true;
         continue;
       }
       g.position.set(p[0], p[1] - (1 - f) * 0.045, p[2]);
@@ -1265,7 +1406,7 @@ export class View {
     for (const [o, g] of this.workViews) {
       if (live.has(o)) continue;
       this.workRoot.remove(g);
-      g.traverse(n => { if (n.geometry) n.geometry.dispose(); });
+      g.traverse(n => { if (n.geometry && !n.userData.shared) n.geometry.dispose(); });   // a kit's geometry is shared, never the view's to dispose
       this.workViews.delete(o);
     }
   }
@@ -1758,14 +1899,32 @@ export class View {
     for (let y = Math.max(0, Math.ceil(y0)); y <= Math.min(N - 1, Math.floor(y1)); y++)
       for (let x = Math.max(0, Math.ceil(x0)); x <= Math.min(N - 1, Math.floor(x1)); x++)
         paint(x, y, Math.max(band(near(x, hx)), band(near(y, hy))) * strength);
+    // ⚠️ an INNER ring (a town that outgrew its first wall) keeps its band clear
+    // of paint and keeps its own gate roads — with only the outer ring
+    // considered, streets ran straight under the inner stone
+    for (const o of s.works) {
+      if (!WORKS[o.kind] || !WORKS[o.kind].ring || o === ring) continue;
+      const igx = o.gx != null ? o.gx : o.cx, igy = o.gy != null ? o.gy : o.cy;
+      for (let y = Math.max(0, Math.floor(o.cy - o.hh - 1.5)); y <= Math.min(N - 1, Math.ceil(o.cy + o.hh + 1.5)); y++)
+        for (let x = Math.max(0, Math.floor(o.cx - o.hw - 1.5)); x <= Math.min(N - 1, Math.ceil(o.cx + o.hw + 1.5)); x++) {
+          const ax = Math.abs(x - o.cx), ay = Math.abs(y - o.cy);
+          const onBand = (Math.abs(ax - o.hw) <= 1.2 && ay <= o.hh + 1.2) || (Math.abs(ay - o.hh) <= 1.2 && ax <= o.hw + 1.2);
+          const atGate = (Math.abs(x - igx) <= 1.6 && Math.abs(ay - o.hh) <= 1.2) || (Math.abs(y - igy) <= 1.6 && Math.abs(ax - o.hw) <= 1.2);
+          if (onBand && !atGate) st[y * N + x] = 0;
+        }
+    }
     // the roads out: through each gate, three streets into the country
     if (ring) {
       const west = ring.cx - ring.hw, east = ring.cx + ring.hw, south = ring.cy - ring.hh, north = ring.cy + ring.hh;
-      const gx = gateLine(ring.cx, hx, west, east, P), gy = gateLine(ring.cy, hy, south, north, P);
-      for (let d = -2; d <= 3 * P; d++) for (let w = -1; w <= 1; w++) {
-        const bw = (w === 0 ? 1 : 0.3) * strength;
-        paint(Math.round(gx + w), Math.round(south - d), bw); paint(Math.round(gx + w), Math.round(north + d), bw);
-        paint(Math.round(west - d), Math.round(gy + w), bw); paint(Math.round(east + d), Math.round(gy + w), bw);
+      const gx = ring.gx != null ? ring.gx : ring.cx, gy = ring.gy != null ? ring.gy : ring.cy;   // the sim's own stand-in for a gateless ring
+      // ⚠️ a gate sits on a half-integer street line, so the road's body is the
+      // TWO cells either side of it (floor/ceil) with a rim beyond each — the
+      // same cells the interior street already covers; Math.round put the body
+      // a half-cell east/north of the street it continues
+      const axis = (v) => [[Math.floor(v), 1], [Math.ceil(v), 1], [Math.floor(v) - 1, 0.3], [Math.ceil(v) + 1, 0.3]];
+      for (let d = -2; d <= 3 * P; d++) {
+        for (const [x, bw] of axis(gx)) { paint(x, Math.round(south - d), bw * strength); paint(x, Math.round(north + d), bw * strength); }
+        for (const [y, bw] of axis(gy)) { paint(Math.round(west - d), y, bw * strength); paint(Math.round(east + d), y, bw * strength); }
       }
     }
   }

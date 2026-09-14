@@ -108,6 +108,7 @@ export async function loadGLB(url, THREE) {
     const buildNode = (ni) => {
       const nd = g.nodes[ni];
       const grp = nd.mesh != null ? meshGroup(nd.mesh) : new THREE.Group();
+      grp.name = nd.name || "";   // kits pick their variants by node name (houses.glb)
       if (nd.matrix) {
         const m = new THREE.Matrix4().fromArray(nd.matrix);
         m.decompose(grp.position, grp.quaternion, grp.scale);

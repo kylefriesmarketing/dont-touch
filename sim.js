@@ -369,6 +369,45 @@ export const STREET_PITCH = 7.0;
 // own — what it forbids is STRADDLING it, see _onWall.
 export const WORK_HALF = [1.0, 1.2, 1.0, 1.6, 2.0, 3.2, 2.2, 0.8, 2.4, 1.4, 1.7, 2.0, 1.6, 0];
 
+// ── THE CIRCUIT ──────────────────────────────────────────────
+// ⚠️ ONE LAW FOR WHERE A STREET MEETS THE WALL, shared with the view: the
+// street line nearest v that is clear of the corners. The gate stands there,
+// and so does the road the painter draws to it.
+export function gateLine(v, h0, lo, hi, P = STREET_PITCH) {
+  let gx = h0 + (Math.floor((v - h0) / P) + 0.5) * P;
+  if (gx - lo < 4.2) gx += P; if (hi - gx < 4.2) gx -= P;
+  return gx;
+}
+// A wall is RAISED FROM THE SOUTH GATE, eastward, round the circuit and back.
+// ringPoint gives the build site at a fraction f of the work; ringArc the
+// fraction at which a point on the perimeter is reached. The sim moves the
+// work's x/y along this as prog grows (_ringSite), so the crew trails round
+// the circuit, and the view draws the wall closed exactly that far — the two
+// MUST share this one parametrisation, or the crew stands beside a wall that
+// is already there. A ring from before the circuit carries no gate; the middle
+// of its south side stands in for it.
+export function ringPoint(o, f) {
+  const west = o.cx - o.hw, east = o.cx + o.hw, south = o.cy - o.hh, north = o.cy + o.hh;
+  const gx = o.gx == null ? o.cx : o.gx, L = 4 * o.hw + 4 * o.hh;
+  let t = Math.max(0, Math.min(1, f)) * L, d;
+  d = east - gx; if (t <= d) return [gx + t, south]; t -= d;
+  d = 2 * o.hh; if (t <= d) return [east, south + t]; t -= d;
+  d = 2 * o.hw; if (t <= d) return [east - t, north]; t -= d;
+  d = 2 * o.hh; if (t <= d) return [west, north - t]; t -= d;
+  return [west + Math.min(t, gx - west), south];
+}
+export function ringArc(o, x, y) {
+  const west = o.cx - o.hw, east = o.cx + o.hw, south = o.cy - o.hh, north = o.cy + o.hh;
+  const gx = o.gx == null ? o.cx : o.gx, L = 4 * o.hw + 4 * o.hh;
+  let t;
+  if (Math.abs(y - south) < 0.51 && x >= gx - 0.01) t = x - gx;
+  else if (Math.abs(x - east) < 0.51) t = (east - gx) + (y - south);
+  else if (Math.abs(y - north) < 0.51) t = (east - gx) + 2 * o.hh + (east - x);
+  else if (Math.abs(x - west) < 0.51) t = (east - gx) + 2 * o.hh + 2 * o.hw + (north - y);
+  else t = (east - gx) + 4 * o.hh + 2 * o.hw + (x - west);
+  return Math.max(0, Math.min(1, t / L));
+}
+
 // ---------------------------------------------------------------------------
 // 5. THE SIM
 // ---------------------------------------------------------------------------
@@ -983,8 +1022,20 @@ export class Sim {
     if (xs.length < 6) return null;
     const lo = (arr) => { const v = arr.map(e => e[0]).sort((p, q) => p - q); return v[Math.floor(v.length * 0.125)]; };
     const hi = (arr) => { const v = arr.map(e => e[1]).sort((p, q) => p - q); return v[Math.ceil(v.length * 0.875) - 1]; };
-    const x0 = Math.max(lo(xs), hx - 4 * P), x1 = Math.min(hi(xs), hx + 4 * P);
-    const y0 = Math.max(lo(ys), hy - 4 * P), y1 = Math.min(hi(ys), hy + 4 * P);
+    let x0 = Math.max(lo(xs), hx - 4 * P), x1 = Math.min(hi(xs), hx + 4 * P);
+    let y0 = Math.max(lo(ys), hy - 4 * P), y1 = Math.min(hi(ys), hy + 4 * P);
+    // ⚠️ A SECOND RING CONTAINS THE FIRST — BY CONSTRUCTION, NOT BY A GUARD.
+    // The old guard compared AREAS, so a town that grew along one side sited
+    // a bigger ring whose far side cut straight through the standing wall
+    // (review, 2026-09-12, reproduced on seed 'wallt'). Now: if a standing
+    // ring already holds the roof box there is nothing to wall; otherwise the
+    // box is widened to the union with every standing ring before it is
+    // snapped, so the new ring lands a street outside the old on every side.
+    for (const o of this.works) {
+      if (!WORKS[o.kind].ring) continue;
+      if (o.cx - o.hw <= x0 + 0.5 && o.cx + o.hw >= x1 - 0.5 && o.cy - o.hh <= y0 + 0.5 && o.cy + o.hh >= y1 - 0.5) return null;
+      x0 = Math.min(x0, o.cx - o.hw); x1 = Math.max(x1, o.cx + o.hw); y0 = Math.min(y0, o.cy - o.hh); y1 = Math.max(y1, o.cy + o.hh);
+    }
     const M = 1.0;   // clearance between a roof's edge and the wall band
     const below = (v, h0) => Math.round(h0 + (Math.floor((v - h0) / P - 0.5) + 0.5) * P);
     const above = (v, h0) => Math.round(h0 + (Math.ceil((v - h0) / P - 0.5) + 0.5) * P);
@@ -997,7 +1048,16 @@ export class Sim {
     // whole ring was thrown away. A side that cannot move out moves IN (the
     // straddling roof simply ends up outside, which is allowed), and a corner
     // past the rim pulls its side in a street at a time.
-    const fits = () => this.inJar(west, south) && this.inJar(east, south) && this.inJar(west, north) && this.inJar(east, north);
+    // ⚠️ THE RING MUST STAND WHERE THE CREW CAN REACH. `inJar` is a 0.455
+    // circle, but _decide clamps every target to 0.43 of the radius and the
+    // build act wants the site within 1.6·S — a wall whose corner lay in that
+    // margin was accepted, its site walked out past the clamp, and the crew
+    // stood at the limit forever with the wall at 40% (review, 2026-09-12;
+    // reproduced on seed 10). The corners are the farthest points of the
+    // circuit, so a ring whose corners are reachable is reachable throughout.
+    const cc = (this.N - 1) / 2, RR = (this.N - 1) * 0.43 - 1.6 * S - 0.6;
+    const reach = (x, y) => Math.hypot(x - cc, y - cc) <= RR;
+    const fits = () => reach(west, south) && reach(east, south) && reach(west, north) && reach(east, north);
     for (let pass = 0; pass < 12 && !fits(); pass++) {
       const cx0 = (west + east) / 2, cy0 = (south + north) / 2;
       // pull in whichever side is furthest from the board's centre
@@ -1015,11 +1075,11 @@ export class Sim {
         const dx = (o.x - r.cx) / r.hw, dy = (o.y - r.cy) / r.hh;
         // out if the jar allows it, else in
         if (Math.abs(dx) > Math.abs(dy)) {
-          if (dx < 0) { if (this.inJar(west - P, south) && this.inJar(west - P, north)) west -= P; else west += P; }
-          else { if (this.inJar(east + P, south) && this.inJar(east + P, north)) east += P; else east -= P; }
+          if (dx < 0) { if (reach(west - P, south) && reach(west - P, north)) west -= P; else west += P; }
+          else { if (reach(east + P, south) && reach(east + P, north)) east += P; else east -= P; }
         } else {
-          if (dy < 0) { if (this.inJar(west, south - P) && this.inJar(east, south - P)) south -= P; else south += P; }
-          else { if (this.inJar(west, north + P) && this.inJar(east, north + P)) north += P; else north -= P; }
+          if (dy < 0) { if (reach(west, south - P) && reach(east, south - P)) south -= P; else south += P; }
+          else { if (reach(west, north + P) && reach(east, north + P)) north += P; else north -= P; }
         }
         moved = true; break;
       }
@@ -1032,13 +1092,20 @@ export class Sim {
     if (!fits()) return null;
     // a standing ring that already holds this is not raised twice, and a second
     // ring is only ever an OUTER one
+    // and after the loops it must still CONTAIN every standing ring (a pull-in
+    // at the rim could otherwise drag a side back through the old wall)
     for (const o of this.works) {
       if (!WORKS[o.kind].ring) continue;
-      if (o.cx - o.hw <= west + 0.5 && o.cx + o.hw >= east - 0.5 && o.cy - o.hh <= south + 0.5 && o.cy + o.hh >= north - 0.5) return null;
+      if (!(west <= o.cx - o.hw + 0.5 && east >= o.cx + o.hw - 0.5 && south <= o.cy - o.hh + 0.5 && north >= o.cy + o.hh - 0.5)) return null;
       if (hw * hh <= o.hw * o.hh) return null;
     }
-    return [cx, south, cx, cy, hw, hh];
+    // the south gate — on the street line nearest the middle, clear of the corners
+    const gx = gateLine(cx, hx, west, east, P), gy = gateLine(cy, hy, south, north, P);
+    return [gx, south, cx, cy, hw, hh, gx, gy];
   }
+
+  // the crew moves round the circuit with the work — see ringPoint
+  _ringSite(o) { const p = ringPoint(o, o.prog); o.x = p[0]; o.y = p[1]; }
 
   _siteWork(wi, x0, y0) {
     const HALF = WORK_HALF;
@@ -2074,7 +2141,7 @@ export class Sim {
         const site = this._siteWork(wi, wx, wy);
         if (site) {
           const o = { id: this.workSeq++, kind: wi, x: site[0], y: site[1], prog: 0, by: k.nameId[best], day, stock: 0 };
-          if (site.length > 2) { o.cx = site[2]; o.cy = site[3]; o.hw = site[4]; o.hh = site[5]; }
+          if (site.length > 2) { o.cx = site[2]; o.cy = site[3]; o.hw = site[4]; o.hh = site[5]; o.gx = site[6]; o.gy = site[7]; }
           this.works.push(o);
         }
       }
@@ -2197,7 +2264,7 @@ export class Sim {
         }
       }
       if (o.done != null) {
-        if (day - o.done > 12) o.prog -= 0.00006;     // nothing keeps itself, eventually
+        if (day - o.done > 12) { o.prog -= 0.00006; if (WORKS[o.kind].ring) this._ringSite(o); }   // nothing keeps itself, eventually — and a ring falls from its far end
         if (o.prog < 0.50) {
           this.works.splice(n, 1);
           // ⚠️ THE ONE CLEANUP FUNNEL. Everything that references a work by id
@@ -2997,7 +3064,16 @@ export class Sim {
       case 10: {                              // making the thing
         if (!near) break;
         const w = this._workFor(id);
-        if (!w || w.d > 1.6 * S) break;
+        if (!w) break;
+        if (w.d > 1.6 * S) {
+          // ⚠️ THE SITE WALKS. A ring's work moves round the circuit every build
+          // tick (_ringSite), but a builder's target was written once at decide
+          // time — so half the crew stood at yesterday's site, out of reach, and
+          // the wall went up 5.8x slower (review, 2026-09-12). Re-aim at the work
+          // as it is now. No rng: every client and every replay does the same.
+          if (WORKS[w.work.kind].ring) { k.tx[id] = w.work.x; k.ty[id] = w.work.y; }
+          break;
+        }
         const o = w.work, W = WORKS[o.kind];
         // ⚠️ A TRADE IS COMPETENCE, NOT COMPULSION. The keeper builds faster;
         // no trade changes what anybody WANTS. Biasing `_decide` instead was
@@ -3008,6 +3084,7 @@ export class Sim {
         // on its own: the keeper finishes the hut, so the others do not have to.
         const skill = k.job[id] === 3 ? 1.3 : 1;
         o.prog = Math.min(1, o.prog + skill / W.effort);
+        if (W.ring) this._ringSite(o);   // the crew moves on round the circuit
         if (W.ring && !o.half && o.prog >= 0.5) { o.half = 1; this.log('halfwall', 'the wall was half around them, and a little higher every week.', 4.0); }
         // ⚠️ WITNESSING IS HOW IT SPREADS. Watching somebody make a thing is
         // how a private trick becomes something the town knows — without this
@@ -3640,7 +3717,7 @@ export class Sim {
     // makes it a transgression rather than a jump-scare. Deliberately NOT three
     // weeks: this is a thing a player will do out of curiosity the first time,
     // and the first one should be survivable.
-    for (const o of this.works) if (o.done != null) o.prog = Math.max(0.05, o.prog - 0.042);
+    for (const o of this.works) if (o.done != null) { o.prog = Math.max(0.05, o.prog - 0.042); if (WORKS[o.kind].ring) this._ringSite(o); }   // a falling ring falls from its far end
     if (felt) this.log('knock', 'the whole world knocked, once, and every one of them stopped.', 4.0);
     return felt;
   }
@@ -3908,7 +3985,7 @@ export class Sim {
     // fingerprint fail for a save that had lost nothing at all.
     mix(this.names.length); mix(this.works.length);
     mix(this.workSeq);
-    for (const o of this.works) { mix(o.id || 0); mix(o.kind); mix(o.x); mix(o.y); mix(o.prog); mix(o.stock || 0); if (o.hw != null) { mix(o.cx); mix(o.cy); mix(o.hw); mix(o.hh); } }
+    for (const o of this.works) { mix(o.id || 0); mix(o.kind); mix(o.x); mix(o.y); mix(o.prog); mix(o.stock || 0); if (o.hw != null) { mix(o.cx); mix(o.cy); mix(o.hw); mix(o.hh); if (o.gx != null) { mix(o.gx); mix(o.gy); } } }
     for (const p of this.prac) { mix(p.invented); mix(p.lost); mix(p.tradition); mix(p.reinvented); }
     for (const key of Object.keys(this.placeNames).sort()) mix(key.length + this.placeNames[key].length);
     mix(this.humid); mix(this.rainLeft); mix(this.curtain); mix(this.lid ? 1 : 0); mix(this.lampOn ? 1 : 0);
