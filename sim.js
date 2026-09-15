@@ -1,3 +1,4 @@
+import { townLots, townNoise } from './town-layout.js';
 // DON'T TOUCH — sim.js
 // The ENTIRE deterministic simulation. No THREE. No DOM. Node-testable.
 // Invariants (bible §17): seeded RNG only, no Math.random, no Math.sin/cos/pow in sim code.
@@ -374,7 +375,7 @@ export const WORK_DONE = 0.98;
 // new street read as 1.98 cells off the old one. See _siteWork for why 7.0.
 export const STREET_PITCH = 7.0;
 export const PLOT_GAP = 1.2;
-export const TOWN_LAYOUT_VERSION = 1;
+export const TOWN_LAYOUT_VERSION = 2;
 // footprint half-sizes in cells, by kind. ⚠️ a ring has no footprint of its
 // own — what it forbids is STRADDLING it, see _onWall.
 export const WORK_HALF = [1.0, 1.2, 1.0, 1.6, 2.0, 3.2, 2.2, 0.8, 2.4, 1.4, 1.7, 2.0, 1.6, 0];
@@ -639,7 +640,7 @@ export class Sim {
     // kin believing kin 0 was tending them. `??` is load-bearing.
     const nFound = opts.founders ?? 14;
     this.layoutVersion = TOWN_LAYOUT_VERSION;
-    if (nFound > 0) this._planFoundingGrid();
+    if (nFound > 0) this._planFoundingTown();
     this._seedColony(nFound);
     // ⚠ GATED ON THE SAME COUNT AS THE FOUNDING, FOR THE SAME REASON AS THE
     // NOTE ABOVE. Sim.fromJSON restores into `new Sim({seed, founders: 0})`, so
@@ -912,7 +913,7 @@ export class Sim {
                     WORK_AT.windbreak, WORK_AT.windbreak,
                     WORK_AT.hut, WORK_AT.hut, WORK_AT.hut, WORK_AT.hut,
                     WORK_AT.hut, WORK_AT.hut, WORK_AT.hut];
-    // The opening is a mirrored set of plots around an empty village green.
+    // The opening follows irregular frontages around a small village common.
     // Baked terrain keeps its landscape; building centroids no longer dictate plots.
     const sites = this._foundingSites || [];
     delete this._foundingSites;
@@ -927,19 +928,10 @@ export class Sim {
     const order = wet.concat(sites);
     for (let n = 0; n < order.length && n < RECIPE.length; n++) {
       const s2 = order[n], kind = s2.kind ?? RECIPE[n];
-      this.works.push({ id: this.workSeq++, kind, x: s2.x, y: s2.y, prog: 1, by: -1, day,
+      this.works.push({ id: this.workSeq++, kind, x: s2.x, y: s2.y, lane:s2.lane, along:s2.along, roadX:s2.roadX, roadY:s2.roadY, faceX:s2.faceX, faceY:s2.faceY, prog: 1, by: -1, day,
                         stock: kind === WORK_AT.store ? 0.6 : 0 });
-      // a lane worn between the hearth and everything that stands on it — a
-      // village that has been lived in has paths, and `worn` regrows on its
-      // own if this generation stops walking them
-      const line = (ax, ay, bx, by) => {
-        const steps = Math.max(1, Math.ceil(Math.hypot(bx-ax, by-ay)*2));
-        for(let q=0;q<=steps;q++){const f=q/steps,i=this.idx(ax+(bx-ax)*f,ay+(by-ay)*f);this.worn[i]=Math.max(this.worn[i],.55);}
-      };
-      const laneY=s2.y+STREET_PITCH/2;
-      line(this.hearth.x,this.hearth.y,this.hearth.x,laneY);
-      line(this.hearth.x,laneY,s2.x,laneY);
-      line(s2.x,laneY,s2.x,s2.y);
+      // Street paint follows the actual occupied frontages in the view. No
+      // artificial orthogonal tracks are written into the living soil here.
 
     }
     // ⚠ THE PRACTICES COME WITH THE BUILDINGS OR THE VILLAGE ROTS. A kin can
@@ -957,7 +949,7 @@ export class Sim {
     }
     for (let id = 0; id < this.count; id++) if (this.k.alive[id]) this.k.knows[id] |= mask;
   }
-  // One plot grid from the founding onward. No occupied-ground fallback.
+  // Buildings share winding lanes and safe footprints, never an occupied-ground fallback.
   // Siting is deterministic and consumes no random draws.
   _plotGround(wi,x,y) {
     const h=WORK_HALF[wi],c=(this.N-1)/2,R=(this.N-1)*.43;
@@ -982,71 +974,72 @@ export class Sim {
     if(this.life?.props.some(p=>Math.abs(p.x-x)<h+1.2*S&&Math.abs(p.y-y)<h+1.2*S))return false;
     return true;
   }
-  _planFoundingGrid() {
-    const original={...this.hearth},P=STREET_PITCH;
-    let best=null,bestScore=Infinity;
-    const shape=[];for(let y=-1;y<=1;y++)for(let x=-2;x<=2;x++)if(x||y)shape.push([x,y]);
-    // Prefer a complete 5 by 3 block (centre left open), translated onto dry ground.
-    for(let dy=-this.N/2;dy<=this.N/2;dy+=2)for(let dx=-this.N/2;dx<=this.N/2;dx+=2){
-      const x=original.x+dx,y=original.y+dy,score=dx*dx+dy*dy;
-      if(score>=bestScore||!this._plotGround(WORK_AT.hut,x,y))continue;
-      const sites=shape.map(([gx,gy])=>({x:x+gx*P,y:y+gy*P}));
-      if(sites.every(p=>this._plotGround(WORK_AT.hut,p.x,p.y))){best={x,y,sites};bestScore=score;}
+  _planFoundingTown() {
+    // A village begins beside a winding high street; side lanes fill as it grows.
+    // Different frontage depths and staggered doorways replace mirrored blocks.
+    const original={...this.hearth};let best={...original},bestScore=-Infinity;
+    // Find a small dry common just inland, instead of lining every hut along
+    // the only dry edge of a river. Keep water and the original village nearby.
+    for(const dy of [-6,0,6])for(const dx of [-6,0,6]){
+      this.hearth={x:original.x+dx,y:original.y+dy};if(!this._plotGround(3,this.hearth.x,this.hearth.y))continue;
+      let room=0;for(const p of townLots(this,WORK_HALF[3]))if((p.x-this.hearth.x)**2+(p.y-this.hearth.y)**2<18*18&&this._plotGround(3,p.x,p.y))room++;
+      const score=Math.min(room,18)*5-(dx*dx+dy*dy)*.16;if(score>bestScore){bestScore=score;best={...this.hearth};}
     }
-    // Narrow coastlines can interrupt a rectangle. Keep opposite plots paired,
-    // using the next complete rows on the same lattice instead of scattered infill.
-    if(!best){
-      for(let dy=-this.N/2;dy<=this.N/2;dy++)for(let dx=-this.N/2;dx<=this.N/2;dx++){
-        const x=original.x+dx,y=original.y+dy;if(!this._plotGround(WORK_AT.hut,x,y))continue;
-        const pairs=[];for(let gy=0;gy<=4;gy++)for(let gx=-4;gx<=4;gx++){
-          if(gy===0&&gx<=0)continue;
-          const a={x:x+gx*P,y:y+gy*P},b={x:x-gx*P,y:y-gy*P};
-          if(this._plotGround(WORK_AT.store,a.x,a.y)&&this._plotGround(WORK_AT.store,b.x,b.y))pairs.push({a,b,d:gx*gx+gy*gy});
-        }
-        pairs.sort((a,b)=>a.d-b.d);if(pairs.length<7)continue;
-        const kinds=[[3,3],[3,3],[3,3],[3,0],[1,1],[0,0],[2,2]],chosen=[];
-        for(const [ka,kb]of kinds){const i=pairs.findIndex(p=>this._plotGround(ka,p.a.x,p.a.y)&&this._plotGround(kb,p.b.x,p.b.y));if(i<0)break;const p=pairs.splice(i,1)[0];p.a.kind=ka;p.b.kind=kb;chosen.push(p);}
-        if(chosen.length<7)continue;
-        const score=dx*dx+dy*dy+chosen.reduce((v,p)=>v+p.d*P,0);
-        if(score<bestScore){best={x,y,sites:chosen.flatMap(p=>[p.a,p.b])};bestScore=score;}
-      }
+    this.hearth=best;
+    const sites=[],recipe=[3,3,0,3,1,3,0,3,1,3,0,3,2,2];
+    for(const kind of recipe){
+      const target=kind===WORK_AT.channel?this.pond:this.hearth;
+      const site=this._townSite(kind,target.x,target.y,sites,true);
+      if(site)sites.push({kind,x:site[0],y:site[1],...site.front});
     }
-    if(best){this.hearth={x:best.x,y:best.y};this._foundingSites=best.sites;}
-    else {
-      // Very restricted custom terrain still uses legal plots; never force an overlap.
-      const sites=[];for(let gy=-6;gy<=6;gy++)for(let gx=-6;gx<=6;gx++)if(gx||gy){const x=original.x+gx*P,y=original.y+gy*P;if(this._plotGround(WORK_AT.hut,x,y))sites.push({x,y});}
-      sites.sort((a,b)=>Math.hypot(a.x-original.x,a.y-original.y)-Math.hypot(b.x-original.x,b.y-original.y));this._foundingSites=sites.slice(0,14);
-    }
+    this._foundingSites=sites;
   }
-  _alignTownGrid() {
+  _relaxTownLayout() {
     // Repack a legacy town without changing work ids, progress, stock or residents.
     // Plan first; do not partially rearrange a save if its terrain has no capacity.
     const old=this.works,placed=old.filter(o=>WORKS[o.kind].ring),moves=[];
     const ordered=old.filter(o=>!WORKS[o.kind].ring).slice().sort((a,b)=>WORK_HALF[b.kind]-WORK_HALF[a.kind]||a.id-b.id);
     for(const o of ordered){
-      const site=this._gridSite(o.kind,o.x,o.y,placed,true);
+      const site=this._townSite(o.kind,o.x,o.y,placed,true);
       if(!site)return false;
-      const copy={...o,x:site[0],y:site[1]};placed.push(copy);moves.push([o,copy]);
+      const copy={...o,x:site[0],y:site[1],...site.front};placed.push(copy);moves.push([o,copy]);
     }
-    for(const [o,p]of moves){o.x=p.x;o.y=p.y;}
+    // Retire only lightly-used artificial L-shaped founding tracks from v1.
+    // Heavily travelled ground keeps its history; new foot traffic wears paths normally.
+    if(this.layoutVersion===1){
+      const soften=(ax,ay,bx,by)=>{const steps=Math.max(1,Math.ceil(Math.hypot(bx-ax,by-ay)*2));for(let q=0;q<=steps;q++){const f=q/steps,i=this.idx(ax+(bx-ax)*f,ay+(by-ay)*f);if(this.worn[i]<=.560001)this.worn[i]*=.2;}};
+      for(const o of old)if(o.day===0&&!WORKS[o.kind].ring){const laneY=o.y+STREET_PITCH/2;soften(this.hearth.x,this.hearth.y,this.hearth.x,laneY);soften(this.hearth.x,laneY,o.x,laneY);soften(o.x,laneY,o.x,o.y);}
+    }
+    for(const [o,p]of moves)Object.assign(o,p);
     // A builder's cached destination must follow the moved foundation.
     for(let id=0;id<this.count;id++)if(this.k.alive[id]&&!this.k.glued[id]){this.k.goal[id]=0;}
     this.layoutVersion=TOWN_LAYOUT_VERSION;
     return true;
   }
-  _gridSite(wi,x0,y0,works=this.works,wholeTown=false) {
-    const P=STREET_PITCH,hx=this.hearth.x,hy=this.hearth.y;
-    const gx=Math.round((x0-hx)/P),gy=Math.round((y0-hy)/P);
-    const ring=this._ring(),wrong=(C.WALL_SORT*P)**2,wantIn=wi!==WORK_AT.farm;
-    // New work stays within three blocks of its builder. A full neighbourhood
-    // waits for a plot rather than placing a foundation on a refused location.
-    const reach=wholeTown?Math.ceil(this.N/P):3;
-    let best=null,bestD=Infinity;
-    for(let ry=-reach;ry<=reach;ry++)for(let rx=-reach;rx<=reach;rx++){
-      const x=hx+(gx+rx)*P,y=hy+(gy+ry)*P;
-      const d=(x-x0)**2+(y-y0)**2+(ring&&this._inWall(ring,x,y)!==wantIn?wrong:0);
-      if(d>=bestD||!this._plotFits(wi,x,y,works))continue;
-      best=[x,y];bestD=d;
+  _townSite(wi,x0,y0,works=this.works,wholeTown=false) {
+    const ring=this._ring(),wrong=(C.WALL_SORT*STREET_PITCH)**2,wantIn=wi!==WORK_AT.farm;
+    const reach=wholeTown?this.N:STREET_PITCH*3;
+    let best=null,bestScore=Infinity;
+    const lots=townLots(this,WORK_HALF[wi]);
+    const consider=p=>{
+      const distance=(p.x-x0)**2+(p.y-y0)**2;
+      if(distance>reach*reach)return;
+      let score=distance+(ring&&this._inWall(ring,p.x,p.y)!==wantIn?wrong:0);
+      // Small alleys cluster around existing buildings without exact mirrored partners.
+      if(works.length){let near=Infinity;for(const w of works)if(!WORKS[w.kind].ring)near=Math.min(near,(w.x-p.x)**2+(w.y-p.y)**2);if(Number.isFinite(near))score+=near*.12;}
+      if(score>=bestScore||!this._plotFits(wi,p.x,p.y,works))return;
+      best=[p.x,p.y];best.front={lane:p.lane,along:p.along,roadX:p.roadX,roadY:p.roadY,faceX:p.faceX,faceY:p.faceY};bestScore=score;
+    };
+    for(const p of lots)consider(p);
+    if(best&&(!ring||this._inWall(ring,best[0],best[1])===wantIn))return best;
+    // Tight coastal or mature quarters can fill small irregular courtyards.
+    // Still check every footprint; never fall back onto occupied ground.
+    const span=wholeTown?this.N:21,step=wholeTown?3:1.5;
+    for(let dy=-span;dy<=span;dy+=step)for(let dx=-span;dx<=span;dx+=step){
+      const n=townNoise(this.seed,dx+wi*53,dy),x=x0+dx+(n-.5)*2,y=y0+dy+(townNoise(this.seed,dy,dx)-.5)*2;
+      const distance=(x-x0)**2+(y-y0)**2;if(distance>reach*reach||distance>=bestScore||!this._plotFits(wi,x,y,works))continue;
+      let road=null,dd=Infinity;for(const p of lots){const d=(p.roadX-x)**2+(p.roadY-y)**2;if(d<dd){dd=d;road=p;}}
+      if(road)consider({x,y,lane:road.lane,along:road.along,roadX:road.roadX,roadY:road.roadY,faceX:road.roadX-x,faceY:road.roadY-y});
     }
     return best;
   }
@@ -1183,10 +1176,10 @@ export class Sim {
 
   _siteWork(wi, x0, y0) {
     if(WORKS[wi].ring)return this._siteWall();
-    const site=this._gridSite(wi,x0,y0);
+    const site=this._townSite(wi,x0,y0);
     if(site){
       if(this._beat==null)this._beat={};
-      if(this._beat.rows==null){this._beat.rows=this.day;this.log('rows','they built to a line, for the first time.',5.5);}
+      if(this._beat.rows==null){this._beat.rows=this.day;this.log('rows','a little street grew between their doorways.',5.5);}
     }
     return site;
   }
@@ -2134,7 +2127,7 @@ export class Sim {
         // knowledge, and the wall waits for a town to go around.
         const site = this._siteWork(wi, wx, wy);
         if (site) {
-          const o = { id: this.workSeq++, kind: wi, x: site[0], y: site[1], prog: 0, by: k.nameId[best], day, stock: 0 };
+          const o = { id: this.workSeq++, kind: wi, x: site[0], y: site[1], ...(site.front || {}), prog: 0, by: k.nameId[best], day, stock: 0 };
           if (site.length > 2) { o.cx = site[2]; o.cy = site[3]; o.hw = site[4]; o.hh = site[5]; o.gx = site[6]; o.gy = site[7]; }
           this.works.push(o);
         }
@@ -4381,7 +4374,7 @@ export class Sim {
     s.alive = alive;
     s.wellbeing = alive ? sumB / alive : 0;   // the audio reads this on frame one
     s.layoutVersion = o.layoutVersion || 0;
-    if(s.layoutVersion < TOWN_LAYOUT_VERSION) s._alignTownGrid();
+    if(s.layoutVersion < TOWN_LAYOUT_VERSION) s._relaxTownLayout();
     return s;
   }
 }

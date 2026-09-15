@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import assert from 'node:assert/strict';
 import {Sim,C,WORK_AT} from '../sim.js';
 const baseline=process.argv.includes('--original');
-if(!baseline){const src=fs.readFileSync(new URL('../sim.js',import.meta.url),'utf8');assert(src.includes('for (const o of services)'));fs.mkdirSync(new URL('../output/',import.meta.url),{recursive:true});fs.writeFileSync(new URL('../output/sim-linear-service.js',import.meta.url),src.replace('for (const o of services)','for (const o of this.works)'));}
+if(!baseline){const src=fs.readFileSync(new URL('../sim.js',import.meta.url),'utf8');assert(src.includes('for (const o of services)'));fs.mkdirSync(new URL('../output/',import.meta.url),{recursive:true});fs.writeFileSync(new URL('../output/sim-linear-service.js',import.meta.url),src.replace("from './town-layout.js'","from '../town-layout.js'").replace('for (const o of services)','for (const o of this.works)'));}
 const {Sim:Old}=await import(baseline?'../output/sim-before-service.js':'../output/sim-linear-service.js');
 const maturePath=new URL('../output/mature-colony.json',import.meta.url);
 const fixtures=[['small',new Sim({seed:'service',N:96}).toJSON()],['large',new Sim({seed:'law',N:192}).toJSON()]];

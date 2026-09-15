@@ -1,3 +1,4 @@
+import { townLane } from './town-layout.js';
 // DON'T TOUCH — view.js
 // Rendering only. Reads the sim, never writes it. (Invariant 2)
 // Art direction: a lamplit miniature layout seen from above. The scenery fills
@@ -111,8 +112,8 @@ export class View {
     // number in this line, not by the art and not by the pacing.
     // ⚠️ x cs: with 2/3-size figures the opening view has to sit 2/3 as far
     // out to show the town at the size that was tuned (see the note above).
-    // Show the whole opening block with its north/south rows aligned on screen.
-    this.orbit = { az: 0, el: 1.16, dist: 1.6 * this.cs, tAz: 0, tEl: 1.16, tDist: 1.6 * this.cs };
+    // Frame the common and its branching streets from a slight oblique angle.
+    this.orbit = { az: .24, el: 1.16, dist: 1.45 * this.cs, tAz: .24, tEl: 1.16, tDist: 1.45 * this.cs };
     this.followId = -1;
     this.panHold = 0;      // seconds the player's own camera walk owns the view
     this.GR = GR;          // the board half-width, so the pan can clamp to it
@@ -1245,8 +1246,8 @@ export class View {
     }
 
     g.traverse(o2 => { o2.castShadow = true; o2.receiveShadow = true; });
-    // Every plot shares the same axes; roads never rotate a roof off its plot.
-    g.rotation.y = 0;
+    // Doors face their lane; fit the rotated roof inside its reserved bounds.
+    g.rotation.y = g.userData.ring ? 0 : Math.atan2(o.faceX || 0,o.faceY == null ? 1 : o.faceY);
     const scale=S*this.cs;
     g.scale.setScalar(scale);
     if(!g.userData.ring){
@@ -1765,81 +1766,28 @@ export class View {
     }).catch(e => console.error('nature kit:', e));
   }
 
-  // ── THE STREETS, WORN IN ─────────────────────────────────────
-  // ⚠️ THE GRID IS ONLY LEGIBLE IF YOU CAN SEE THE STREETS. The town builds on
-  // lattice points (_siteWork), so the open ground between two rows of roofs —
-  // hearth + (k + ½) · pitch — IS a street, and the reference reads as a planned
-  // city because those streets are visible from above. Painted the way a baked
-  // world's OpenStreetMap roads are painted (albedo, never simulated), from the
-  // SAME numbers the sim sites by, so paint and placement can never disagree.
-  // Inside a ring the streets stop a cell short of the wall band and run out
-  // through the gates; without a ring they cover the trimmed box around the
-  // roofs. Current towns show their street grid from the opening; legacy
-  // layouts retain their gradual reveal. Recomputed when the town changes (day /
-  // works / ring) — never per frame.
+  // Streets appear only along occupied frontages, with small door paths.
+  // Their curves are shared with siting; no rectangular street blanket.
   _paintStreets() {
-    const s = this.sim, N = s.N, P = STREET_PITCH, st = this.street;
-    const ring = s._ring ? s._ring() : null;
-    const sig = s.day + ':' + s.works.length + ':' + (ring ? ring.id + ':' + ring.prog.toFixed(1) : '-');
-    if (sig === this._streetSig) return;
-    this._streetSig = sig;
-    st.fill(0);
-    const hx = s.hearth.x, hy = s.hearth.y;
-    const roofs = s.works.filter(o => WORKS[o.kind] && !WORKS[o.kind].ring && o.prog >= 0.25);
-    // the day they first built to a line — the beat, or the roofs themselves
-    let rowsDay = s._beat && s._beat.rows != null ? s._beat.rows : null;
-    if (rowsDay == null) for (const o of roofs) {
-      const lx = Math.round(hx + Math.round((o.x - hx) / P) * P), ly = Math.round(hy + Math.round((o.y - hy) / P) * P);
-      if (Math.abs(o.x - lx) < 0.5 && Math.abs(o.y - ly) < 0.5 && (rowsDay == null || o.day < rowsDay)) rowsDay = o.day;
-    }
-    if (rowsDay == null || roofs.length < 4) return;
-    const strength = s.layoutVersion ? 1 : Math.min(1, Math.max(0, (s.day - rowsDay) / 14));
-    if (strength <= 0) return;
-    let x0, x1, y0, y1;
-    if (ring) { x0 = ring.cx - ring.hw + 1.2; x1 = ring.cx + ring.hw - 1.2; y0 = ring.cy - ring.hh + 1.2; y1 = ring.cy + ring.hh - 1.2; }
-    else {
-      const xs = roofs.map(o => o.x).sort((a, b) => a - b), ys = roofs.map(o => o.y).sort((a, b) => a - b);
-      x0 = xs[0] - P / 2; x1 = xs.at(-1) + P / 2; y0 = ys[0] - P / 2; y1 = ys.at(-1) + P / 2;
-    }
-    const HALF = 0.95;   // half-width of a street, in cells
-    const near = (v, h0) => { const u = (v - h0) / P - 0.5; return Math.abs(u - Math.round(u)) * P; };   // cells to the nearest street line
-    // ⚠️ TWO LEVELS, NOT A FALLOFF. A soft-edged strip two cells wide under a
-    // linear-filtered 144² texture washes into the dirt (photographed: a faint
-    // paler band). A street reads as a street because it has EDGES: 1 = the
-    // beaten body, 0.3 = a darker packed rim a cell wide either side.
-    const band = (dd) => dd <= HALF ? 1 : dd <= HALF + 0.9 ? 0.3 : 0;
-    const paint = (x, y, v) => { if (x < 0 || y < 0 || x >= N || y >= N || v <= 0) return; const i = y * N + x; if (s.water[i] > 0.002) return; if (v > st[i]) st[i] = v; };
-    for (let y = Math.max(0, Math.ceil(y0)); y <= Math.min(N - 1, Math.floor(y1)); y++)
-      for (let x = Math.max(0, Math.ceil(x0)); x <= Math.min(N - 1, Math.floor(x1)); x++)
-        paint(x, y, Math.max(band(near(x, hx)), band(near(y, hy))) * strength);
-    // ⚠️ an INNER ring (a town that outgrew its first wall) keeps its band clear
-    // of paint and keeps its own gate roads — with only the outer ring
-    // considered, streets ran straight under the inner stone
-    for (const o of s.works) {
-      if (!WORKS[o.kind] || !WORKS[o.kind].ring || o === ring) continue;
-      const igx = o.gx != null ? o.gx : o.cx, igy = o.gy != null ? o.gy : o.cy;
-      for (let y = Math.max(0, Math.floor(o.cy - o.hh - 1.5)); y <= Math.min(N - 1, Math.ceil(o.cy + o.hh + 1.5)); y++)
-        for (let x = Math.max(0, Math.floor(o.cx - o.hw - 1.5)); x <= Math.min(N - 1, Math.ceil(o.cx + o.hw + 1.5)); x++) {
-          const ax = Math.abs(x - o.cx), ay = Math.abs(y - o.cy);
-          const onBand = (Math.abs(ax - o.hw) <= 1.2 && ay <= o.hh + 1.2) || (Math.abs(ay - o.hh) <= 1.2 && ax <= o.hw + 1.2);
-          const atGate = (Math.abs(x - igx) <= 1.6 && Math.abs(ay - o.hh) <= 1.2) || (Math.abs(y - igy) <= 1.6 && Math.abs(ax - o.hw) <= 1.2);
-          if (onBand && !atGate) st[y * N + x] = 0;
-        }
-    }
-    // the roads out: through each gate, three streets into the country
-    if (ring) {
-      const west = ring.cx - ring.hw, east = ring.cx + ring.hw, south = ring.cy - ring.hh, north = ring.cy + ring.hh;
-      const gx = ring.gx != null ? ring.gx : ring.cx, gy = ring.gy != null ? ring.gy : ring.cy;   // the sim's own stand-in for a gateless ring
-      // ⚠️ a gate sits on a half-integer street line, so the road's body is the
-      // TWO cells either side of it (floor/ceil) with a rim beyond each — the
-      // same cells the interior street already covers; Math.round put the body
-      // a half-cell east/north of the street it continues
-      const axis = (v) => [[Math.floor(v), 1], [Math.ceil(v), 1], [Math.floor(v) - 1, 0.3], [Math.ceil(v) + 1, 0.3]];
-      for (let d = -2; d <= 3 * P; d++) {
-        for (const [x, bw] of axis(gx)) { paint(x, Math.round(south - d), bw * strength); paint(x, Math.round(north + d), bw * strength); }
-        for (const [y, bw] of axis(gy)) { paint(Math.round(west - d), y, bw * strength); paint(Math.round(east + d), y, bw * strength); }
+    const s=this.sim,N=s.N,st=this.street;
+    const sig=s.day+':'+s.works.map(w=>w.id+':'+w.x+':'+w.y+':'+(w.prog>=.25)).join('|');
+    if(sig===this._streetSig)return;this._streetSig=sig;this.streetRevision=(this.streetRevision||0)+1;st.fill(0);
+    const roofs=s.works.filter(w=>!WORKS[w.kind].ring&&w.prog>=.25),rings=s.works.filter(w=>WORKS[w.kind].ring);
+    const blocked=new Uint8Array(N*N);
+    for(const w of roofs){const h=WORK_HALF[w.kind]+.15;for(let y=Math.max(0,Math.ceil(w.y-h));y<=Math.min(N-1,Math.floor(w.y+h));y++)for(let x=Math.max(0,Math.ceil(w.x-h));x<=Math.min(N-1,Math.floor(w.x+h));x++)blocked[y*N+x]=1;}
+    const paint=(px,py,width=.72)=>{
+      for(let y=Math.max(0,Math.floor(py-1.5));y<=Math.min(N-1,Math.ceil(py+1.5));y++)for(let x=Math.max(0,Math.floor(px-1.5));x<=Math.min(N-1,Math.ceil(px+1.5));x++){
+        const i=y*N+x,d=Math.hypot(x-px,y-py);if(d>width+.6||blocked[i]||s.water[i]>.002)continue;
+        if(rings.some(r=>s._onWall(r,x,y,0)&&Math.abs(x-(r.gx??r.cx))>1.3&&Math.abs(y-(r.gy??r.cy))>1.3))continue;
+        st[i]=Math.max(st[i],d<=width?.86:.23);
       }
-    }
+    };
+    const ranges=new Map();for(const w of roofs)if(w.lane!=null&&Number.isFinite(w.along)){const r=ranges.get(w.lane)||[0,0];r[0]=Math.min(r[0],w.along);r[1]=Math.max(r[1],w.along);ranges.set(w.lane,r);}
+    if(ranges.has(1)||ranges.has(2)){const r=ranges.get(0)||[0,0];if(ranges.has(1))r[1]=Math.max(r[1],6.5);if(ranges.has(2))r[0]=Math.min(r[0],-8.5);ranges.set(0,r);}
+    for(const [branch,range]of ranges)for(let t=range[0]-.7;t<=range[1]+.7;t+=.35){const p=townLane(s,branch,t);paint(p.x,p.y,branch===0?.8:.57);}
+    for(const w of roofs)if(Number.isFinite(w.roadX)){const dist=Math.hypot(w.x-w.roadX,w.y-w.roadY),steps=Math.ceil(dist*3);for(let q=0;q<=steps;q++){const f=q/Math.max(1,steps);paint(w.roadX+(w.x-w.roadX)*f,w.roadY+(w.y-w.roadY)*f,.43);}}
+    // A small irregular common, rather than a perfectly square central vacancy.
+    for(let dy=-1.8;dy<=1.8;dy+=.6)for(let dx=-2.5;dx<=2.5;dx+=.6)if(dx*dx/6+dy*dy/3<1)paint(s.hearth.x+dx,s.hearth.y+dy,.55);
   }
 
   _paintGround() {

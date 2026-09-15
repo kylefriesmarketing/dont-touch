@@ -140,4 +140,4 @@ were. The graves will.
 
 ### Building layout
 
-Towns now begin on mirrored, evenly spaced plots with an open village green. New construction stays on the same grid at every age and waits when no safe nearby plot is free. Building models fit their reserved footprints, face straight along the grid, and keep streets clear of tree crowns. Existing saves are aligned on load while retaining their buildings and residents.
+Towns grow along a winding main street, branching lanes and small courtyards. Entrances face their lane; frontage spacing and setbacks vary, while every roof retains a safe footprint. Roads extend only along occupied streets. Saved towns from the rigid grid version are rearranged on load while keeping their residents, homes, building progress and stock.

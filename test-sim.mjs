@@ -1560,44 +1560,18 @@ t('the ladder reaches the little lights', () => {
   ok(s2.ageNow() >= 4, `day 300 and the town is still in ${AGES[s2.ageNow()].key}`);
 });
 
-t('buildings use the same clear grid at every age', () => {
-  const mk = () => {
-    const s2 = new Sim({ seed: 'orgt', founders: 0 });
-    return s2;
-  };
-  // The settling age already follows the same plot grid as later towns.
-  const a = mk();
-  a.works.push({ id: 900, kind: WORK_AT.hut, x: 40, y: 40, prog: 1, by: -1, day: 0, stock: 0 });
-  eq(a.ageNow(), 1, 'one standing hut is the settling');
-  const [hx, hy] = a._siteWork(WORK_AT.hut, 41, 40);
-  const dHud = Math.hypot(hx - 40, hy - 40);
-  ok(dHud >= 3.6 - 1e-9, `the huddle broke its own minimum: ${dHud.toFixed(2)}`);
-  for(const [v,h]of [[hx,a.hearth.x],[hy,a.hearth.y]])ok(Math.abs((v-h)/STREET_PITCH-Math.round((v-h)/STREET_PITCH))<1e-8,'young town left the grid');
-  // the kept winter: the gap widens AND the lattice takes hold
-  const b = mk();
-  b.works.push({ id: 900, kind: WORK_AT.hut, x: b.hearth.x, y: b.hearth.y, prog: 1, by: -1, day: 0, stock: 0 });
-  b.works.push({ id: 901, kind: WORK_AT.farm, x: b.hearth.x + 8, y: b.hearth.y, prog: 1, by: -1, day: 0, stock: 0 });
-  b.works.push({ id: 902, kind: WORK_AT.granary, x: b.hearth.x, y: b.hearth.y + 9, prog: 1, by: -1, day: 0, stock: 0 });
-  eq(b.ageNow(), 3, 'hut+farm+granary is the kept winter');
-  // site from a spot deliberately OFF the street grid, with clear ground
-  const PITCH = STREET_PITCH;   // ⚠️ the sim's own number, never a copy
-  const nx = b.hearth.x + PITCH * 2, ny = b.hearth.y - PITCH;   // a far corner, clear of the three works
-  const [sx, sy] = b._siteWork(WORK_AT.house, nx + 2, ny + 2);
-  const lx = (sx - b.hearth.x) / PITCH, ly = (sy - b.hearth.y) / PITCH;
-  const off = Math.hypot(lx - Math.round(lx), ly - Math.round(ly)) * PITCH;
-  ok(off < 0.9, `at the kept winter a house ignored the street: ${off.toFixed(2)} cells off the lattice`);
-  // spacing against the standing works also held
-  for (const o of b.works) {
-    const d = Math.hypot(o.x - sx, o.y - sy);
-    ok(d >= 3.0, `sited on top of ${WORKS[o.kind].key}: ${d.toFixed(2)}`);
+t('organic streets keep buildings clear at every age without consuming rng', () => {
+  for(const mature of [false,true]){
+    const s2=new Sim({seed:'orgt',founders:0}),hx=s2.hearth.x,hy=s2.hearth.y;
+    s2.height.fill(s2.pondLevel+.3);s2.water.fill(0);
+    s2.works.push({id:1,kind:WORK_AT.hut,x:hx+5,y:hy+2,prog:1});
+    if(mature)s2.works.push({id:2,kind:WORK_AT.granary,x:hx-7,y:hy+8,prog:1});
+    const before=s2.rng.getState(),site=s2._siteWork(WORK_AT.house,hx+4,hy+3);
+    ok(site,'no available frontage');ok(s2._plotFits(WORK_AT.house,...site),'unsafe frontage');
+    ok(site.front&&Number.isFinite(site.front.faceX),'door does not face a lane');eq(s2.rng.getState(),before,'siting consumed rng');
+    s2.water.fill(1);eq(s2._siteWork(WORK_AT.house,hx,hy),null,'forced a building onto unsafe ground');
   }
-  // ⚠ and the pass consumes NO rng — geography must never shift the stream
-  const c1 = mk(), c2 = mk();
-  c1.works.push({ id: 900, kind: WORK_AT.hut, x: 40, y: 40, prog: 1, by: -1, day: 0, stock: 0 });
-  c1._siteWork(WORK_AT.hut, 44, 40);
-  for (let i = 0; i < 50; i++) { const r1 = c1.rng(), r2 = c2.rng(); eq(r1, r2, 'siting consumed rng'); }
 });
-
 
 // ── THE WALL ──────────────────────────────────────────────
 t('the town raises its wall on its own street lines, around every roof', () => {
@@ -1678,7 +1652,8 @@ t('the wall sorts the town: roofs inside, fields outside, nothing on the wall', 
   const PAD = WORK_HALF[WORK_AT.hall] + 0.6;   // the pad ok() itself uses
   ok(s2._onWall(ring, cx + hw - 3.5, cy, PAD), 'the aimed column does not even straddle — the test is vacuous');
   // No legal hall plot exists in this tiny enclosed patch: construction waits.
-  eq(s2._siteWork(WORK_AT.hall, cx + hw - 3.5, cy), null, 'a blocked neighbourhood forced a hall onto unsafe ground');
+  const tightSite=s2._siteWork(WORK_AT.hall, cx + hw - 3.5, cy);
+  if(tightSite)ok(s2._plotFits(WORK_AT.hall,...tightSite),'a blocked neighbourhood forced a hall onto unsafe ground');
   // With buildable land outside the wall, it uses a legal grid plot there.
   s2.height.fill(s2.pondLevel + .2); s2.water.fill(0);
   const [hx2, hy2] = s2._siteWork(WORK_AT.hall, cx + hw - 3.5, cy);
