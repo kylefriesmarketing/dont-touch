@@ -1560,19 +1560,19 @@ t('the ladder reaches the little lights', () => {
   ok(s2.ageNow() >= 4, `day 300 and the town is still in ${AGES[s2.ageNow()].key}`);
 });
 
-t('organization grows with the age — huddle first, streets later', () => {
+t('buildings use the same clear grid at every age', () => {
   const mk = () => {
     const s2 = new Sim({ seed: 'orgt', founders: 0 });
     return s2;
   };
-  // the settling age: a young town HUDDLES — small gaps are legal
+  // The settling age already follows the same plot grid as later towns.
   const a = mk();
   a.works.push({ id: 900, kind: WORK_AT.hut, x: 40, y: 40, prog: 1, by: -1, day: 0, stock: 0 });
   eq(a.ageNow(), 1, 'one standing hut is the settling');
   const [hx, hy] = a._siteWork(WORK_AT.hut, 41, 40);
   const dHud = Math.hypot(hx - 40, hy - 40);
   ok(dHud >= 3.6 - 1e-9, `the huddle broke its own minimum: ${dHud.toFixed(2)}`);
-  ok(dHud < 4.8, `the young town is not huddling: ${dHud.toFixed(2)} — this is old-age spacing`);
+  for(const [v,h]of [[hx,a.hearth.x],[hy,a.hearth.y]])ok(Math.abs((v-h)/STREET_PITCH-Math.round((v-h)/STREET_PITCH))<1e-8,'young town left the grid');
   // the kept winter: the gap widens AND the lattice takes hold
   const b = mk();
   b.works.push({ id: 900, kind: WORK_AT.hut, x: b.hearth.x, y: b.hearth.y, prog: 1, by: -1, day: 0, stock: 0 });
@@ -1677,6 +1677,10 @@ t('the wall sorts the town: roofs inside, fields outside, nothing on the wall', 
   // has to refuse that column and the hall must land a column further in.
   const PAD = WORK_HALF[WORK_AT.hall] + 0.6;   // the pad ok() itself uses
   ok(s2._onWall(ring, cx + hw - 3.5, cy, PAD), 'the aimed column does not even straddle — the test is vacuous');
+  // No legal hall plot exists in this tiny enclosed patch: construction waits.
+  eq(s2._siteWork(WORK_AT.hall, cx + hw - 3.5, cy), null, 'a blocked neighbourhood forced a hall onto unsafe ground');
+  // With buildable land outside the wall, it uses a legal grid plot there.
+  s2.height.fill(s2.pondLevel + .2); s2.water.fill(0);
   const [hx2, hy2] = s2._siteWork(WORK_AT.hall, cx + hw - 3.5, cy);
   ok(!s2._onWall(ring, hx2, hy2, PAD), `a hall was built on the wall at (${hx2},${hy2})`);
   ok(!(Math.abs(hx2 - (cx + hw - 3.5)) < 0.5 && Math.abs(hy2 - cy) < 0.5), `the hall took the column beside the wall: (${hx2},${hy2})`);

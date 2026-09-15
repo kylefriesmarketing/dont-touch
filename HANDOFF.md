@@ -3028,3 +3028,14 @@ Full original simulation regression ranges 1–62 and 63–124 were launched aft
 
 
 Final little-lives validation: ALL 124 original simulation tests passed, zero failures and empty stderr (ranges 1–62 and 63–124). The second half completed normally; the brief naming-loop check found bounded retries. All 18 new focused gameplay tests pass, including autonomous leaf-rest selection and resilience slowing actual strain without changing lifespan. The new multi-generation runs, real IndexedDB reload, 19 existing browser checks, high-DPI book navigation, mature-save controls, 16 menu layouts, 10 enlarged-text panel layouts and opening-menu checks also passed. Aggregated result: output/life-final-verification.json. Menu preview: preview-new-menu.jpg; social scene: preview-little-lives.jpg. No deployment; server remains localhost:8460. Use http://localhost:8460/ without newgame to return through the saved-town menu.
+
+
+## Uniform building plots — 2026-09-14
+
+Kyle explicitly replaced the earlier crooked-early-town rule with an even grid at every age. Founding uses 14 mirrored plots and an empty central green (a 5 by 3 block where terrain permits; paired dry shoreline plots otherwise). All works, including stores, windbreaks and channels, use STREET_PITCH=7 from day zero. _gridSite searches nearby legal plots and returns null if full; the unsafe inventor-feet/off-grid fallback is gone. Rectangle clearances use WORK_HALF + PLOT_GAP=1.2 rather than radial centre distance. Walls check every building kind.
+
+The view fits each complete model silhouette inside WORK_HALF, retains that scale while construction animates, removes road-facing yaw/jitter, paints streets immediately, and keeps tree crowns clear of plots and streets. Opening camera faces the grid at a slightly wider distance.
+
+Save field layoutVersion=1: older towns are repacked on load in a deterministic, transactional pass. Work IDs, progress, stock, names, home assignments and kin are retained; walking goals are refreshed. If unusually restricted custom terrain cannot hold every plot, migration leaves the original town intact rather than dropping buildings. Current saves round-trip without rearrangement.
+
+Validation: tools/verify-grid.mjs covers 18 generated openings, all four baked maps, mirrored plots, axis-aligned non-overlap, full save round-trip, 118-work mature migration, diagonal collisions and full-neighbourhood waiting. tools/verify-grid-browser.cjs measures actual rendered bounds and street paint. tools/verify-grid-models.cjs checks all 13 non-wall models and their procedural fallbacks. tools/verify-grid-soak.mjs follows five towns for 65 days, checks every day's grid/spacing, births and survival, then compares full saved states after continued simulation.

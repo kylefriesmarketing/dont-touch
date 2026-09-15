@@ -1,6 +1,6 @@
 // CPU visibility checks keep one instanced draw per material without submitting
 // a whole continent of trees to the GPU. This module never writes sim state.
-import { WORKS, WORK_HALF } from './sim.js';
+import { WORKS, WORK_HALF, STREET_PITCH } from './sim.js';
 export function cullNature(view, THREE, batches) {
   const frustum = new THREE.Frustum(), projection = new THREE.Matrix4();
   const sphere = new THREE.Sphere(), worldScale = new THREE.Vector3();
@@ -17,9 +17,14 @@ export function cullNature(view, THREE, batches) {
       if (sig !== signature || changedGround) {
         signature = sig; terrainRevision = view.natureTerrainRevision || 0;
         const roofs = s.works.filter(w => w.prog >= .15 && !WORKS[w.kind].ring);
+        const cell=2*view.GR/(s.N-1),P=STREET_PITCH;
+        const bounds=roofs.length ? {x0:Math.min(...roofs.map(w=>w.x))-P/2,x1:Math.max(...roofs.map(w=>w.x))+P/2,y0:Math.min(...roofs.map(w=>w.y))-P/2,y1:Math.max(...roofs.map(w=>w.y))+P/2} : null;
+        const streetDistance=(v,h)=>Math.abs((v-h)/P-.5-Math.round((v-h)/P-.5))*P;
         for (const rows of groups) for (const t of rows) {
           if (t.cx == null) { t.present = true; if (changedGround) t.y = view.landscapeHeight(t.x,t.z); continue; }
-          t.present = roofs.every(w => (w.x-t.cx)**2 + (w.y-t.cy)**2 > ((WORK_HALF[w.kind] || 1.2)+2.2)**2);
+          const crown=t.size*.65/cell;
+          t.present = roofs.every(w => Math.abs(w.x-t.cx)>WORK_HALF[w.kind]+crown+.6 || Math.abs(w.y-t.cy)>WORK_HALF[w.kind]+crown+.6);
+          if(bounds&&t.cx>bounds.x0-crown&&t.cx<bounds.x1+crown&&t.cy>bounds.y0-crown&&t.cy<bounds.y1+crown&&Math.min(streetDistance(t.cx,s.hearth.x),streetDistance(t.cy,s.hearth.y))<crown+1)t.present=false;
           if (changedGround) t.y = view._heightAt(t.cx, t.cy);
         }
         if (changedGround) for (const batch of batches) batch.rows.forEach((t, i) => {

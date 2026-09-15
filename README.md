@@ -137,3 +137,7 @@ boot — without it Safari evicts any origin untouched for seven days and takes 
 
 There is no score, no objective and no way to lose. Nobody is ever going to tell you what you
 were. The graves will.
+
+### Building layout
+
+Towns now begin on mirrored, evenly spaced plots with an open village green. New construction stays on the same grid at every age and waits when no safe nearby plot is free. Building models fit their reserved footprints, face straight along the grid, and keep streets clear of tree crowns. Existing saves are aligned on load while retaining their buildings and residents.

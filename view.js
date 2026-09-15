@@ -5,7 +5,7 @@
 // framing belongs to THE ROOM hub. Shape plus lantern glow. (bible §15, pivoted)
 
 import * as THREE from './lib/three.module.js';
-import { STAGE, NEEDS, LANTERN_HUE, LOCI, L, expressed, S, C, STREET_PITCH, WORKS, gateLine, ringArc } from './sim.js';
+import { STAGE, NEEDS, LANTERN_HUE, LOCI, L, expressed, S, C, STREET_PITCH, WORKS, WORK_HALF, gateLine, ringArc } from './sim.js';
 // ⚠️ gateLine / ringArc come from sim.js: the gate, the road to it and the
 // order the wall closes in are ONE law shared with the crew that builds it.
 import { paintLittleLife } from './little-life-view.js';
@@ -111,7 +111,8 @@ export class View {
     // number in this line, not by the art and not by the pacing.
     // ⚠️ x cs: with 2/3-size figures the opening view has to sit 2/3 as far
     // out to show the town at the size that was tuned (see the note above).
-    this.orbit = { az: 0.35, el: 1.16, dist: 1.25 * this.cs, tAz: 0.35, tEl: 1.16, tDist: 1.25 * this.cs };
+    // Show the whole opening block with its north/south rows aligned on screen.
+    this.orbit = { az: 0, el: 1.16, dist: 1.6 * this.cs, tAz: 0, tEl: 1.16, tDist: 1.6 * this.cs };
     this.followId = -1;
     this.panHold = 0;      // seconds the player's own camera walk owns the view
     this.GR = GR;          // the board half-width, so the pan can clamp to it
@@ -1244,39 +1245,22 @@ export class View {
     }
 
     g.traverse(o2 => { o2.castShadow = true; o2.receiveShadow = true; });
-    // ── WHICH WAY A BUILDING FACES ───────────────────────────────
-    // This was `rnd() * 6.283`. Fifteen pitched roofs at fifteen unrelated
-    // angles does not read as a village — it reads as scattered rubble, which
-    // is exactly what the town looked like from the default camera.
-    // Real buildings face the road. When the board was baked from
-    // OpenStreetMap we have the real road network, so we find the nearest real
-    // road cell and turn the front of the building toward it — the village
-    // lines its street the way the actual village does. Generated boards have
-    // no roads and fall back to a shared axis with a little jitter: still a
-    // village, just an unplanned one.
-    // ⚠ the rnd() draw is CONSUMED on both paths so the view's stream does not
-    // shift depending on which world happens to be loaded.
-    // ⚠ the jitter narrows as the town learns order — sampled at BUILD time
-    // and never retro-fitted, so the old quarter stays crooked while the new
-    // streets come in straight. The same law as _siteWork, seen from above.
-    const orderliness = this.sim.ageNow ? Math.min(1, this.sim.ageNow() / 5) : 0;
-    const jit = (rnd() - 0.5) * 0.55 * (1 - orderliness * 0.75);
-    let yaw = jit;
-    const RDW = this.sim.world && this.sim.world.road ? this.sim.world.road : null;
-    if (RDW) {
-      const NW = this.sim.N;
-      let bd = 1e9, bx = 0, by = 0;
-      for (let dy = -7; dy <= 7; dy++) for (let dx = -7; dx <= 7; dx++) {
-        const x = o.x + dx, y = o.y + dy;
-        if (x < 0 || y < 0 || x >= NW || y >= NW) continue;
-        if (RDW[y * NW + x] <= 0.05) continue;
-        const d = dx * dx + dy * dy;
-        if (d < bd) { bd = d; bx = dx; by = dy; }
-      }
-      if (bd < 1e9) yaw = Math.atan2(bx, by) + jit * 0.3;
+    // Every plot shares the same axes; roads never rotate a roof off its plot.
+    g.rotation.y = 0;
+    const scale=S*this.cs;
+    g.scale.setScalar(scale);
+    if(!g.userData.ring){
+      // Authored GLBs used a different cell scale. Fit the COMPLETE rendered
+      // silhouette (roof, porch, mill sails) inside the simulation's footprint.
+      g.updateMatrixWorld(true);
+      const box=new THREE.Box3().setFromObject(g);
+      const cell=2*GR/(this.sim.N-1),limit=WORK_HALF[o.kind]*cell;
+      const extent=Math.max(Math.abs(box.min.x),Math.abs(box.max.x),Math.abs(box.min.z),Math.abs(box.max.z));
+      const fit=Math.min(1,limit/Math.max(extent,1e-8));
+      g.scale.setScalar(scale*fit);
+      g.userData.plotHalf=limit;
+      g.userData.plotScale=scale*fit;
     }
-    g.rotation.y = g.userData.ring ? 0 : yaw;   // a ring is laid to the grid, not turned to the road
-    g.scale.setScalar(S * this.cs); // authored at the 64-grid scale, S to 96, cs to the cell
     return g;
   }
 
@@ -1320,7 +1304,8 @@ export class View {
       // pebbles. The FOOTPRINT now always sits at full authored scale and only
       // the HEIGHT ramps, so a half-built work is a half-raised frame instead of
       // a shrunken finished one.
-      g.scale.set(S * this.cs, S * this.cs * (0.55 + f * 0.45), S * this.cs);
+      const plotScale=g.userData.plotScale || S*this.cs;
+      g.scale.set(plotScale, plotScale * (0.55 + f * 0.45), plotScale);
       g.visible = f > 0.04;
       // the mill turns while it stands; the angle is absolute view-time, so a
       // reload never jumps and a paused frame never drifts
@@ -1789,8 +1774,8 @@ export class View {
   // SAME numbers the sim sites by, so paint and placement can never disagree.
   // Inside a ring the streets stop a cell short of the wall band and run out
   // through the gates; without a ring they cover the trimmed box around the
-  // roofs. They wear in over two weeks from the day the town first built to a
-  // line. View-only, and recomputed only when the town changes shape (day /
+  // roofs. Current towns show their street grid from the opening; legacy
+  // layouts retain their gradual reveal. Recomputed when the town changes (day /
   // works / ring) — never per frame.
   _paintStreets() {
     const s = this.sim, N = s.N, P = STREET_PITCH, st = this.street;
@@ -1800,7 +1785,7 @@ export class View {
     this._streetSig = sig;
     st.fill(0);
     const hx = s.hearth.x, hy = s.hearth.y;
-    const roofs = s.works.filter(o => WORKS[o.kind] && WORKS[o.kind].near && o.prog >= 0.25);
+    const roofs = s.works.filter(o => WORKS[o.kind] && !WORKS[o.kind].ring && o.prog >= 0.25);
     // the day they first built to a line — the beat, or the roofs themselves
     let rowsDay = s._beat && s._beat.rows != null ? s._beat.rows : null;
     if (rowsDay == null) for (const o of roofs) {
@@ -1808,14 +1793,13 @@ export class View {
       if (Math.abs(o.x - lx) < 0.5 && Math.abs(o.y - ly) < 0.5 && (rowsDay == null || o.day < rowsDay)) rowsDay = o.day;
     }
     if (rowsDay == null || roofs.length < 4) return;
-    const strength = Math.min(1, Math.max(0, (s.day - rowsDay) / 14));
+    const strength = s.layoutVersion ? 1 : Math.min(1, Math.max(0, (s.day - rowsDay) / 14));
     if (strength <= 0) return;
     let x0, x1, y0, y1;
     if (ring) { x0 = ring.cx - ring.hw + 1.2; x1 = ring.cx + ring.hw - 1.2; y0 = ring.cy - ring.hh + 1.2; y1 = ring.cy + ring.hh - 1.2; }
     else {
       const xs = roofs.map(o => o.x).sort((a, b) => a - b), ys = roofs.map(o => o.y).sort((a, b) => a - b);
-      const q = (v, f) => v[Math.min(v.length - 1, Math.floor(v.length * f))];
-      x0 = q(xs, 0.125) - P / 2; x1 = q(xs, 0.875) + P / 2; y0 = q(ys, 0.125) - P / 2; y1 = q(ys, 0.875) + P / 2;
+      x0 = xs[0] - P / 2; x1 = xs.at(-1) + P / 2; y0 = ys[0] - P / 2; y1 = ys.at(-1) + P / 2;
     }
     const HALF = 0.95;   // half-width of a street, in cells
     const near = (v, h0) => { const u = (v - h0) / P - 0.5; return Math.abs(u - Math.round(u)) * P; };   // cells to the nearest street line

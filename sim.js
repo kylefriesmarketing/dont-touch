@@ -373,6 +373,8 @@ export const WORK_DONE = 0.98;
 // failed the day the pitch moved to 7.0 — a house standing exactly on the
 // new street read as 1.98 cells off the old one. See _siteWork for why 7.0.
 export const STREET_PITCH = 7.0;
+export const PLOT_GAP = 1.2;
+export const TOWN_LAYOUT_VERSION = 1;
 // footprint half-sizes in cells, by kind. ⚠️ a ring has no footprint of its
 // own — what it forbids is STRADDLING it, see _onWall.
 export const WORK_HALF = [1.0, 1.2, 1.0, 1.6, 2.0, 3.2, 2.2, 0.8, 2.4, 1.4, 1.7, 2.0, 1.6, 0];
@@ -636,14 +638,15 @@ export class Sim {
     // loaded here came back with a glued stranger frozen mid-board and 24 of 36
     // kin believing kin 0 was tending them. `??` is load-bearing.
     const nFound = opts.founders ?? 14;
+    this.layoutVersion = TOWN_LAYOUT_VERSION;
+    if (nFound > 0) this._planFoundingGrid();
     this._seedColony(nFound);
     // ⚠ GATED ON THE SAME COUNT AS THE FOUNDING, FOR THE SAME REASON AS THE
     // NOTE ABOVE. Sim.fromJSON restores into `new Sim({seed, founders: 0})`, so
     // an ungated endowment would lay fourteen phantom works and a worn lane on
     // every single load, before the saved ones were read back over them.
     if (nFound > 0) {
-      const Wb = this.world;
-      this._endowWorks(!!(Wb && Wb.height && Wb.height.length === this.N * this.N));
+      this._endowWorks();
     }
   }
 
@@ -828,6 +831,7 @@ export class Sim {
 
   _seedColony(n) {
     const rng = this.rng;
+    const reserved=this._foundingSites || this.works;
     const born = [];
     for (let i = 0; i < n; i++) {
       let x = this.hearth.x, y = this.hearth.y;
@@ -838,6 +842,7 @@ export class Sim {
         const py = this.hearth.y + tsin(a) * radius;
         const cell = this.idx(px, py);
         if (!this.inJar(px, py) || this.water[cell] > 0.001 || this.height[cell] <= this.pondLevel + 0.06) continue;
+        if(reserved.some(w=>!WORKS[w.kind ?? WORK_AT.hut].ring&&Math.abs(w.x-px)<WORK_HALF[w.kind ?? WORK_AT.hut]+.8&&Math.abs(w.y-py)<WORK_HALF[w.kind ?? WORK_AT.hut]+.8))continue;
         if (born.some(id => (this.k.x[id] - px) ** 2 + (this.k.y[id] - py) ** 2 < 1)) continue;
         x = px; y = py; break;
       }
@@ -899,8 +904,7 @@ export class Sim {
   // of an hour. The invention arc is untouched: the founders inherit the four
   // practices their parents had, and still have to work out the HOUSE and the
   // HALL for themselves, which is the arc the chronicle is actually about.
-  _endowWorks(fromBake) {
-    const rng = this.rng, N = this.N, W = this.world;
+  _endowWorks() {
     const day = 0;
     // three stores, two windbreaks, two channels, seven huts.
     const RECIPE = [WORK_AT.channel, WORK_AT.channel,
@@ -908,43 +912,10 @@ export class Sim {
                     WORK_AT.windbreak, WORK_AT.windbreak,
                     WORK_AT.hut, WORK_AT.hut, WORK_AT.hut, WORK_AT.hut,
                     WORK_AT.hut, WORK_AT.hut, WORK_AT.hut];
-    const ok = (x, y) => {
-      const i = this.idx(x, y);
-      return this.inJar(x, y) && this.water[i] <= 0.001 && this.height[i] > this.pondLevel + 0.06;
-    };
-    // WHERE they stand. A baked board carries the REAL building centroids of
-    // the real place, so the founding village sits where the actual village
-    // sits, lined along its actual streets. A generated board rings them
-    // around the hearth instead.
-    const sites = [];
-    const seen = new Set();
-    const push = (x, y) => {
-      const cx = Math.round(x), cy = Math.round(y), key = cy * N + cx;
-      if (seen.has(key) || !ok(cx, cy)) return;
-      // Reserve the largest founding footprint before the recipe sorts sites.
-      // The old two-cell spacing stacked roofs; leave a lane and a village green.
-      const clear = WORK_HALF[WORK_AT.hut] * 2 + C.FOUND_CLEAR;
-      for (const s2 of sites) if ((s2.x - cx) ** 2 + (s2.y - cy) ** 2 < clear * clear) return;
-      if ((cx - this.hearth.x) ** 2 + (cy - this.hearth.y) ** 2 < 3.5 ** 2) return;
-      for (let id = 0; id < this.count; id++) if (this.k.alive[id] && this.k.glued[id] &&
-        (cx - this.k.x[id]) ** 2 + (cy - this.k.y[id]) ** 2 < 3.2 ** 2) return;
-      seen.add(key); sites.push({ x: cx, y: cy });
-    };
-    if (fromBake && W && W.buildings && W.buildings.length >= 2) {
-      const cand = [];
-      for (let b = 0; b + 1 < W.buildings.length; b += 2) {
-        const x = W.buildings[b], y = W.buildings[b + 1];
-        const dx = x - this.hearth.x, dy = y - this.hearth.y;
-        cand.push({ x, y, d: dx * dx + dy * dy });
-      }
-      cand.sort((a, b2) => a.d - b2.d);
-      for (const c of cand) { if (sites.length >= RECIPE.length) break; push(c.x, c.y); }
-    }
-    // top up (or fill entirely) with a ring around the hearth
-    for (let tries = 0; sites.length < RECIPE.length && tries < 5000; tries++) {
-      const a = rng(), r = rr(rng, 3.0 * S, (tries < 1600 ? 11.0 : 17.0) * S);   // tcos/tsin take TURNS
-      push(this.hearth.x + tcos(a) * r, this.hearth.y + tsin(a) * r);
-    }
+    // The opening is a mirrored set of plots around an empty village green.
+    // Baked terrain keeps its landscape; building centroids no longer dictate plots.
+    const sites = this._foundingSites || [];
+    delete this._foundingSites;
     if (!sites.length) return;
     // channels want the water, huts want the hearth: sort so the recipe lands
     // somewhere it makes sense rather than in draw order
@@ -955,19 +926,21 @@ export class Sim {
     sites.sort((a, b2) => dh(a) - dh(b2));
     const order = wet.concat(sites);
     for (let n = 0; n < order.length && n < RECIPE.length; n++) {
-      const kind = RECIPE[n], s2 = order[n];
+      const s2 = order[n], kind = s2.kind ?? RECIPE[n];
       this.works.push({ id: this.workSeq++, kind, x: s2.x, y: s2.y, prog: 1, by: -1, day,
                         stock: kind === WORK_AT.store ? 0.6 : 0 });
       // a lane worn between the hearth and everything that stands on it — a
       // village that has been lived in has paths, and `worn` regrows on its
       // own if this generation stops walking them
-      const steps = Math.max(2, (Math.sqrt(dh(s2)) | 0) * 2);
-      for (let q = 0; q <= steps; q++) {
-        const f = q / steps;
-        const i = this.idx(this.hearth.x + (s2.x - this.hearth.x) * f,
-                           this.hearth.y + (s2.y - this.hearth.y) * f);
-        if (this.worn[i] < 0.55) this.worn[i] = 0.55;
-      }
+      const line = (ax, ay, bx, by) => {
+        const steps = Math.max(1, Math.ceil(Math.hypot(bx-ax, by-ay)*2));
+        for(let q=0;q<=steps;q++){const f=q/steps,i=this.idx(ax+(bx-ax)*f,ay+(by-ay)*f);this.worn[i]=Math.max(this.worn[i],.55);}
+      };
+      const laneY=s2.y+STREET_PITCH/2;
+      line(this.hearth.x,this.hearth.y,this.hearth.x,laneY);
+      line(this.hearth.x,laneY,s2.x,laneY);
+      line(s2.x,laneY,s2.x,s2.y);
+
     }
     // ⚠ THE PRACTICES COME WITH THE BUILDINGS OR THE VILLAGE ROTS. A kin can
     // only work on a kind it KNOWS (see the two guards in _build), so endowed
@@ -984,25 +957,99 @@ export class Sim {
     }
     for (let id = 0; id < this.count; id++) if (this.k.alive[id]) this.k.knows[id] |= mask;
   }
-  // ── WHERE A NEW WORK STANDS ──────────────────────────────
-  // Kyle: 'the buildings and civilizations look so close and mushed together —
-  // have them start like that but as the civilization evolves so does
-  // organization.' Works used to land at the INVENTOR'S FEET, and inventors
-  // cluster at the hearth, so the town was a pile at every age.
-  // Organization now grows with the age the town has actually reached:
-  //   · the gap between walls widens as the ages climb (huddle → breathing
-  //     room), and it is FOOTPRINT-AWARE — a hall needs more air than a hut.
-  //   · from 'the kept winter' (age 3) the near-kinds start settling onto a
-  //     village lattice anchored at the hearth: streets emerge, because the
-  //     candidate scoring starts paying for distance from the grid.
-  //   · buildings keep the yaw and position they were BUILT with, so the old
-  //     quarter stays crooked while the new streets come in straight — the
-  //     town's history stays legible in its shape.
-  // ⚠ NO RNG. A fixed spiral scan with deterministic argmax — the stream must
-  // not shift with geography. Falls back to the inventor's feet if nothing
-  // within reach passes, so a founding act is never blocked.
-  // ⚠ store/windbreak/channel keep small gaps and NEVER take the lattice: a
-  // channel belongs at the water it was scraped from, not on a street.
+  // One plot grid from the founding onward. No occupied-ground fallback.
+  // Siting is deterministic and consumes no random draws.
+  _plotGround(wi,x,y) {
+    const h=WORK_HALF[wi],c=(this.N-1)/2,R=(this.N-1)*.43;
+    // Test the whole square, not only its centre: roofs must not cross water or the rim.
+    for(let dy=-h;dy<=h+.001;dy+=h||1)for(let dx=-h;dx<=h+.001;dx+=h||1){
+      const px=x+dx,py=y+dy,i=this.idx(px,py);
+      if(Math.hypot(px-c,py-c)>R||this.water[i]>.001||this.height[i]<this.pondLevel+.06)return false;
+    }
+    return true;
+  }
+  _plotFits(wi,x,y,works=this.works) {
+    if(!this._plotGround(wi,x,y))return false;
+    const h=WORK_HALF[wi];
+    if(Math.abs(x-this.hearth.x)<h+2&&Math.abs(y-this.hearth.y)<h+2)return false;
+    for(const o of works){
+      if(WORKS[o.kind].ring){if(this._onWall(o,x,y,h+.6))return false;continue;}
+      // Axis-aligned rectangles: a radial centre test misses diagonal roof overlaps.
+      const need=h+WORK_HALF[o.kind]+PLOT_GAP;
+      if(Math.abs(o.x-x)<need-1e-7&&Math.abs(o.y-y)<need-1e-7)return false;
+    }
+    for(let id=0;id<this.count;id++)if(this.k.alive[id]&&this.k.glued[id]&&Math.abs(this.k.x[id]-x)<h+.8&&Math.abs(this.k.y[id]-y)<h+.8)return false;
+    if(this.life?.props.some(p=>Math.abs(p.x-x)<h+1.2*S&&Math.abs(p.y-y)<h+1.2*S))return false;
+    return true;
+  }
+  _planFoundingGrid() {
+    const original={...this.hearth},P=STREET_PITCH;
+    let best=null,bestScore=Infinity;
+    const shape=[];for(let y=-1;y<=1;y++)for(let x=-2;x<=2;x++)if(x||y)shape.push([x,y]);
+    // Prefer a complete 5 by 3 block (centre left open), translated onto dry ground.
+    for(let dy=-this.N/2;dy<=this.N/2;dy+=2)for(let dx=-this.N/2;dx<=this.N/2;dx+=2){
+      const x=original.x+dx,y=original.y+dy,score=dx*dx+dy*dy;
+      if(score>=bestScore||!this._plotGround(WORK_AT.hut,x,y))continue;
+      const sites=shape.map(([gx,gy])=>({x:x+gx*P,y:y+gy*P}));
+      if(sites.every(p=>this._plotGround(WORK_AT.hut,p.x,p.y))){best={x,y,sites};bestScore=score;}
+    }
+    // Narrow coastlines can interrupt a rectangle. Keep opposite plots paired,
+    // using the next complete rows on the same lattice instead of scattered infill.
+    if(!best){
+      for(let dy=-this.N/2;dy<=this.N/2;dy++)for(let dx=-this.N/2;dx<=this.N/2;dx++){
+        const x=original.x+dx,y=original.y+dy;if(!this._plotGround(WORK_AT.hut,x,y))continue;
+        const pairs=[];for(let gy=0;gy<=4;gy++)for(let gx=-4;gx<=4;gx++){
+          if(gy===0&&gx<=0)continue;
+          const a={x:x+gx*P,y:y+gy*P},b={x:x-gx*P,y:y-gy*P};
+          if(this._plotGround(WORK_AT.store,a.x,a.y)&&this._plotGround(WORK_AT.store,b.x,b.y))pairs.push({a,b,d:gx*gx+gy*gy});
+        }
+        pairs.sort((a,b)=>a.d-b.d);if(pairs.length<7)continue;
+        const kinds=[[3,3],[3,3],[3,3],[3,0],[1,1],[0,0],[2,2]],chosen=[];
+        for(const [ka,kb]of kinds){const i=pairs.findIndex(p=>this._plotGround(ka,p.a.x,p.a.y)&&this._plotGround(kb,p.b.x,p.b.y));if(i<0)break;const p=pairs.splice(i,1)[0];p.a.kind=ka;p.b.kind=kb;chosen.push(p);}
+        if(chosen.length<7)continue;
+        const score=dx*dx+dy*dy+chosen.reduce((v,p)=>v+p.d*P,0);
+        if(score<bestScore){best={x,y,sites:chosen.flatMap(p=>[p.a,p.b])};bestScore=score;}
+      }
+    }
+    if(best){this.hearth={x:best.x,y:best.y};this._foundingSites=best.sites;}
+    else {
+      // Very restricted custom terrain still uses legal plots; never force an overlap.
+      const sites=[];for(let gy=-6;gy<=6;gy++)for(let gx=-6;gx<=6;gx++)if(gx||gy){const x=original.x+gx*P,y=original.y+gy*P;if(this._plotGround(WORK_AT.hut,x,y))sites.push({x,y});}
+      sites.sort((a,b)=>Math.hypot(a.x-original.x,a.y-original.y)-Math.hypot(b.x-original.x,b.y-original.y));this._foundingSites=sites.slice(0,14);
+    }
+  }
+  _alignTownGrid() {
+    // Repack a legacy town without changing work ids, progress, stock or residents.
+    // Plan first; do not partially rearrange a save if its terrain has no capacity.
+    const old=this.works,placed=old.filter(o=>WORKS[o.kind].ring),moves=[];
+    const ordered=old.filter(o=>!WORKS[o.kind].ring).slice().sort((a,b)=>WORK_HALF[b.kind]-WORK_HALF[a.kind]||a.id-b.id);
+    for(const o of ordered){
+      const site=this._gridSite(o.kind,o.x,o.y,placed,true);
+      if(!site)return false;
+      const copy={...o,x:site[0],y:site[1]};placed.push(copy);moves.push([o,copy]);
+    }
+    for(const [o,p]of moves){o.x=p.x;o.y=p.y;}
+    // A builder's cached destination must follow the moved foundation.
+    for(let id=0;id<this.count;id++)if(this.k.alive[id]&&!this.k.glued[id]){this.k.goal[id]=0;}
+    this.layoutVersion=TOWN_LAYOUT_VERSION;
+    return true;
+  }
+  _gridSite(wi,x0,y0,works=this.works,wholeTown=false) {
+    const P=STREET_PITCH,hx=this.hearth.x,hy=this.hearth.y;
+    const gx=Math.round((x0-hx)/P),gy=Math.round((y0-hy)/P);
+    const ring=this._ring(),wrong=(C.WALL_SORT*P)**2,wantIn=wi!==WORK_AT.farm;
+    // New work stays within three blocks of its builder. A full neighbourhood
+    // waits for a plot rather than placing a foundation on a refused location.
+    const reach=wholeTown?Math.ceil(this.N/P):3;
+    let best=null,bestD=Infinity;
+    for(let ry=-reach;ry<=reach;ry++)for(let rx=-reach;rx<=reach;rx++){
+      const x=hx+(gx+rx)*P,y=hy+(gy+ry)*P;
+      const d=(x-x0)**2+(y-y0)**2+(ring&&this._inWall(ring,x,y)!==wantIn?wrong:0);
+      if(d>=bestD||!this._plotFits(wi,x,y,works))continue;
+      best=[x,y];bestD=d;
+    }
+    return best;
+  }
   // ── THE WALL ──────────────────────────────────────────────
   // the biggest ring the town has planned or raised, or null
   _ring() {
@@ -1040,7 +1087,7 @@ export class Sim {
     // reaches into the band; the old crooked quarter is not on the grid).
     const xs = [], ys = [];
     for (const o of this.works) {
-      if (!WORKS[o.kind].near || o.prog < 0.25) continue;   // roofs that are really there
+      if (WORKS[o.kind].ring || o.prog < 0.25) continue;   // roofs that are really there
       const h = WORK_HALF[o.kind] || 1.2;
       xs.push([o.x - h, o.x + h]); ys.push([o.y - h, o.y + h]);
     }
@@ -1095,7 +1142,7 @@ export class Sim {
       const r = { cx: (west + east) / 2, cy: (south + north) / 2, hw: (east - west) / 2, hh: (north - south) / 2 };
       let moved = false;
       for (const o of this.works) {
-        if (!WORKS[o.kind].near || o.prog < 0.25) continue;
+        if (WORKS[o.kind].ring || o.prog < 0.25) continue;
         if (!this._onWall(r, o.x, o.y, WORK_HALF[o.kind] || 1.2)) continue;
         const dx = (o.x - r.cx) / r.hw, dy = (o.y - r.cy) / r.hh;
         // out if the jar allows it, else in
@@ -1126,6 +1173,8 @@ export class Sim {
     }
     // the south gate — on the street line nearest the middle, clear of the corners
     const gx = gateLine(cx, hx, west, east, P), gy = gateLine(cy, hy, south, north, P);
+    const planned={cx,cy,hw,hh};
+    if(this.works.some(o=>!WORKS[o.kind].ring&&this._onWall(planned,o.x,o.y,WORK_HALF[o.kind])))return null;
     return [gx, south, cx, cy, hw, hh, gx, gy];
   }
 
@@ -1133,125 +1182,13 @@ export class Sim {
   _ringSite(o) { const p = ringPoint(o, o.prog); o.x = p[0]; o.y = p[1]; }
 
   _siteWork(wi, x0, y0) {
-    const HALF = WORK_HALF;
-    // a ring is not a point — see _siteWall
-    if (WORKS[wi].ring) return this._siteWall();
-    const age = this.ageNow();
-    // ⚠ the gap stops growing at 1.6: at 2.0 a house-house pair needed 6.0
-    // cells while the streets are 5.6 apart, so the grid and the gap rule
-    // fought and buildings lost — pushed off-grid AND far away, and the town
-    // paid in lives (measured alive 98 vs 171 at day 300).
-    const gap = age <= 1 ? 0.4 : age === 2 ? 1.0 : 1.6;
-    // ⚠️ from the SETTLING (2), not the kept winter (3). The grid used to start
-    // two ages in, by which point most of the town was already standing crooked
-    // and could never be re-laid — the old quarter is meant to be a small
-    // crooked heart, not most of the settlement. At age 2 the gap is 1.0 so
-    // house+house+gap = 5.0 < PITCH 5.6, which the lattice can still satisfy.
-    const useLattice = age >= 2 && WORKS[wi].near;
-    // ⚠ PITCH must EXCEED the widest common spacing need (house+house+gap =
-    // 5.6) or adjacent street corners are illegal and the whole lattice is
-    // unusable — the first pitch (4.2) did exactly that.
-    // ⚠️ 7.0, not 5.6 — the old pitch was exactly house+house+gap and a HALL
-    // (half 3.2) needed 6.8 beside a house, so every hall blocked its own
-    // neighbouring lattice points and the town fell off the grid around its
-    // most important building. Measured before: 20-43% of works on-grid. The
-    // bigger board is what makes a wider street affordable.
-    const PITCH = STREET_PITCH;
-    const ok = (x, y) => {
-      const i = this.idx(x, y);
-      if (!this.inJar(x, y) || this.water[i] > 0.001) return false;
-      if (this.height[i] < this.pondLevel + 0.06) return false;
-      for (const o of this.works) {
-        // a ring has no footprint; what it forbids is a roof half in, half out
-        if (WORKS[o.kind].ring) { if (this._onWall(o, x, y, HALF[wi] + 0.6)) return false; continue; }
-        const need = HALF[wi] + (HALF[o.kind] || 1.2) + gap;
-        const dx = o.x - x, dy = o.y - y;
-        if (dx * dx + dy * dy < need * need) return false;
-      }
-      return true;
-    };
-    let bx = x0, by = y0, bs = -1e9, found = false;
-    // ── THE STREET GRID, TRIED FIRST ────────────────────────────
-    // ⚠️⚠️ SCORING A FREE SCAN AND HOPING IT LANDS ON THE GRID DOES NOT BUILD A
-    // GRID. The old code swept every cell in reach and subtracted a penalty for
-    // lattice offset — but the exact lattice points are usually BLOCKED by a
-    // building that is already there, so the best-scoring free cell is simply
-    // the least-bad off-grid one. Measured on a day-100 town: median offset
-    // 1.92 cells against 3.96 for pure chance — halfway to random, which is
-    // exactly why Kyle said the town looks scattered rather than laid out.
-    // So: walk the LATTICE POINTS themselves, nearest first, and take the first
-    // legal one. A building either stands on the street grid or the grid had no
-    // room for it, and only then does the free scan below get a say.
-    // ⚠️ still no rng — a deterministic ring walk and a first-match.
-    if (useLattice) {
-      const gx = Math.round((x0 - this.hearth.x) / PITCH), gy = Math.round((y0 - this.hearth.y) / PITCH);
-      // ⚠️ THE WALL SORTS THE TOWN. Once a ring is planned, roofs want to stand
-      // INSIDE it and fields OUTSIDE — the reference kingdom is packed roofs
-      // behind a grey wall with the farmland beyond. A point on the wrong side
-      // pays two street-widths of distance, so it is still taken when the right
-      // side has no room, and nobody walks to the far end of the board to
-      // satisfy a picture (the widening lesson, again).
-      const ring = this._ring(), wantIn = wi !== WORK_AT.farm;
-      const WRONG = (C.WALL_SORT * PITCH) * (C.WALL_SORT * PITCH);
-      let best = null, bestD = 1e9;
-      for (let ry = -3; ry <= 3; ry++) for (let rx = -3; rx <= 3; rx++) {
-        const lx = Math.round(this.hearth.x + (gx + rx) * PITCH);
-        const ly = Math.round(this.hearth.y + (gy + ry) * PITCH);
-        if (!ok(lx, ly)) continue;
-        const dx = lx - x0, dy = ly - y0;
-        let d = dx * dx + dy * dy;
-        if (ring && this._inWall(ring, lx, ly) !== wantIn) d += WRONG;
-        if (d < bestD) { bestD = d; best = [lx, ly]; }
-      }
-      if (best) {
-        if (this._beat == null) this._beat = {};
-        if (this._beat.rows == null) {
-          this._beat.rows = this.day;
-          this.log('rows', 'they built to a line, for the first time.', 5.5);
-        }
-        return best;
-      }
+    if(WORKS[wi].ring)return this._siteWall();
+    const site=this._gridSite(wi,x0,y0);
+    if(site){
+      if(this._beat==null)this._beat={};
+      if(this._beat.rows==null){this._beat.rows=this.day;this.log('rows','they built to a line, for the first time.',5.5);}
     }
-    // ⚠️⚠️ WIDENING THIS SCAN WAS TRIED, MEASURED AND REVERTED (2026-09-04).
-    // A review found that at ±8 the scan fails on roughly a third of calls in a
-    // mature town and the fallback then plants the work at the inventor's exact
-    // FEET — on ground `ok()` had just refused. True, and it sounds obviously
-    // worth fixing. Widening to [8, 14, 20] was measured on ONE seed (alive
-    // 138 → 142) and looked like a win. Across FOUR seeds it is a 30% population
-    // COLLAPSE: alive 545 vs 776, works BUILT 55 vs 92 and 111 vs 140, mean
-    // distance from the hearth up 20-35%. Pushing a work further out to satisfy
-    // the spacing rule costs more in walking than a badly-sited building costs
-    // in anything else — a scattered town starves.
-    // ⚠️ SINGLE-SEED COMPARISONS OF THIS GAME ARE NOISE. That is written twice
-    // already in HANDOFF and it has now burned a third time, in a review's own
-    // recommendation. A real fix has to find a NEARER legal cell (a BFS out from
-    // the inventor), not a farther one — and it is a design change, not a review
-    // patch. The feet fallback stays until somebody builds that.
-    {
-    for (let dy = -8; dy <= 8; dy++) for (let dx = -8; dx <= 8; dx++) {
-      const x = Math.round(x0 + dx), y = Math.round(y0 + dy);
-      if (!ok(x, y)) continue;
-      // ⚠ when the lattice applies, nearness to the inventor matters LESS —
-      // order is worth walking a few doors for. Unweighted, the distance term
-      // drowned the grid: measured mean lattice offset 1.15 cells vs 1.6
-      // random, i.e. streets you could not see.
-      let sc = -Math.sqrt(dx * dx + dy * dy) * (useLattice ? 0.75 : 1);
-      if (useLattice) {
-        const lx = (x - this.hearth.x) / PITCH, ly = (y - this.hearth.y) / PITCH;
-        const off = Math.hypot(lx - Math.round(lx), ly - Math.round(ly)) * PITCH;
-        sc -= off * (age >= 5 ? 2.8 : 2.0);
-      }
-      if (sc > bs) { bs = sc; bx = x; by = y; found = true; }
-    }
-    }
-    if (found && useLattice) {
-      if (this._beat == null) this._beat = {};
-      if (this._beat.rows == null) {
-        this._beat.rows = this.day;
-        this.log('rows', 'they built to a line, for the first time.', 5.5);
-      }
-    }
-    return [bx, by];
+    return site;
   }
 
   // ── SET OUT NEW FIGURES ────────────────────────────────────
@@ -4225,7 +4162,7 @@ export class Sim {
 
   toJSON() {
     return {
-      life: this.life, rngLifeState: this.rngLife.getState(),
+      life: this.life, rngLifeState: this.rngLife.getState(), layoutVersion: this.layoutVersion,
       v: 1, seed: this.seed, N: this.N, tick: this.tick, day: this.day, dayFrac: this.dayFrac,
       count: this.count, free: this.free.slice(), names: this.names.slice(),
       graves: this.graves, corpses: this.corpses, stats: this.stats,
@@ -4443,6 +4380,8 @@ export class Sim {
     for (let i = 0; i < s.count; i++) if (s.k.alive[i]) { alive++; sumB += s.k.bright[i]; }
     s.alive = alive;
     s.wellbeing = alive ? sumB / alive : 0;   // the audio reads this on frame one
+    s.layoutVersion = o.layoutVersion || 0;
+    if(s.layoutVersion < TOWN_LAYOUT_VERSION) s._alignTownGrid();
     return s;
   }
 }
