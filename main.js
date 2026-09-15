@@ -6,6 +6,8 @@ import { View } from './view.js';
 import { UI } from './ui.js';
 import { Sfx } from './sfx.js';
 import { Gesture } from './gesture.js';
+import { Survey } from './survey.js';
+import { advanceSimulation } from './clock-step.js';
 
 // ⚠️ THE CONTACT CURVE. A still hand OPENS and COOLS; a moving one stays small
 // and hot. That single rule is the whole difference between comfort and a burn,
@@ -178,6 +180,7 @@ class App {
     this.view = new View(canvas, this.sim);
     this.ui = new UI(this.sim, this);
     this.ui.sync();
+    this.survey = new Survey(this);
     this.bindInput(canvas);
 
     document.getElementById('boot').classList.add('hide');
@@ -224,6 +227,7 @@ class App {
       b.textContent = text;
       if (title) b.title = title;
       b.onclick = () => {
+        if(!this.fresh && !confirm('Start a town in another world? This replaces the saved town.'))return;
         const q = new URLSearchParams();
         if (name) q.set('world', name);
         q.set('newgame', '1');
@@ -261,10 +265,11 @@ class App {
     t.classList.remove('hide', 'going');
     if (this.view) { this.view.titleDim = 1; this.view.titleTo = 1; }
     if (hasSave) {
-      document.getElementById('chainSay').textContent = 'pull the light back on';
+      document.getElementById('chainSay').textContent = 'Continue your town';
       document.getElementById('tsub').textContent =
         'you left it in the dark. it did not stop while you were upstairs.';
     }
+    document.getElementById('townStamp').textContent = (this.sim.world?.title || this.sim.worldName || 'A world of its own') + ' · day ' + this.sim.day + ' · ' + this.sim.k.alive.reduce((a,b)=>a+b,0) + ' creatures';
     document.getElementById('chain').onclick = () => this.enter(!hasSave);
     document.getElementById('tBox').onclick = () => this.ui.showBox(true);
     document.getElementById('tNew').onclick = async () => {
@@ -322,6 +327,7 @@ class App {
 
   // "While you were away." Bounded by a compute budget, not by ambition. (§13.2)
   async catchUp(ms) {
+    if (this.catchingUp) return;
     // ⚠️ a contact left open would be integrated across the ENTIRE burst below,
     // which is up to 26 days of board with a finger on it.
     this.sim.setHand(null); this.touch = null;
@@ -335,11 +341,18 @@ class App {
     const note = document.getElementById('boot');
     note.classList.remove('hide');
     note.innerHTML = '<div class="bootin"><h1>DON&rsquo;T TOUCH</h1><p>while you were away…</p></div>';
-    await new Promise(r => setTimeout(r, 40));
-    const t0 = performance.now();
+    this.catchingUp = true;
     let n = 0;
-    while (n < target && performance.now() - t0 < 2500) { this.sim.step(); n++; }
-    note.classList.add('hide');
+    try {
+      await new Promise(r => setTimeout(r, 40));
+      const t0 = performance.now();
+      while (n < target && performance.now() - t0 < 2500) {
+        const slice = performance.now();
+        do { this.sim.step(); n++; } while (n < target && performance.now() - slice < 8);
+        note.querySelector('p').textContent = 'while you were away… day ' + this.sim.day;
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
+    } finally { this.catchingUp = false; this.acc = 0; note.classList.add('hide'); }
     // ⚠️ fromDay was computed and then dropped: the "while you were away" page
     // showed the whole run's greatest hits, which after the sifter fix means
     // mostly the founding. Pass it — this page is about the nights you missed.
@@ -349,6 +362,7 @@ class App {
 
   setSpeed(s) {
     this.speed = s;
+    this.acc = 0; // changing pace never pays back stale fast-forward work
     this.paused = s === 0;
     this.ui.sync();
     this.sfx.start();
@@ -360,7 +374,7 @@ class App {
   // shipped, just looks broken.
   arm(p) {
     this.armed = p;
-    if (['crumb', 'water', 'seed', 'raise', 'lower', 'lift', 'call', 'mend', 'strike', 'still', 'dread'].includes(p) && this.sim.lid) {
+    if (['bead', 'leaf', 'tidy', 'crumb', 'water', 'seed', 'raise', 'lower', 'lift', 'call', 'mend', 'strike', 'still', 'dread'].includes(p) && this.sim.lid) {
       this.sim.setLid(false);
       this.ui.sync();
       this.ui.nudge('the sheet is off. the room drinks their pond while it is.', 'sheetoff');
@@ -400,11 +414,21 @@ class App {
       canvas.setPointerCapture(e.pointerId);
       down = true; moved = 0; sx = e.clientX; sy = e.clientY;
       const [nx, ny] = norm(e);
+      if (e.button === 1 || e.altKey) { e.preventDefault(); mode = 'orbit'; return; }
+      v.followId = -1; // a hand contact owns the view while it acts
       const tilting = e.button === 2 || e.shiftKey || this.armed === 'tilt';
       if (tilting) { mode = 'tilt'; this.tilt0 = { x: s.tilt.x, y: s.tilt.y }; return; }
 
       if (this.armed === 'breathe') { mode = 'breathe'; this.breathing = true; return; }
 
+      if (['bead','leaf','tidy'].includes(this.armed)) {
+        const hit=v.pickGround(nx,ny),kind=this.armed;
+        const ok=hit && (kind==='tidy'?s.tidyLittle(...hit.cell):s.placeLittle(kind,...hit.cell));
+        if(ok){this.sfx.touch();if(v.vfx)v.vfx.ring(...hit.cell,{color:kind==='bead'?0x79cbd8:0xa5c67d,r0:.3,r1:4,life:1});
+          this.ui.menu.feedback(kind==='tidy'?'Put away. The ground is clear again.':(kind==='bead'?'Play bead placed.':'Leaf shelter placed.')+' Let time run and watch who visits.');}
+        else this.ui.menu.feedback(kind==='tidy'?'Click closer to a bead or leaf to put it away.':'Choose open, dry ground away from buildings and other objects. Up to '+C.LIFE_PROPS+' objects fit.');
+        mode=null;down=false;return;
+      }
       if (this.armed === 'crumb') {
         const h = v.pickGround(nx, ny);
         if (h && s.give(h.cell[0], h.cell[1])) {
@@ -547,8 +571,8 @@ class App {
       const dx = (e.clientX - sx) / innerWidth, dy = (e.clientY - sy) / innerHeight;
       if (mode === 'orbit') {
         v.orbit.tAz -= dx * 3.4;
-        // clamped to bird's eye — you look down into the layout, never across it
-        v.orbit.tEl = Math.max(0.92, Math.min(1.52, v.orbit.tEl + dy * 2.6));
+        // Wide views stay overhead; a close view can lean down to their level.
+        v.orbit.tEl = Math.max(0.44, Math.min(1.52, v.orbit.tEl + dy * 2.6));
         sx = e.clientX; sy = e.clientY;
       } else if (mode === 'tilt') {
         const a = v.orbit.az;
@@ -705,9 +729,18 @@ class App {
         return;
       }
       if (this.phase !== 'play') {
+        if(e.target?.closest('button,summary,a') || !document.getElementById('boxWrap').classList.contains('hide'))return;
         if (k === ' ' || k === 'enter') { e.preventDefault(); this.enter(); }
         return;
       }
+      // Reading a modal or activating a focused button must never touch the world.
+      const inModal = !document.getElementById('boxWrap').classList.contains('hide') ||
+        !document.getElementById('pageWrap').classList.contains('hide');
+      if (this.catchingUp || inModal) {
+        if (k === 'b' && !document.getElementById('pageWrap').classList.contains('hide')) document.getElementById('pageWrap').classList.add('hide');
+        return;
+      }
+      if ((k === ' ' || k === 'enter') && e.target?.closest('button,summary')) return;
       this.sfx.start();
       // ── WALKING THE CAMERA ─────────────────────────────────────
       // There was no way to move across the board at all: you could orbit it,
@@ -716,9 +749,12 @@ class App {
       // this size that means most of it was somewhere you could not go.
       if (k === 'w' || k === 'a' || k === 's' || k === 'd' ||
           k === 'arrowup' || k === 'arrowdown' || k === 'arrowleft' || k === 'arrowright') {
-        e.preventDefault(); this.panKeys.add(k); return;
+        e.preventDefault(); v.followId = -1; this.panKeys.add(k); return;
       }
-      if (k === ' ') { e.preventDefault(); this.breathing = true; }
+      if (k === 'm') { this.survey.root.open = !this.survey.root.open; }
+      else if (k === 'h') this.survey.home();
+      else if (k === 'f') this.ui.toggleFollow();
+      else if (k === ' ') { e.preventDefault(); this.breathing = true; }
       else if (k === 'l') { s.setLid(!s.lid); this.sfx.lid(); this.ui.sync(); }
       else if (k === 'k') { s.setLamp(!s.lampOn); this.sfx.touch(); this.ui.sync(); }
       else if (k === 't') { this.sfx.tap(); this.startle(); }
@@ -770,6 +806,7 @@ class App {
   _pan(dt) {
     if (this.phase !== 'play' || !this.panKeys.size) return;
     const v = this.view, o = v.orbit;
+    v.followId = -1;
     let fx = 0, fz = 0;
     if (this.panKeys.has('w') || this.panKeys.has('arrowup')) fz -= 1;
     if (this.panKeys.has('s') || this.panKeys.has('arrowdown')) fz += 1;
@@ -803,8 +840,8 @@ class App {
     put(v.centerTo); put(v.center);
     // ⚠ AND STOP THE AUTO-AIM FIGHTING YOU. lookAtTown() re-centres on the town
     // every two seconds; without this the camera snaps back mid-walk and the
-    // keys feel broken rather than absent. It resumes once you stop.
-    v.panHold = 4;
+    // keys feel broken rather than absent. H explicitly returns home.
+    v.panHold = Infinity; // exploration stays put until H / back to town
   }
 
   _pour(dt) {
@@ -944,24 +981,22 @@ class App {
     let dt = Math.min(0.25, (now - this.last) / 1000);
     this.last = now;
 
-    this._pushHand(dt);
+    if (!this.catchingUp) this._pushHand(dt);
     this._pan(dt);
-    if (this.phase === 'play') { this._pour(dt); this._shape(dt); this._moveTag(); }
+    if (this.phase === 'play' && !this.catchingUp) { this._pour(dt); this._shape(dt); this._moveTag(); }
 
     // ⚠️ breathe/ventFog sit OUTSIDE the paused guard below, so without the
     // phase test the title screen quietly fogs and un-fogs a town nobody is
     // playing — and fog is real weather, not decoration.
-    if (this.phase === 'play') {
+    if (this.phase === 'play' && !this.catchingUp) {
       if (this.breathing) this.sim.breathe(dt);
       else this.sim.ventFog(dt);
     }
 
-    if (!this.paused) {
-      this.acc += dt * this.speed;
-      const step = 1 / C.TICK_HZ;
-      let guard = 0;
-      while (this.acc >= step && guard < 600) { this.sim.step(); this.acc -= step; guard++; }
-      if (guard >= 600) this.acc = 0;
+    if (!this.paused && !this.catchingUp) {
+      const advanced = advanceSimulation(this.sim, this.acc, dt, this.speed, C.TICK_HZ);
+      this.acc = advanced.pending;
+      this.clockLimited = advanced.limited;
     }
 
     this.sfx.update(this.sim, dt);

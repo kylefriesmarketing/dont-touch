@@ -1,0 +1,21 @@
+const assert=require('node:assert/strict');
+const {chromium}=require('C:/Users/kylef/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright');
+(async()=>{const b=await chromium.launch({executablePath:'C:/Program Files/Google/Chrome/Application/chrome.exe',headless:true,args:['--enable-unsafe-swiftshader']});try{
+const p=await b.newPage({viewport:{width:1000,height:800}}),errors=[];p.on('pageerror',e=>errors.push(e.message));await p.goto('http://localhost:8460/?newgame&seed=live&skiptitle&pause');await p.waitForFunction(()=>window.__G?.app?.view?.natureRoot);
+const nature=await p.evaluate(()=>{
+ const v=__G.app.view,s=__G.sim,m=v.natureRoot.children[0];
+ const capture=()=>{const proj=v.camera.projectionMatrix.clone();v.camera.projectionMatrix.makeScale(.00001,.00001,.00001);v.updateNature(1);const a=m.instanceMatrix.array,rows=[];for(let i=0;i<m.count;i++)rows.push([a[i*16+12],a[i*16+13],a[i*16+14]]);v.camera.projectionMatrix.copy(proj);return rows;};
+ const before=capture(),t=before.find(([x,y,z])=>Math.abs(x)<v.GR*.9&&Math.abs(z)<v.GR*.9);if(!t)throw Error('no test tree');const cx=(t[0]/v.GR*.5+.5)*(s.N-1),cy=(t[2]/v.GR*.5+.5)*(s.N-1);
+ const same=r=>Math.abs(r[0]-t[0])<1e-6&&Math.abs(r[2]-t[2])<1e-6;
+ s.works.push({id:99999,kind:3,x:cx,y:cy,prog:.2,stock:0,day:0,by:-1});const cleared=!capture().some(same);s.works.pop();const returns=capture().some(same);
+ const at=s.idx(cx,cy);s.height[at]+=.1;s.lump[at]+=.1;v.reshapeGround(cx,cy,3);const tree=capture().find(same),heightError=Math.abs(tree[1]-v._heightAt(cx,cy));
+ const edgeY=Math.floor(s.N*.45);s.height[s.idx(s.N-1,edgeY)]+=.2;v.reshapeGround(s.N-1,edgeY,3);
+ const pos=v.apron.children[0].geometry.attributes.position;let seam=0;for(let i=0;i<pos.count;i++){const x=pos.getX(i),z=pos.getZ(i);if(Math.abs(Math.max(Math.abs(x),Math.abs(z))-v.GR)<1e-6)seam=Math.max(seam,Math.abs(pos.getY(i)-v._heightAt((x/v.GR*.5+.5)*(s.N-1),(z/v.GR*.5+.5)*(s.N-1))));}
+ return{cleared,returns,heightError,seam,plants:v.natureStats.total};
+});assert(nature.cleared&&nature.returns);assert(nature.heightError<1e-5);assert(nature.seam<1e-5);
+// The away-time loop yields while remaining the only owner of simulation steps.
+const catchup=await p.evaluate(async()=>{const a=__G.app;a.setSpeed(0);const {Sim}=await import('/sim.js');const control=Sim.fromJSON(JSON.parse(JSON.stringify(a.sim.toJSON())));control.setHand(null);for(let i=0;i<990;i++)control.step();let turns=0;const timer=setInterval(()=>turns++,0);const start=a.sim.tick;const pending=a.catchUp(3600e3);const guarded=a.catchingUp;await a.catchUp(3600e3);await pending;clearInterval(timer);return{guarded,turns,steps:a.sim.tick-start,finished:!a.catchingUp,identical:JSON.stringify(a.sim.toJSON())===JSON.stringify(control.toJSON())};});assert(catchup.guarded&&catchup.finished&&catchup.identical);assert(catchup.turns>2);assert.equal(catchup.steps,990);
+await p.evaluate(async()=>{const state=await(await fetch('/output/mature-colony.json')).json();await new Promise((resolve,reject)=>{const r=indexedDB.open('donttouch',1);r.onupgradeneeded=()=>r.result.createObjectStore('colony');r.onsuccess=()=>{const db=r.result,t=db.transaction('colony','readwrite');t.objectStore('colony').put({at:Date.now(),state},'save');t.oncomplete=()=>{db.close();resolve();};t.onerror=()=>reject(t.error);};r.onerror=()=>reject(r.error);});});await p.goto('http://localhost:8460/?skiptitle&pause');await p.waitForFunction(()=>window.__G?.app?.view?.natureRoot);
+await p.evaluate(()=>{__G.app.ui.showPage();__G.app.ui.chapter='living';__G.app.ui.renderBook();});const seen=new Set();let pages=0;while(true){const names=await p.locator('[data-visit-kin]').evaluateAll(es=>es.map(e=>+e.dataset.visitKin));assert(names.length<=40);names.forEach(id=>{assert(!seen.has(id));seen.add(id);});pages++;const next=p.locator('[data-census-page]').filter({hasText:'more names'});if(!await next.count())break;await next.click();}
+const total=await p.evaluate(()=>{const s=__G.sim;let n=0;for(let i=0;i<s.count;i++)if(s.k.alive[i]&&s.k.stage[i]!==0&&s.k.nameId[i]>=0)n++;return n;});assert(pages>1);assert.equal(seen.size,total);assert.deepEqual(errors,[]);console.log(JSON.stringify({nature,catchup,census:{pages,names:seen.size},errors},null,2));
+}finally{await b.close();}})().catch(e=>{console.error(e);process.exit(1)});

@@ -370,7 +370,24 @@
   body.still *{animation-duration:.001s!important;transition-duration:.001s!important}
   /* the age sits beside the day: same weight, quieter, never a number */
   #hud .agechip{margin-left:8px;opacity:.72;font-style:italic;letter-spacing:.02em}
+
+  #survey{position:fixed;right:16px;top:62px;width:212px;z-index:8;background:#171c16ed;border:1px solid #9eaa7560;border-radius:8px;color:#e5dec6;box-shadow:0 8px 24px #0004;padding:10px;font-size:12px}
+  #survey:not([open]){width:auto} #survey summary{cursor:pointer;letter-spacing:.05em}
+  #survey small{float:right;margin-left:12px;opacity:.5} #survey canvas{position:static;inset:auto;display:block;width:100%;height:auto;margin-top:10px;border-radius:3px;cursor:crosshair;touch-action:none}
+  #survey button{display:block;width:100%;text-align:left;padding:6px 4px;margin-top:3px;border:0;border-bottom:1px solid #ffffff12;background:transparent;color:inherit;cursor:pointer;font:inherit}
+  #survey button:hover{background:#ffffff0c} .survey-key{font-size:9px;opacity:.7;margin:6px 0} .survey-caption{color:#a9b98d;margin-top:8px}.survey-note{font-size:11px;line-height:1.5;opacity:.8;margin:9px 0 0}
+  @media(max-width:620px){#survey{top:90px;right:8px;width:170px;max-height:65vh;overflow:auto}}
+  #inspect{bottom:var(--hand-clear,130px);max-height:calc(100dvh - var(--hand-clear,130px) - 68px);overflow:auto}
+  @media(max-width:720px){#inspect{max-height:min(46vh,calc(100dvh - var(--hand-clear,240px) - 80px))}}
+  body:has(#survey[open]) #inspect{visibility:hidden}
+  #inspectHint{font-size:12px;line-height:1.5;color:var(--dim);border-left:2px solid #a99b6a;padding-left:9px;margin:0 0 10px}
+  #inspectActions{display:flex;gap:6px;margin:0 0 10px} #inspectActions button{flex:1;font-size:11px;padding:5px;border:1px solid #ffffff24;border-radius:4px;background:#ffffff08;color:var(--ink);cursor:pointer} #inspectActions button[aria-pressed="true"]{border-color:#c6ac72;background:#c6ac7220}
+  #handReadout{position:fixed;bottom:var(--hand-clear,110px);left:50%;transform:translateX(-50%);z-index:9;pointer-events:none;padding:6px 12px;border:1px solid #c1aa6840;border-radius:20px;background:#151a16dd;color:#eee0b5;font-size:12px;white-space:nowrap}
+  @media(max-width:620px){#handReadout{bottom:var(--hand-clear,125px);font-size:11px;max-width:94vw;white-space:normal;text-align:center}}
+  #page .book-person{border:0;border-bottom:1px dotted currentColor;border-radius:0;background:transparent;color:inherit;font:inherit;font-weight:600;padding:0;cursor:pointer}
+  .census-pages{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12px;margin-top:16px}.census-pages button{background:transparent;color:inherit;border:1px solid #8a755b66;border-radius:4px;padding:5px 8px;cursor:pointer}
 </style>
+<link rel="stylesheet" href="interaction-menu.css">
 </head>
 <body>
 <canvas id="c"></canvas>
@@ -472,6 +489,8 @@
   <!-- the polaroid — written ONCE per select in ui.js, never per frame
        (inspectBody is rebuilt every paint; an <img> in there would churn) -->
   <div id="inspectShot"></div>
+  <div id="inspectActions"><button id="followKin" aria-pressed="false">follow · F</button><button id="closerKin">look closer</button></div>
+  <p id="inspectHint" class="hide"></p>
   <div id="inspectBody"></div>
 </div>
 
@@ -485,6 +504,7 @@
       <button data-ch="days" class="on">the days</button>
       <button data-ch="living">the living</button>
       <button data-ch="yard">the yard</button>
+      <button data-ch="life">little lives</button>
       <button data-ch="know">what they know</button>
     </div>
     <div id="pageBody"></div>
@@ -529,7 +549,7 @@
     </div>
     <div class="row">
       <div><div class="t">the miniature look</div>
-        <div class="h">the shallow focus that makes a photograph of a model read as small.</div></div>
+        <div class="h">soft lantern glow and warm colour, with clear detail across the whole view.</div></div>
       <div class="seg" id="setPost">
         <button data-v="1" class="on">on</button><button data-v="0">off</button>
       </div>
@@ -576,6 +596,9 @@
            way to cross to the far side of the board — a whole movement verb the
            card was quietly keeping to itself. -->
       <dt>W A S D &middot; arrows</dt><dd>walk the view across the layout, the way you would lean over a long table to see the other end.</dd>
+      <dt>Alt-drag · middle-drag</dt><dd>turn the view without touching the town. Zoom close to lower the camera and see their faces.</dd>
+      <dt>F</dt><dd>follow the kin in the inspector. Walking or touching the town stops following.</dd>
+      <dt>M · H</dt><dd>open the map to visit a place or find someone in need. H returns to the town. Exploring stays where you leave the camera.</dd>
       <dt>hold space</dt><dd>breathe on it. enough breath and it rains.</dd>
       <dt>L</dt><dd>the plastic sheet. under it, the water they lose comes back as rain. off, and the room drinks their pond.</dd>
       <dt>K</dt><dd>the bulb over the table.</dd>
@@ -599,21 +622,26 @@
 
 <!-- ============ the title ============================================ -->
 <div id="title" class="hide">
+  <div class="title-card">
+  <div class="title-kicker">a little world that carries on</div>
   <h1>DON'T TOUCH</h1>
   <p class="sub" id="tsub">dad's town, under its sheet, in the dark at the bottom of the stairs.</p>
+  <div id="townStamp"></div>
   <button id="chain" title="the light over the table">
     <span class="cord"></span><span class="bead"></span>
-    <span class="say" id="chainSay">pull the light on</span>
+    <span class="say" id="chainSay">Enter the town</span>
   </button>
   <div id="tmeta">
-    <button id="tBox">the box</button> &middot;
-    <button id="tNew">a new town</button>
+    <button id="tBox">Settings &amp; controls</button> &middot;
+    <button id="tNew">Start a new town</button>
   </div>
   <!-- ⚠️ Populated at boot from worlds/index.json. Hidden entirely when no
        place has been baked, so a plain checkout shows nothing extra. This
        exists because ?world= is a URL parameter, and a feature reachable only
        by typing a URL parameter is a feature nobody has. -->
-  <div id="tplaces" class="hide"><span class="tpl">somewhere real:</span></div>
+  <details id="placeDrawer"><summary>Start somewhere else</summary><div id="tplaces" class="hide"><span class="tpl">Choose a new world</span></div></details>
+  <p class="title-life">Watch friendships form. Shape their surroundings. Meet the next generation.</p>
+  </div>
   <div id="tfoot">A DIRTY BOY DEVS GAME</div>
 </div>
 

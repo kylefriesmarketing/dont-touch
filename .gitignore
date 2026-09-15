@@ -2,3 +2,8 @@ node_modules/
 *.log
 .DS_Store
 8*/
+
+preview-*.png
+preview-*.jpg
+
+output/

@@ -45,12 +45,12 @@ export const tcos = (t) => tsin(t + 0.25);
 // 1. CONSTANTS — all tuning lives here (bible §16.1: data changes touch one file)
 // ---------------------------------------------------------------------------
 export const C = {
-  // ⚠️⚠️ THE BIGGER WORLD (2026-09-09). 144, not 96 — 2.25x the cells. This is
+  // Larger new worlds: 192 cells per side (4x the land of 96; 1.78x 144). This is
   // the size of a GENERATED world; a baked world keeps the N it was baked at
   // and a save is loaded at the N it was written at (fromJSON infers it), so
   // nothing that already exists changes shape. See S below for why every
   // radius in the game is untouched by this number.
-  N: 144,                // heightfield resolution of a GENERATED world
+  N: 192,                // heightfield resolution of a GENERATED world
   // ⚠️⚠️ TICK_HZ IS THE ONLY REAL-TIME KNOB IN THE WHOLE PROJECT, and it is
   // used in exactly ONE place: the frame accumulator in main.js. Raising it
   // replays the IDENTICAL tick sequence faster in wall-clock — the simulation,
@@ -63,6 +63,8 @@ export const C = {
   // player watching for five minutes saw nothing happen at all. At 45 a day is
   // 20 seconds, a kin crosses in 26, and the first hut is 7-17 minutes at 1x —
   // or under four at 4x. Same world, same seed, same story; you can just SEE it.
+  FOUND_RADIUS: 5.2,      // opening scatter; reference cells
+  FOUND_CLEAR: 1.2,       // ground between founding footprints
   TICK_HZ: 45,
   TICKS_PER_DAY: 900,    // 20 real seconds per in-game day at 1x
   // ⚠️ headroom over the observed peak, not a tuning number. The grid battery
@@ -131,6 +133,12 @@ export const C = {
   NIB_DAYS: 8, HALF_DAYS: 20,
   DECIDE_EVERY: 12,      // ticks between decisions
   SPEED: 0.055,          // cells per tick
+  LIFE_EVERY: 30,        // nearby social encounters, independent of frame rate
+  LIFE_RADIUS: 2.6,      // reference cells; no remote sharing or teaching
+  LIFE_PROPS: 12,        // bounded player-placed objects
+  LIFE_SHARE: 0.025,     // food transferred, never created
+  LIFE_BOND: 0.025,      // familiarity gained per meeting
+  LIFE_MUTATION: 0.06,   // inherited aptitude variation, bounded to 0..1
   FIELD_EVERY: 5,        // field physics runs on a slow lane at 5x dt (§16.2)
 };
 
@@ -420,6 +428,8 @@ export class Sim {
     this.rngWeather = makeRNG(this.seed ^ 0x51ED270B);
     this.rngGene = makeRNG(this.seed ^ 0x2545F491);
     this.lang = makeLang(this.seed);
+    this.rngLife = makeRNG(this.seed ^ 0x6C8E9CF5);
+    this.life = { seq:0, propSeq:0, props:[], shares:0, friendships:0, lessons:0, seeds:0, plays:0, lastLog:-100 };
 
     // ⚠️ N is PER INSTANCE: a baked world brings its own, a save brings its
     // own (fromJSON passes opts.N), and only a brand-new generated world takes
@@ -521,6 +531,12 @@ export class Sim {
       // would have looked equally devoted to everything.
       did: new Uint32Array(K * 3), taught: new Uint32Array(K),
       job: new Uint8Array(K),
+      // Identity stamps prevent a reused slot inheriting somebody else's friendship.
+      lifeUid: new Uint32Array(K), friend: new Int32Array(K).fill(-1),
+      friendUid: new Uint32Array(K), bond: new Float64Array(K),
+      aptitude: new Float64Array(K * 3).fill(.5), // forage / empathy / resilience
+      socialAct: new Uint8Array(K), socialUntil: new Uint32Array(K),
+      seedPouch: new Float64Array(K),
     };
     this.names = [];           // nameId -> string
     this.free = [];            // free kin slots
@@ -815,11 +831,15 @@ export class Sim {
     const born = [];
     for (let i = 0; i < n; i++) {
       let x = this.hearth.x, y = this.hearth.y;
-      for (let tries = 0; tries < 12; tries++) {
+      for (let tries = 0; tries < 80; tries++) {
         const a = rng();
-        const px = this.hearth.x + tcos(a) * rr(rng, 0.5 * S, 3.2 * S);
-        const py = this.hearth.y + tsin(a) * rr(rng, 0.5 * S, 3.2 * S);
-        if (this.height[this.idx(px, py)] > this.pondLevel + 0.06) { x = px; y = py; break; }
+        const radius = rr(rng, 1.2 * S, C.FOUND_RADIUS * S);
+        const px = this.hearth.x + tcos(a) * radius;
+        const py = this.hearth.y + tsin(a) * radius;
+        const cell = this.idx(px, py);
+        if (!this.inJar(px, py) || this.water[cell] > 0.001 || this.height[cell] <= this.pondLevel + 0.06) continue;
+        if (born.some(id => (this.k.x[id] - px) ** 2 + (this.k.y[id] - py) ** 2 < 1)) continue;
+        x = px; y = py; break;
       }
       const id = this._spawn(x, y, this._randGenome(rng), -1, -1, 1);
       if (id < 0) continue;
@@ -901,8 +921,13 @@ export class Sim {
     const push = (x, y) => {
       const cx = Math.round(x), cy = Math.round(y), key = cy * N + cx;
       if (seen.has(key) || !ok(cx, cy)) return;
-      // no two works stacked on one another
-      for (const s2 of sites) if (Math.abs(s2.x - cx) < 2 && Math.abs(s2.y - cy) < 2) return;
+      // Reserve the largest founding footprint before the recipe sorts sites.
+      // The old two-cell spacing stacked roofs; leave a lane and a village green.
+      const clear = WORK_HALF[WORK_AT.hut] * 2 + C.FOUND_CLEAR;
+      for (const s2 of sites) if ((s2.x - cx) ** 2 + (s2.y - cy) ** 2 < clear * clear) return;
+      if ((cx - this.hearth.x) ** 2 + (cy - this.hearth.y) ** 2 < 3.5 ** 2) return;
+      for (let id = 0; id < this.count; id++) if (this.k.alive[id] && this.k.glued[id] &&
+        (cx - this.k.x[id]) ** 2 + (cy - this.k.y[id]) ** 2 < 3.2 ** 2) return;
       seen.add(key); sites.push({ x: cx, y: cy });
     };
     if (fromBake && W && W.buildings && W.buildings.length >= 2) {
@@ -916,8 +941,8 @@ export class Sim {
       for (const c of cand) { if (sites.length >= RECIPE.length) break; push(c.x, c.y); }
     }
     // top up (or fill entirely) with a ring around the hearth
-    for (let tries = 0; sites.length < RECIPE.length && tries < 400; tries++) {
-      const a = rng(), r = rr(rng, 1.4 * S, 6.2 * S);   // tcos/tsin take TURNS
+    for (let tries = 0; sites.length < RECIPE.length && tries < 5000; tries++) {
+      const a = rng(), r = rr(rng, 3.0 * S, (tries < 1600 ? 11.0 : 17.0) * S);   // tcos/tsin take TURNS
       push(this.hearth.x + tcos(a) * r, this.hearth.y + tsin(a) * r);
     }
     if (!sites.length) return;
@@ -1303,6 +1328,13 @@ export class Sim {
     // Reviewed and measured: refound a dead town and 14 of 14 new figures
     // arrived pre-traumatized by a hand they never saw.
     k.saw[id] = 0;
+    k.lifeUid[id] = ++this.life.seq; k.friend[id] = -1; k.friendUid[id] = 0; k.bond[id] = 0;
+    k.socialAct[id] = 0; k.socialUntil[id] = 0; k.seedPouch[id] = 0;
+    for (let a=0;a<3;a++) {
+      const inherited = mo>=0 && fa>=0 ? (k.aptitude[mo*3+a]+k.aptitude[fa*3+a])*.5 : .5;
+      const spread = mo>=0 && fa>=0 ? C.LIFE_MUTATION : .2;
+      k.aptitude[id*3+a] = Math.max(0,Math.min(1,inherited+(this.rngLife()-.5)*2*spread));
+    }
     for (let j = 0; j < G; j++) k.genome[id * G + j] = genome[j];
     const span = SPAN_DAYS[expressed(genome, L.span)];
     const homo = marrowHomozygous(genome);
@@ -1425,6 +1457,7 @@ export class Sim {
       }
     }
     this._kin();
+    if (this.tick % C.LIFE_EVERY === 0) this._lifeStep();
     // culture runs at 1 Hz, not 15 (bible §20)
     if (this.tick % 15 === 0) this._weave();
   }
@@ -1740,6 +1773,25 @@ export class Sim {
   _kin() {
     const k = this.k, NN = NEEDS.length, dt = 1 / C.TICKS_PER_DAY;
     let alive = 0, sumB = 0;
+    // Keep original works order and live references: earlier kin can finish
+    // roofs or spend stock in this pass. Moving ring sites stay global.
+    const serviceCell = 16, serviceSide = Math.ceil(this.N / serviceCell);
+    const useServiceBins = this.works.length > 32;
+    if (useServiceBins && (!this._serviceBins || this._serviceBins.length !== serviceSide * serviceSide))
+      this._serviceBins = Array.from({length: serviceSide * serviceSide}, () => []);
+    const serviceBins = useServiceBins ? this._serviceBins : null;
+    if (serviceBins) {
+      for (const bin of serviceBins) bin.length = 0;
+      for (const o of this.works) {
+        if (WORKS[o.kind].ring) { for (const bin of serviceBins) bin.push(o); continue; }
+        const r = WORKS[o.kind].radius * S;
+        const x0 = Math.max(0, Math.floor((o.x - r) / serviceCell));
+        const x1 = Math.min(serviceSide - 1, Math.floor((o.x + r) / serviceCell));
+        const y0 = Math.max(0, Math.floor((o.y - r) / serviceCell));
+        const y1 = Math.min(serviceSide - 1, Math.floor((o.y + r) / serviceCell));
+        for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) serviceBins[y * serviceSide + x].push(o);
+      }
+    }
     // One cheap pass so _decide never does an O(n²) scan for a rare thing.
     // Reused array, not reallocated — this runs every tick.
     if (!this._gluedNow) this._gluedNow = [];
@@ -1816,7 +1868,10 @@ export class Sim {
       // warmth is not a decay, it's a reading of where you are standing —
       // and a windbreak is a warm place that is not the finger
       let shelter = 0, mended = false;
-      for (const o of this.works) {
+      const sx = Math.floor(k.x[id] / serviceCell), sy = Math.floor(k.y[id] / serviceCell);
+      const services = serviceBins && sx >= 0 && sy >= 0 && sx < serviceSide && sy < serviceSide
+        ? serviceBins[sy * serviceSide + sx] : this.works;
+      for (const o of services) {
         if (o.prog < WORK_DONE) continue;
         // THE WALL'S READ SITE: inside the ring is a safe place to be, and a
         // little out of the wind. Nothing fed, nothing warmed outright — the
@@ -1858,6 +1913,8 @@ export class Sim {
           k.need[base + 5] = Math.min(1, k.need[base + 5] + 0.0006);
         }
       }
+      for(const prop of this.life.props) if(prop.kind==='leaf' && Math.hypot(prop.x-k.x[id],prop.y-k.y[id])<2.8*S)
+        shelter=Math.max(shelter,.45);
       const comfort = (T >= band[0] && T <= band[1]) ? 1
         : (1 - Math.min(1, (T < band[0] ? band[0] - T : T - band[1]) / 14)) * (1 - shelter) + shelter * 0.92;
       k.need[base + 0] += (comfort - k.need[base + 0]) * 0.02;
@@ -1872,7 +1929,7 @@ export class Sim {
       else if (k.need[base + 1] <= 0) { hurt = dt / 1.6; cause = 'thirst'; }
       else if (k.need[base + 2] <= 0) { hurt = dt / 3.2; cause = 'hunger'; }
       if (hurt > 0) {
-        k.strain[id] += hurt;
+        k.strain[id] += hurt * (1 - (k.aptitude[id*3+2]-.5)*.16);
         k.need[base + 5] = Math.max(0, k.need[base + 5] - hurt * 0.9);   // fear reads on the lantern
       } else {
         k.strain[id] = Math.max(0, k.strain[id] - dt / (mended ? C.MEND_RATE : 1.4));
@@ -2590,7 +2647,22 @@ export class Sim {
       const v = 1 / (1 + d * 0.16 / S);
       if (v > bc) { bc = v; bcx = k.x[o]; bcy = k.y[o]; }
     }
+    const friend=this.friendOf(id);
+    if(friend>=0) {
+      const d=Math.hypot(k.x[friend]-x,k.y[friend]-y),v=1.3/(1+d*.16/S);
+      if(v>bc && !(this.held && this.held.id===friend)){bc=v;bcx=k.x[friend];bcy=k.y[friend];}
+    }
     push(5, bcx, bcy, deficit(4) * (0.3 + bc * 1.4));
+    if(k.need[base+1]>.5 && k.need[base+2]>.5 && !k.glued[id]) {
+      for(const prop of this.life.props) {
+        const d=Math.hypot(prop.x-x,prop.y-y);
+        if(d>14*S || !this._lifeSafe(prop.x,prop.y,id))continue;
+        if(prop.kind==='bead' && this.daylight>.2 && k.need[base+3]>.45)
+          cand.push({goal:15,tx:prop.x,ty:prop.y,prop:prop.id,score:(.12+deficit(4)*1.6)/(1+d*.12/S)});
+        if(prop.kind==='leaf')
+          cand.push({goal:16,tx:prop.x,ty:prop.y,prop:prop.id,score:(deficit(3)*1.7+deficit(0)*.5)/(1+d*.12/S)});
+      }
+    }
 
     // flee: too hot, too wet
     const here = this.idx(x, y);
@@ -2786,6 +2858,7 @@ export class Sim {
     if (c.goal === 8) {                       // stake the claim so nobody else comes
       for (const co of this.corpses) if (co.x === c.tx && co.y === c.ty) { co.claim = id; break; }
     }
+    if (c.goal === 15 || c.goal === 16) k.goalT[id]=c.prop;
     if (c.goal === 9) { k.goalT[id] = c.who; k.tender[c.who] = id; }
     // the one who stays wants things like anyone else and can only ever have
     // what is already underfoot — or what somebody brings, or what you tilt to them
@@ -2824,6 +2897,9 @@ export class Sim {
         }
         return k.need[b + 3] > 0.93;
       }
+      case 15: case 16:
+        return k.need[b+1]<.4 || k.need[b+2]<.4 || !this.life.props.some(p=>p.id===k.goalT[id]) ||
+          (k.goal[id]===15 ? k.need[b+4]>.94 : k.need[b+3]>.94);
       case 5: return k.need[b + 4] > 0.93;
       case 6: { const i = this.idx(k.x[id], k.y[id]); return this.water[i] < 0.05 && this.temp[i] < 38; }
       // ⚠️ THE EMPTY CUP. The fed-only gate on errands is checked when the goal
@@ -2926,6 +3002,14 @@ export class Sim {
       if (bucket >= 0) k.did[id * 3 + bucket]++;
     }
     switch (k.goal[id]) {
+      case 15: case 16: {
+        const prop=this.life.props.find(p=>p.id===k.goalT[id]);
+        if(near && prop && this._lifeSafe(prop.x,prop.y,id)) {
+          if(prop.kind==='bead') { k.need[base+4]=Math.min(1,k.need[base+4]+.006);this._lifeMark(id,2); }
+          else { k.need[base+3]=Math.min(1,k.need[base+3]+.017);this._lifeMark(id,3); }
+        }
+        break;
+      }
       // ⚠️⚠️ THEY EAT WITH THEIR MOUTH, NOT WITH THEIR FEET. This read
       // `this.moss[i]` — the single cell the kin is STANDING ON — while `near`
       // only requires being within 0.8*S (1.2 cells) of the target. So a kin
@@ -2958,8 +3042,11 @@ export class Sim {
         // the one who gathers gets more out of the same handful — competence,
         // and it takes nothing extra off the board (the cell loses `take`
         // either way), so this cannot overgraze the moss the town lives on
-        const feed = k.job[id] === 1 ? C.MOSS_FEED * 1.16 : C.MOSS_FEED;
-        this.moss[mi] -= take; k.need[base + 2] = Math.min(1, k.need[base + 2] + take * feed);
+        const feed = (k.job[id] === 1 ? C.MOSS_FEED * 1.16 : C.MOSS_FEED) * (1+(k.aptitude[id*3]-.5)*.16);
+        // A tiny part of a real harvest travels with the forager, not free food.
+        const seedTake=Math.min(take*.025,.035-k.seedPouch[id]);
+        k.seedPouch[id]+=Math.max(0,seedTake);
+        this.moss[mi] -= take; k.need[base + 2] = Math.min(1, k.need[base + 2] + (take-Math.max(0,seedTake)) * feed);
         }
       } break;
       case 11: {                              // eating something dad dropped
@@ -3522,6 +3609,104 @@ export class Sim {
     return n;
   }
 
+
+  // -- little lives: local encounters, finite gifts, inherited aptitudes --------
+  friendOf(id) {
+    const k=this.k,f=k.friend[id];
+    return f>=0 && f<this.count && k.alive[f] && k.lifeUid[f]===k.friendUid[id] ? f : -1;
+  }
+  _lifeSafe(x,y,id=-1) {
+    if(!Number.isFinite(x)||!Number.isFinite(y)||!this.inJar(x,y))return false;
+    const i=this.idx(x,y);if(this.water[i]>.035)return false;
+    const band=id>=0 ? HIDE_BAND[expressed(this.k.genome.subarray(id*LOCI.length*2,(id+1)*LOCI.length*2),L.hide)] : [18,32,2,44];
+    return this.temp[i]>band[2]+3 && this.temp[i]<band[3]-4;
+  }
+  placeLittle(kind,x,y) {
+    if(!['bead','leaf'].includes(kind)||!this._lifeSafe(x,y))return false;
+    if(this.life.props.length>=C.LIFE_PROPS)return false;
+    if(this.life.props.some(p=>Math.hypot(p.x-x,p.y-y)<4*S))return false;
+    if(this.works.some(w=>!WORKS[w.kind].ring&&Math.hypot(w.x-x,w.y-y)<(WORK_HALF[w.kind]+1.2)*S))return false;
+    // Stay inside the same reachable disk that clamps autonomous destinations.
+    if(Math.hypot(x-(this.N-1)/2,y-(this.N-1)/2)>(this.N-1)*.43-2*S)return false;
+    this.life.props.push({id:++this.life.propSeq,kind,x,y,day:this.day,visits:0});
+    this.log('little-object',kind==='bead'?'a blue bead landed in the grass.':'a leaf made a little roof over the ground.',1.4);
+    return true;
+  }
+  tidyLittle(x,y) {
+    if(!Number.isFinite(x)||!Number.isFinite(y))return false;
+    let best=-1,dist=4*S;
+    this.life.props.forEach((p,i)=>{const d=Math.hypot(p.x-x,p.y-y);if(d<dist){dist=d;best=i;}});
+    if(best<0)return false;this.life.props.splice(best,1);return true;
+  }
+  _lifeMark(id,act) { this.k.socialAct[id]=act;this.k.socialUntil[id]=this.tick+90; }
+  _lifeBond(a,b,amount) {
+    const k=this.k,current=this.friendOf(a);
+    if(current!==b) {
+      if(current>=0 && k.bond[a]>0)return;
+      k.friend[a]=b;k.friendUid[a]=k.lifeUid[b];k.bond[a]=0;
+    }
+    const was=k.bond[a];k.bond[a]=Math.min(1,was+amount);
+    if(was<.6&&k.bond[a]>=.6) {
+      this.life.friendships++;
+      if(this.day-this.life.lastLog>=4){this.life.lastLog=this.day;
+        this.log('friendship',this._name(a,'friend')+' began looking for '+this._name(b,'friend')+' in the crowd.',2.2);}
+    }
+  }
+  _lifeStep() {
+    const k=this.k,R=C.LIFE_RADIUS*S,cell=R,bins=new Map(),active=[];
+    this.life.props=this.life.props.filter(p=>this.day-p.day<(p.kind==='leaf'?18:120));
+    for(let id=0;id<this.count;id++) {
+      if(!k.alive[id]||k.stage[id]===STAGE.EGG||(this.held&&this.held.id===id))continue;
+      if(this.friendOf(id)<0){k.friend[id]=-1;k.friendUid[id]=0;k.bond[id]=0;}
+      else k.bond[id]=Math.max(0,k.bond[id]-.0006);
+      if(!this._lifeSafe(k.x[id],k.y[id],id))continue;
+      active.push(id);const key=Math.floor(k.x[id]/cell)+','+Math.floor(k.y[id]/cell);
+      if(!bins.has(key))bins.set(key,[]);bins.get(key).push(id);
+      // Seeds are collected from meals and deposited only in depleted, damp soil.
+      const i=this.idx(k.x[id],k.y[id]);
+      if(k.seedPouch[id]>.012 && this.moist[i]>.3 && this.moss[i]<.25 && this.worn[i]<.45 && k.goal[id]!==1) {
+        const seed=Math.min(.008,k.seedPouch[id]);k.seedPouch[id]-=seed;this.moss[i]+=seed;
+        this.life.seeds++;this._lifeMark(id,5);
+      }
+      const leaf=this.life.props.find(p=>p.kind==='leaf'&&Math.hypot(p.x-k.x[id],p.y-k.y[id])<2.8*S);
+      if(leaf) { this.moist[i]=Math.min(1,this.moist[i]+.0003); }
+    }
+    const used=new Set();
+    for(const a of active) {
+      const ax=Math.floor(k.x[a]/cell),ay=Math.floor(k.y[a]/cell);let b=-1,bd=R*R,checked=0;
+      for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++) {
+        const list=bins.get((ax+dx)+','+(ay+dy))||[];
+        for(const id of list){if(id===a)continue;if(++checked>64)break;
+          const d=(k.x[id]-k.x[a])**2+(k.y[id]-k.y[a])**2;
+          if(d<bd){bd=d;b=id;}}
+      }
+      if(b<0)continue;const pair=Math.min(a,b)*C.CAP+Math.max(a,b);if(used.has(pair))continue;used.add(pair);
+      const ab=a*NEEDS.length,bb=b*NEEDS.length;
+      // No interruption of a summon, emergency, lift or construction commitment.
+      const available=id=>k.goal[id]!==6&&k.goal[id]!==12&&k.need[id*NEEDS.length+1]>.25;
+      if(!available(a)||!available(b))continue;
+      const play=k.goal[a]===15||k.goal[b]===15||(k.stage[a]<STAGE.WHOLE&&k.stage[b]<STAGE.WHOLE);
+      const empathy=(k.aptitude[a*3+1]+k.aptitude[b*3+1])*.5;
+      k.need[ab+4]=Math.min(1,k.need[ab+4]+.003+empathy*.002);
+      k.need[bb+4]=Math.min(1,k.need[bb+4]+.003+empathy*.002);
+      this._lifeBond(a,b,C.LIFE_BOND*(play?1.5:1));this._lifeBond(b,a,C.LIFE_BOND*(play?1.5:1));
+      this._lifeMark(a,play?2:1);this._lifeMark(b,play?2:1);
+      if(play){this.life.plays++;for(const p of this.life.props)if(p.kind==='bead'&&Math.hypot(p.x-k.x[a],p.y-k.y[a])<R)p.visits++;}
+      for(const [giver,taker] of [[a,b],[b,a]]) {
+        const gb=giver*NEEDS.length,tb=taker*NEEDS.length;
+        if(k.need[gb+2]>.78 && k.need[gb+1]>.55 && k.need[tb+2]<.4) {
+          const food=Math.min(C.LIFE_SHARE,k.need[gb+2]-.75);
+          k.need[gb+2]-=food;k.need[tb+2]+=food;this.life.shares++;
+          this._lifeMark(giver,4);this._lifeMark(taker,4);
+        }
+        if(k.stage[giver]>=STAGE.WHOLE && k.stage[taker]===STAGE.HALF && this.rngLife()<.025) {
+          const missing=k.knows[giver]&~k.knows[taker];
+          if(missing){k.knows[taker]|=missing&-missing;k.taught[giver]++;this.life.lessons++;this._lifeMark(giver,6);this._lifeMark(taker,6);}
+        }
+      }
+    }
+  }
+
   // MEND. Every need full, the death clock wiped. The one unambiguously good
   // thing in the game, and the only place a positive memory is written without
   // asking their body first — because there is nothing to interpret.
@@ -3985,6 +4170,7 @@ export class Sim {
     // fingerprint fail for a save that had lost nothing at all.
     mix(this.names.length); mix(this.works.length);
     mix(this.workSeq);
+    mix(hashStr(JSON.stringify(this.life)));mix(this.rngLife.getState());
     for (const o of this.works) { mix(o.id || 0); mix(o.kind); mix(o.x); mix(o.y); mix(o.prog); mix(o.stock || 0); if (o.hw != null) { mix(o.cx); mix(o.cy); mix(o.hw); mix(o.hh); if (o.gx != null) { mix(o.gx); mix(o.gy); } } }
     for (const p of this.prac) { mix(p.invented); mix(p.lost); mix(p.tradition); mix(p.reinvented); }
     for (const key of Object.keys(this.placeNames).sort()) mix(key.length + this.placeNames[key].length);
@@ -4026,6 +4212,8 @@ export class Sim {
       // above spells out. `did`/`taught` are the tallies BEHIND it: fold them
       // too, or two towns whose kin are one tick from different trades hash
       // equal and the harness calls a real divergence clean.
+      mix(k.lifeUid[id]);mix(k.friend[id]);mix(k.friendUid[id]);mix(k.bond[id]);mix(k.seedPouch[id]);
+      mix(k.socialAct[id]);mix(k.socialUntil[id]);for(let a=0;a<3;a++)mix(k.aptitude[id*3+a]);
       mix(k.job[id]); mix(k.taught[id]);
       mix(k.did[id * 3]); mix(k.did[id * 3 + 1]); mix(k.did[id * 3 + 2]);
       for (let j = 0; j < G; j++) mix(k.genome[id * G + j]);
@@ -4037,6 +4225,7 @@ export class Sim {
 
   toJSON() {
     return {
+      life: this.life, rngLifeState: this.rngLife.getState(),
       v: 1, seed: this.seed, N: this.N, tick: this.tick, day: this.day, dayFrac: this.dayFrac,
       count: this.count, free: this.free.slice(), names: this.names.slice(),
       graves: this.graves, corpses: this.corpses, stats: this.stats,
@@ -4139,6 +4328,8 @@ export class Sim {
     }
     if (o.k && o.k.alive && o.k.alive.length > C.CAP) throw new Error("save exceeds this build capacity");
     s.tick = o.tick; s.day = o.day; s.dayFrac = o.dayFrac;
+    if(o.life) s.life=JSON.parse(JSON.stringify(o.life));
+    if(o.rngLifeState!=null) s.rngLife.setState(o.rngLifeState);
     s.count = o.count; s.free = o.free.slice(); s.names = o.names.slice();
     s.graves = o.graves; s.corpses = o.corpses; s.stats = o.stats;
     s.works = o.works || [];
@@ -4240,6 +4431,7 @@ export class Sim {
     // the constructor default would be 0, and 0 is a real work id — every kin
     // in an old save would wake up owning the first thing the town ever built.
     if (!o.k.home) s.k.home.fill(-1);
+    if(!o.k.lifeUid) for(let id=0;id<s.count;id++) if(s.k.alive[id]) s.k.lifeUid[id]=++s.life.seq;
     // ⚠️ a held kin who is not alive would sit in this.held forever, and lift()
     // refuses while anything is held — so one bad blob would silently disable the
     // power for the rest of that town's life, with nothing to see and nothing to

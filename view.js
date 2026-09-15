@@ -8,10 +8,13 @@ import * as THREE from './lib/three.module.js';
 import { STAGE, NEEDS, LANTERN_HUE, LOCI, L, expressed, S, C, STREET_PITCH, WORKS, gateLine, ringArc } from './sim.js';
 // ⚠️ gateLine / ringArc come from sim.js: the gate, the road to it and the
 // order the wall closes in are ONE law shared with the crew that builds it.
+import { paintLittleLife } from './little-life-view.js';
 import { Post } from './post.js';
 import { Vfx } from './vfx.js';
 import { hueOf } from './palette.js';
 import { loadGLB } from './glb.js';
+import { landscape, plantNature } from './landscape.js';
+import { finishWater } from './water-finish.js';
 
 const R = 1.0;
 const GR = R * 0.94;    // half-width of the scenery — the heightfield is square
@@ -109,6 +112,7 @@ export class View {
     // ⚠️ x cs: with 2/3-size figures the opening view has to sit 2/3 as far
     // out to show the town at the size that was tuned (see the note above).
     this.orbit = { az: 0.35, el: 1.16, dist: 1.25 * this.cs, tAz: 0.35, tEl: 1.16, tDist: 1.25 * this.cs };
+    this.followId = -1;
     this.panHold = 0;      // seconds the player's own camera walk owns the view
     this.GR = GR;          // the board half-width, so the pan can clamp to it
     // 'jar' by history: this group is THE BOARD — everything that lifts
@@ -215,7 +219,7 @@ export class View {
     // ⚠️ normalBias, not bias. A constant bias either peels small objects off
     // the ground or leaves acne on the hillsides; normalBias scales with the
     // surface angle and does both jobs at this scale.
-    this.key.shadow.normalBias = 0.008;
+    this.key.shadow.normalBias = 0.003 * this.cs;
     this.key.shadow.bias = -0.0004;
     this.scene.add(this.key);
     this.scene.add(this.key.target);
@@ -280,9 +284,9 @@ export class View {
     const nightK = 1 - Math.min(1, d / 0.14);                       // 1 deep night → 0 by d 0.14
     const gold = Math.min(1, d / 0.16) *
       Math.min(1, Math.max(0, 1 - (d - 0.16) / 0.38));              // ⚠️ both factors clamped — the falling edge exceeds 1 below d 0.16
-    this.hemi.intensity = 0.40 + nightK * 0.07 + d * 0.62;          // +0.07 pays for the bluer night sky
+    this.hemi.intensity = 0.48 + nightK * 0.07 + d * 0.62;          // +0.07 pays for the bluer night sky
     this.key.intensity = 0.62 + d * 1.12 + gold * 0.25;             // the low sun carries its own light
-    this.fill.intensity = 0.22 + d * 0.34;
+    this.fill.intensity = 0.30 + d * 0.34;
     // key: noon-white → golden at the edges → MOONLIGHT at dark night. The
     // key at deep night is a pure visibility floor (with the lamp off there
     // is no bulb to be warm about), so it may be moon-coloured — and with the
@@ -291,16 +295,16 @@ export class View {
     // night key at 0.62 swamped the bluer hemisphere and the moon-blue night
     // never reached the frame.
     const kr = 1 - nightK * 0.16;
-    const kg = (0.955 - gold * 0.20) * (1 - nightK) + 0.92 * nightK;
-    const kb = (0.86 - gold * 0.36) * (1 - nightK) + 1.00 * nightK;
+    const kg = (0.955 - gold * 0.12) * (1 - nightK) + 0.92 * nightK;
+    const kb = (0.86 - gold * 0.22) * (1 - nightK) + 1.00 * nightK;
     this.key.color.setRGB(kr, kg, kb);
     // hemisphere: the old constant 0xd8e6f2 at noon, brushed warm at the
     // edges, moon-blue at deep night — the warm hut windows finally have a
     // cold dark to glow against
     this.hemi.color.setRGB(
-      0.85 + gold * 0.13 - nightK * 0.22,
+      0.85 + gold * 0.08 - nightK * 0.22,
       0.90 + gold * 0.02 - nightK * 0.15,
-      0.95 - gold * 0.15 + nightK * 0.02);
+      0.95 - gold * 0.08 + nightK * 0.02);
     // the title screen: the room before anybody came downstairs. View-only, and
     // applied last so it scales whatever the day had already decided.
     // the bulb takes over as the day goes: zero at noon, the main light at
@@ -341,7 +345,7 @@ export class View {
     const m = Math.max(Math.abs(dx), Math.abs(dy));
     const t = Math.max(0, Math.min(1, (m - 0.47) / 0.03));
     const h = this.sim.height[this.sim.idx(cx, cy)] * this.YSv;
-    return h * (1 - t) + EDGE_Y * t;
+    return h; // terrain continues across the boundary without a flattened rim
   }
 
   // ⚠️ SMOOTH, not bilinear. Straight bilinear between cell centres is only C0,
@@ -360,7 +364,7 @@ export class View {
     const dx = x / (N - 1) - 0.5, dy = y / (N - 1) - 0.5;
     const m = Math.max(Math.abs(dx), Math.abs(dy));
     const t = Math.max(0, Math.min(1, (m - 0.47) / 0.03));
-    return (h * this.YSv) * (1 - t) + EDGE_Y * t;
+    return h * this.YSv;
   }
 
   // -- the ground ------------------------------------------------------------
@@ -429,7 +433,7 @@ export class View {
 
     // ---- the mesh. SUB× denser than the sim grid, sampled smoothly, so the
     // hills are hills instead of 63 folded plates.
-    const SUB = N >= 96 ? 2 : 3, M = (N - 1) * SUB + 1;
+    const SUB = N >= 192 ? 1 : N >= 96 ? 2 : 3, M = (N - 1) * SUB + 1;
     const geo = new THREE.PlaneGeometry(GR * 2, GR * 2, M - 1, M - 1);
     geo.rotateX(-Math.PI / 2);
     const pos = geo.attributes.position;
@@ -459,93 +463,7 @@ export class View {
     this.ground.receiveShadow = true;
     this.jar.add(this.ground);
 
-    // ── THE APRON — THE WORLD DOES NOT END AT THE BOARD ─────────────────
-    // Kyle, three times: "it should be endless and fill the screen and you
-    // should be able to see everything using WASD".
-    // ⚠⚠ WITHOUT THIS, SCROLLING IS THE THING THAT CANNOT WORK. A tilted camera
-    // sees ahead of itself, so walking toward any edge brings the void past it
-    // into frame — which is why the no-void solve could only ever allow the
-    // camera to reach 27-59% of the way to the rim (measured across zooms and
-    // angles). No clamp can fix that: the board is finite and the fix has to be
-    // that it stops LOOKING finite.
-    // The same ground texture, tiled outward and dimmed with distance, so the
-    // land keeps going and falls away into the dark of the room rather than
-    // stopping at a line. The play area is unchanged — this is scenery, it has
-    // no cells, and the sim has never heard of it.
-    {
-      // ⚠⚠ A RING, NEVER A PLANE. The first apron was one huge plane seated at
-      // the rim's MEAN height — and the lip raises the rim above the interior,
-      // so the plane sliced straight through the board. Measured: 96.5-97.6% of
-      // a generated world's interior sat BELOW it. The whole game rendered
-      // under a flat dim sheet — Kyle's report verbatim: 'blurred lines
-      // everywhere, all the creatures are under the map'. The Keswick
-      // verification photos survived only because its baked mountains poke
-      // above the seat — one high world made a catastrophic regression look
-      // verified. VERIFY VIEW GEOMETRY ON A GENERATED WORLD TOO, ALWAYS.
-      // Four slabs around the board footprint, each seated below its own
-      // side's LOWEST rim point: the interior cannot be covered because no
-      // apron geometry exists inside [-GR, GR]² at all.
-      const AP = 7;                       // half-widths of land in every direction
-      // ⚠️⚠️ SEAT FROM THE RENDERED SURFACE, NOT THE RAW GRID. `cellToLocal`
-      // returns height[i]*YS with NO edge ease, but the ground mesh is built
-      // from _surfaceY, which eases the last 3% of the board down to EDGE_Y (the
-      // embankment flare that stopped the layout reading as a green cake in a
-      // tin). Seating the apron on the raw rim therefore put all four slabs
-      // 0.09–0.15 ABOVE the ground they extend — a ledge running right around
-      // the world, on every hilly-rimmed seed. This is the THIRD apron defect
-      // in this file's history and the second caused by measuring the board with
-      // a different function than the one that draws it: seat the apron with the
-      // same call the mesh uses, or it will not line up.
-      const sideMin = { n: 1e9, s: 1e9, w: 1e9, e: 1e9 };
-      for (let c = 0; c < N; c++) {
-        sideMin.n = Math.min(sideMin.n, this._surfaceY(c, 0));
-        sideMin.s = Math.min(sideMin.s, this._surfaceY(c, N - 1));
-        sideMin.w = Math.min(sideMin.w, this._surfaceY(0, c));
-        sideMin.e = Math.min(sideMin.e, this._surfaceY(N - 1, c));
-      }
-      // ⚠ CLAMPED, NOT TILED — the board's own square maps to [0,1] in UV, so
-      // everything beyond it samples the board's EDGE PIXEL smeared outward and
-      // the colour at the seam matches by construction. (Tiling was tried and
-      // photographed twice; a board-sized mirror tile matches nowhere.)
-      const aedge = this.groundTex.clone();
-      aedge.needsUpdate = true;
-      aedge.wrapS = aedge.wrapT = THREE.ClampToEdgeWrapping;
-      const amat = new THREE.MeshStandardMaterial({
-        map: aedge, vertexColors: true, roughness: 1, metalness: 0,
-      });
-      this.apron = new THREE.Group();
-      const AGR = GR * AP;
-      const slab = (x0, x1, z0, z1, y) => {
-        const w = x1 - x0, d = z1 - z0;
-        const sx = Math.max(2, Math.round(w / GR * 3)), sz = Math.max(2, Math.round(d / GR * 3));
-        const geo = new THREE.PlaneGeometry(w, d, sx, sz);
-        geo.rotateX(-Math.PI / 2);
-        const p = geo.attributes.position, uv = [], col = [];
-        const cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
-        for (let i = 0; i < p.count; i++) {
-          const wx = p.getX(i) + cx, wz = p.getZ(i) + cz;
-          uv.push(0.5 + wx / (GR * 2), 0.5 - wz / (GR * 2));
-          // full brightness against the board, falling away only well out — a
-          // strong vignette at the seam reads as an edge, the thing this removes
-          const r = Math.min(1, Math.sqrt(wx * wx + wz * wz) / AGR);
-          const f = Math.max(0.10, 1 - Math.pow(r, 2.6) * 0.95);
-          col.push(f, f, f);
-        }
-        geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
-        geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
-        const m = new THREE.Mesh(geo, amat);
-        m.position.set(cx, y, cz);
-        m.renderOrder = -1;
-        m.receiveShadow = false;
-        this.apron.add(m);
-      };
-      const M2 = 0.015;
-      slab(-AGR, AGR, -AGR, -GR, sideMin.n - M2);   // north, full width (owns its corners)
-      slab(-AGR, AGR, GR, AGR, sideMin.s - M2);     // south, full width
-      slab(-AGR, -GR, -GR, GR, sideMin.w - M2);     // west band
-      slab(GR, AGR, -GR, GR, sideMin.e - M2);       // east band
-      this.jar.add(this.apron);
-    }
+    this.apron = landscape(this, THREE, GR, detail, SUB);
 
     // ⚠️ PICKING GETS ITS OWN LOW-RES MESH. Raycasting the display terrain is
     // ~110k triangles per pointermove while the finger is down. This one is the
@@ -793,6 +711,14 @@ export class View {
       this.kits.houses = byName;
       for (const [o, g] of this.workViews) if (o.kind === 4) { this.workRoot.remove(g); g.traverse(n2 => { if (n2.geometry && !n2.userData.shared) n2.geometry.dispose(); }); this.workViews.delete(o); }
     });
+    // More legible starter homes, with the civic hut as a loading fallback.
+    loadGLB('assets/village-details.glb', THREE).then(model => {
+      if (!model) return;
+      let hut; model.traverse(n => { if (n.name === 'hut') hut=n; if(n.isMesh){n.castShadow=true;n.receiveShadow=true;n.userData.shared=true;} });
+      if (!hut) return;
+      this.kits.village={hut};this._winSig='';
+      for (const [o,g] of this.workViews) if(o.kind===3){this.workRoot.remove(g);g.traverse(n=>{if(n.geometry&&!n.userData.shared)n.geometry.dispose();});this.workViews.delete(o);}
+    });
     // the civic kit: granary (8), mill (9, sails as a child node), mending house (10), school (11)
     loadGLB('assets/civic.glb', THREE).then((model) => {
       if (!model) return;
@@ -955,8 +881,8 @@ export class View {
         new THREE.MeshStandardMaterial({ color: 0x2f5a72, roughness: 0.2, metalness: 0.1 }));
       w.position.y = 0.003; g.add(w);
 
-     } else if (o.kind === 3 && this.kits && this.kits.civic) {   // THE FIRST HUT — THE KIT: wattle under thatch
-      this._placeKitPiece(g, this.kits.civic.hut, 0.052); g.userData.kit = 'hut';
+     } else if (o.kind === 3 && this.kits && (this.kits.village || this.kits.civic)) {   // THE FIRST HUT — THE KIT: wattle under thatch
+      this._placeKitPiece(g, (this.kits.village || this.kits.civic).hut, 0.052); g.userData.kit = 'hut';
     } else if (o.kind === 3) {                           // THE FIRST HUT
       // bent sticks and turf. This is the first night any of them slept dry.
       const wall = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.031, 0.020, 7), M.turf);
@@ -1846,9 +1772,12 @@ export class View {
     // unit geometries; per-instance scale carries the shape
     const needleM = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.93 });
     const ballM = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.93 });
-    mkIM(new THREE.ConeGeometry(1, 1, 7), needleM, cones, true);
-    mkIM(new THREE.IcosahedronGeometry(1, 1), ballM, balls, true);
-    mkIM(new THREE.CylinderGeometry(0.0032, 0.0052, 0.020, 5), trunkM, trunks, false);
+    const fallback = [mkIM(new THREE.ConeGeometry(1, 1, 7), needleM, cones, true),
+      mkIM(new THREE.IcosahedronGeometry(1, 1), ballM, balls, true),
+      mkIM(new THREE.CylinderGeometry(0.0032, 0.0052, 0.020, 5), trunkM, trunks, false)];
+    loadGLB('assets/nature.glb', THREE).then(model => {
+      if (model) plantNature(this, THREE, model, trunks, fallback);
+    }).catch(e => console.error('nature kit:', e));
   }
 
   // ── THE STREETS, WORN IN ─────────────────────────────────────
@@ -2092,12 +2021,14 @@ export class View {
       envMap: this.envCube, envMapIntensity: 0.85,
     }));
     this.jar.add(this.water);
+    finishWater(this);
   }
 
   _paintWater() {
     const s = this.sim, N = s.N, d = this.waterData;
     const pos = this.waterGeo.attributes.position;
     const wob = this.t * 0.9;
+    this.waterTime.value=this.t;
     for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
       const i = y * N + x, w = s.water[i];
       const ripple = w > 0.004 ? Math.sin(x * 0.7 + wob) * Math.sin(y * 0.6 - wob * 1.3) * 0.0016 : 0;
@@ -2105,10 +2036,10 @@ export class View {
       const o = i * 4;
       // depth reads as colour AND as opacity, so a pond has a shallow edge and
       // a middle you cannot see the bottom of
-      const a = w <= 0.006 ? 0 : Math.min(0.93, (w - 0.006) * 9);
+      const a = w <= 0.006 ? 0 : Math.min(0.90, (w - 0.006) * 11);
       const dark = Math.min(1, w * 5.5);
       const deep = dark * dark;
-      let cr = 104 - deep * 74, cg = 152 - deep * 92, cb = 176 - deep * 66;
+      let cr = 125 - deep * 91, cg = 185 - deep * 80, cb = 177 - deep * 54;
       // the MENISCUS: where a resin pour meets the flock it pulls a pale line.
       // One band at the shallow rim sells the whole 'this was poured' read.
       if (w > 0.006 && w < 0.017) {
@@ -2511,7 +2442,8 @@ export class View {
       // gait: a squash-and-stretch bob. View-only, so Math.sin is fine here.
       const ph = this.t * (2.2 + k.pulse[id] * 0.5) + (this.phase ? this.phase[id] : k.phase[id]) * 6.28;
       const moving = Math.abs(k.tx[id] - k.x[id]) + Math.abs(k.ty[id] - k.y[id]) > 0.5 && st !== STAGE.EGG;
-      const bob = moving ? Math.abs(Math.sin(ph)) : 0.5 + Math.sin(ph * 0.35) * 0.08;
+      const playing = k.socialUntil[id]>this.sim.tick && k.socialAct[id]===2 && !k.glued[id];
+      const bob = playing ? .6+Math.abs(Math.sin(ph*1.7))*.8 : moving ? Math.abs(Math.sin(ph)) : 0.5 + Math.sin(ph * 0.35) * 0.08;
       const sq = 1 + (moving ? Math.sin(ph * 2) * 0.16 : Math.sin(ph * 0.5) * 0.04);
 
       // GAIT AS HEALTH: a bright kin bounces, a failing one barely lifts its
@@ -2886,7 +2818,21 @@ export class View {
   fxSplash(cx, cy, o) { if (this.vfx) this.vfx.splash(cx, cy, o); }
 
   // point the camera at where they actually live
+  followKin(id) {
+    const s = this.sim;
+    this.followId = id >= 0 && s.k.alive[id] ? id : -1;
+    if (this.followId >= 0) { this.followBorn = s.k.born[id]; this.followName = s.k.nameId[id]; this.panHold = Infinity; }
+  }
+
+  focusCell(cx, cy) {
+    const N = this.sim.N, lim = this.panLimitNow();
+    let x = (cx / (N-1) - .5) * GR * 2, z = (cy / (N-1) - .5) * GR * 2;
+    const r = Math.hypot(x,z); if (r > lim) { x *= lim/r; z *= lim/r; }
+    this.centerTo.set(x,.06,z);
+  }
+
   lookAtTown() {
+    this.followId = -1;
     const s = this.sim, k = s.k;
     let cx = 0, cy = 0, n = 0;
     for (let i = 0; i < s.count; i++) if (k.alive[i]) { cx += k.x[i]; cy += k.y[i]; n++; }
@@ -3078,7 +3024,7 @@ export class View {
         // ⚠️ OUTSIDE the deepest wall, or the quad sits inside the box and the
         // depth test hides it — 7 windows rendered invisible on the first pass
         // because a house body can be 0.062 deep and the quad sat at z 0.023.
-        const spots = o.kind === 3 ? [[0, 0.014, 0.036]]
+        const spots = o.kind === 3 ? (this.kits.village ? [[-.011,.0128,.018],[.011,.0128,.018]] : [[0, 0.014, 0.036]])
           : o.kind === 4 ? [[-0.014, 0.019, 0.038], [0.014, 0.019, 0.038]]
           // a granary is a store, not a home: one lamp over the loading step
           : o.kind === 8 ? [[0, 0.040, 0.033]]
@@ -3344,7 +3290,7 @@ export class View {
     const w = this.canvas.clientWidth || window.innerWidth;
     const h = this.canvas.clientHeight || window.innerHeight;
     this.renderer.setSize(w, h, false);
-    if (this.post) this.post.setSize(Math.max(2, w | 0), Math.max(2, h | 0));
+    if (this.post) this.post.setSize(Math.max(2, this.canvas.width), Math.max(2, this.canvas.height));
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.fitLimits();
@@ -3484,7 +3430,8 @@ export class View {
       if (this._elFit > elFloor) elFloor = this._elFit;
     }
     o.el = Math.max(elFloor, Math.min(EL_MAX, o.el));
-    if (o.tEl < elFloor) o.tEl = elFloor;   // or the ease fights the clamp forever
+    // Keep a requested close-up angle while the zoom is still easing inward.
+    if (o.tEl < elFloor && o.tDist >= EL_NEAR_DIST * this.cs) o.tEl = elFloor;
     // ⚠️ AFTER the clamp, not before. These used to be computed from the
     // UNCLAMPED elevation, so the frame you actually saw was always one behind
     // the limit — most visible as a shimmer when you drag into the stop.
@@ -3500,9 +3447,14 @@ export class View {
     // main.js; while it is running the town does not get to pull the camera back
     // onto itself mid-stride, which would read as the keys being broken. It ticks
     // down so following the town resumes on its own a moment after you stop.
+    if (this.followId >= 0) {
+      const id = this.followId;
+      if (!s.k.alive[id] || s.k.born[id] !== this.followBorn || (this.followName >= 0 && s.k.nameId[id] !== this.followName)) this.followId = -1;
+      else this.focusCell(s.k.x[id], s.k.y[id]);
+    }
     if (this.panHold > 0) this.panHold -= dt;
     else if ((this._aimT = (this._aimT || 0) + dt) > 2) { this._aimT = 0; this.lookAtTown(); }
-    this.center.lerp(this.centerTo, Math.min(1, dt * 0.8));
+    this.center.lerp(this.centerTo, Math.min(1, dt * (this.followId >= 0 ? 7 : 0.8)));
     this.camera.position.set(
       this.center.x + Math.sin(o.az) * cy * o.dist,
       sy * o.dist + 0.10,
@@ -3626,7 +3578,7 @@ export class View {
     // put the sharp band on it. Smoothed hard: a focus that snaps every frame
     // reads as a camera fault. (Age of Toys learned the same lesson about
     // pointing a camera at a raw centroid — never feed one to anything直接.)
-    if (this.post.ok) {
+    if (this.post.ok && this.post.p.blurMax > 0) {
       const s2 = this.sim, k2 = s2.k;
       let cx = 0, cy = 0, cz = 0, n2 = 0;
       for (let id = 0; id < s2.count; id++) {
@@ -3647,11 +3599,13 @@ export class View {
     // an effect has run — the reach branch, the held-kin check, _paintGifts.
     // Ticked here rather than in each system so a paused board holds its rings
     // exactly where they were instead of losing them to a dropped call.
+    paintLittleLife(this);
     this.vfx.update(dt);
     // ⚠️ after the kin pass, never before: _hoverFrame reads lanternPos, which
     // is rewritten every frame, and a stale read puts the halo one frame behind
     // the figure — which at a walking pace is a visible slip.
     this._hoverFrame(dt);
+    if (this.updateNature) this.updateNature(dt);
 
     if (this.post.enabled === false) this.postOn = false;
     else if (this.post.enabled === true) this.postOn = true;
@@ -3686,8 +3640,10 @@ export class View {
   // where the flat used to be.
   reshapeGround(cx, cy, r) {
     if (!this.ground) return;
+    this.natureTerrainRevision = (this.natureTerrainRevision || 0) + 1;
     const N = this.sim.N, SUB = this._groundSUB, M = this._groundM;
     const pad = r + 1.5;
+    if (cx-pad < 1 || cy-pad < 1 || cx+pad > N-2 || cy+pad > N-2) this.refreshLandscape?.();
     const pos = this.ground.geometry.attributes.position;
     const gx0 = Math.max(0, Math.floor((cx - pad) * SUB)), gx1 = Math.min(M - 1, Math.ceil((cx + pad) * SUB));
     const gy0 = Math.max(0, Math.floor((cy - pad) * SUB)), gy1 = Math.min(M - 1, Math.ceil((cy + pad) * SUB));

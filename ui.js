@@ -2,6 +2,7 @@
 // DOM overlay. The game must be fully playable with every panel closed. (Invariant 7)
 
 import { LOCI, L, NEEDS, STAGE, STAGE_NAME, expressed, carried, marrowHomozygous, C, AGES, WORKS } from './sim.js';
+import { InteractionMenu } from './interaction-menu.js';
 import { LUT, setPalette, setGlyphs, hueOf, NEED_MARK, NEED_WORD, worstNeed } from './palette.js';
 
 const $ = (id) => document.getElementById(id);
@@ -28,6 +29,16 @@ export class UI {
   constructor(sim, app) {
     this.sim = sim; this.app = app;
     this.selected = -1;
+    // Dock observations above the actual toolbar, including wrapped phone rows
+    // and the player's chosen text scale.
+    const dockPanels = () => {
+      const hand = $('hand').getBoundingClientRect();
+      if (hand.height > 0) document.documentElement.style.setProperty('--hand-clear', Math.ceil(innerHeight-hand.top+10)+'px');
+    };
+    this.panelObserver = new ResizeObserver(dockPanels);
+    this.panelObserver.observe($('hand')); this.panelObserver.observe($('fascia'));
+    addEventListener('resize',dockPanels);
+
     this.chapter = 'days';     // which book chapter is open
 
     this.lastChron = 0;
@@ -35,6 +46,9 @@ export class UI {
     this.settings = this.loadSettings();
     this.seen = new Set(JSON.parse(localStorage.getItem('donttouch-seen') || '[]'));
     this.nudgeT = 0;
+    this.handReadout = el('div', 'hide'); this.handReadout.id = 'handReadout';
+    document.body.appendChild(this.handReadout);
+    this.menu = new InteractionMenu(this);
     this.wire();
     this.applySettings();
   }
@@ -89,6 +103,16 @@ export class UI {
       if (!this.sim.lid) this.nudge('the room is dry. whatever they lose to the air now, the air keeps.', 'sheetdry');
     });
     $('pageBtn').addEventListener('click', () => this.showPage());
+    $('pageBody').addEventListener('click', (e) => {
+      const person=e.target.closest('[data-visit-kin]');
+      if (person) {
+        const id=+person.dataset.visitKin;
+        if (!this.sim.k.alive[id] || this.sim.k.nameId[id]!==+person.dataset.nameId) { this.renderBook(); return; }
+        $('pageWrap').classList.add('hide');this.select(id);this.app.view.followKin(id);return;
+      }
+      const page=e.target.closest('[data-census-page]');
+      if(page){this.censusPage=+page.dataset.censusPage;this.renderBook();}
+    });
     $('pgtabs').addEventListener('click', (e) => {
       const b = e.target.closest('button'); if (!b) return;
       this.chapter = b.dataset.ch;
@@ -99,6 +123,11 @@ export class UI {
     $('closePage').addEventListener('click', () => $('pageWrap').classList.add('hide'));
     $('savePage').addEventListener('click', () => this.exportPage());
     $('closeInspect').addEventListener('click', () => this.select(-1));
+    $('followKin').addEventListener('click', () => this.toggleFollow());
+    $('closerKin').addEventListener('click', () => {
+      const v=this.app.view, id=this.selected; if(id<0 || !this.sim.k.alive[id]) return;
+      v.followKin(id); v.orbit.tDist=Math.min(v.orbit.tDist,.82*v.cs); v.orbit.tEl=.63;
+    });
 
     // --- the hand -----------------------------------------------------------
     $('hand').addEventListener('click', (e) => {
@@ -131,6 +160,7 @@ export class UI {
   // reflect the armed power, and leave its description up for a moment so a
   // click reads as an explanation rather than a mode change with no feedback
   armUI(p) {
+    this.menu?.reflect(p);
     for (const b of document.querySelectorAll('#hand .hb')) {
       const on = b.dataset.p === p;
       b.setAttribute('aria-pressed', on ? 'true' : 'false');
@@ -153,9 +183,18 @@ export class UI {
     this.nudgeT = 6.5;
   }
 
+  toggleFollow() {
+    const v=this.app.view, id=this.selected;
+    v.followKin(v.followId===id ? -1 : id);
+  }
+
   select(id) {
+    if (id !== this.selected && this.app.view) this.app.view.followId = -1;
     this.selected = id;
+    $('inspectHint').classList.add('hide');
+    if (id >= 0 && this.app.survey) this.app.survey.root.open = false;
     $('inspect').classList.toggle('hide', id < 0);
+    if (id >= 0) this.paintInspector();
     // the polaroid — taken ONCE per tap, never per frame (paintInspector
     // rebuilds inspectBody every paint; the photo lives outside it)
     const shot = $('inspectShot');
@@ -180,6 +219,9 @@ export class UI {
 
   frame(dt = 0) {
     const s = this.sim;
+    this.feedbackElapsed = (this.feedbackElapsed || 0) + dt;
+    if (this.feedbackElapsed >= .1) { this.feedbackElapsed = 0; this.paintHandFeedback(); }
+    if (this.app.survey) this.app.survey.frame(dt);
 
     // ⚠️ THE RULE FOR THIS LINE: the always-on layer may show only what is true
     // of the ROOM, never what is true of the KIN. That is Invariant 7 (the
@@ -213,7 +255,8 @@ export class UI {
       this._ageSeen = ageI;
       if (this.app && this.app.sfx) this.app.sfx.chime();
     }
-    $('hud').innerHTML = `<b>day ${s.day}</b><span class="agechip">${AGES[ageI].name}</span>`;
+    const hudHTML = `<b>day ${s.day}</b><span class="agechip">${AGES[ageI].name}</span>`;
+    if (this._hudHTML !== hudHTML) { $('hud').innerHTML = hudHTML; this._hudHTML = hudHTML; }
     // ── THE LAST PAGE ──────────────────────────────────────────
     // Real loss is allowed here — Kyle's call — so when the last kin dies the
     // book closes and SAYS so, once, instead of the board just going quiet and
@@ -240,16 +283,47 @@ export class UI {
     // makes it a fraction of the way to rain, which also makes it predictive —
     // the only job a weather readout has.
     const t = s.temp[s.idx(s.hearth.x, s.hearth.y)];
-    const p = s.humid / C.CLOUD;
-    $('weather').innerHTML =
+    const p = s.humid / (C.CLOUD * s.area);
+    const weatherHTML =
       `${t.toFixed(0)}°<span>·</span>` +
       `${s.rainLeft > 0 ? 'raining' : p > 0.8 ? 'about to rain' : p > 0.45 ? 'heavy air' : 'clear'}` +
       (s.lid ? '' : '<span>·</span>uncovered');
+    if (this._weatherHTML !== weatherHTML) { $('weather').innerHTML = weatherHTML; this._weatherHTML = weatherHTML; }
 
     if (this.nudgeT > 0) { this.nudgeT -= dt; if (this.nudgeT <= 0) $('nudge').classList.remove('up'); }
 
     this.pumpChronicle();
-    if (this.selected >= 0) this.paintInspector();
+    this.inspectElapsed = (this.inspectElapsed || 0) + dt;
+    if (this.selected >= 0 && this.inspectElapsed >= .2) { this.paintInspector(); this.inspectElapsed = 0; }
+    const following = this.selected >= 0 && this.app.view.followId === this.selected;
+    if (this._following !== following) {
+      this._following = following;
+      $('followKin').setAttribute('aria-pressed', String(following));
+      $('followKin').textContent = following ? 'following · F' : 'follow · F';
+    }
+  }
+
+  paintHandFeedback() {
+    const a=this.app,s=this.sim;
+    let text='';
+    if (a.phase === 'play') {
+      if (a.reach) {
+        const pct=Math.min(100,Math.floor(a.reach.t/(a.reach.ms || 900)*100));
+        text=(a.reach.power || 'lift')+' · '+s.nameOf(a.reach.id)+' · '+pct+'%';
+      } else if (s.held) text='holding '+s.nameOf(s.held.id)+' · release over land to set down';
+      else if (a.pourAt) {
+        const depth=s.water[s.idx(...a.pourAt)];
+        text='pouring · '+(depth>.14?'deep water':depth>.07?'water rising':'shallow water');
+      } else if (a.shapeAt) text=a.shapeDir>0?'raising the ground':'lowering the ground';
+      else if (a.breathing) text='breathing · '+Math.min(100,Math.floor(s.fog*100))+'%';
+      else if (a.touch) {
+        const t=s.temp[s.idx(a.touch.cx,a.touch.cy)];
+        text=(a.touch.e>.65?'resting':'pressing')+' · ground '+t.toFixed(0)+'°';
+        if(a.paused)text+=' · time paused';
+      }
+    }
+    this.handReadout.classList.toggle('hide',!text);
+    if(this.handReadout.textContent!==text)this.handReadout.textContent=text;
   }
 
   pumpChronicle() {
@@ -300,7 +374,7 @@ export class UI {
     const GOALS = ['wandering', 'looking for food', 'going to water', 'looking for a warm place',
       'resting', 'looking for company', 'getting away', 'courting', 'carrying the dead',
       'going to the one who stays', 'making something', 'going to what fell out of the sky',
-      'going where something wanted them', 'gathering for the store', 'carrying water'];
+      'going where something wanted them', 'gathering for the store', 'carrying water', 'playing around the bead', 'resting under a leaf'];
 
     const glued = !!k.glued[id];
     const worst = worstNeed(k.need, base);
@@ -349,6 +423,13 @@ export class UI {
     if (mo >= 0) h += `<div class="line2">out of ${s.nameOf(mo)} and ${s.nameOf(fa)} · generation ${k.gen[id]}</div>`;
     else h += `<div class="line2">a founder. nobody made them.</div>`;
 
+    const friend=s.friendOf(id), act=k.socialUntil[id]>s.tick?k.socialAct[id]:0;
+    const moments=['','spending time with a neighbour','playing','resting under a leaf','sharing a meal','scattering gathered seeds','learning together'];
+    h+='<div class="life-note">'+(act?moments[act]+'.<br>':'');
+    if(friend>=0 && k.bond[id]>.15)h+=(k.bond[id]>=.6?'close to ':'getting to know ')+s.nameOf(friend)+'.<br>';
+    h+='Inherited strengths <span title="Inherited at birth with small variation. Their children may differ.">(generation '+k.gen[id]+')</span><div class="life-traits">';
+    ['foraging','empathy','resilience'].forEach((label,a)=>{h+='<span>'+label+' '+Math.round(k.aptitude[id*3+a]*100)+'%</span>';});
+    h+='</div></div>';
     box.innerHTML = h;
   }
 
@@ -378,6 +459,18 @@ export class UI {
     if (t) [...t.children].forEach(b => b.classList.toggle('on', b.dataset.ch === this.chapter));
   }
 
+  pageLife() {
+    const s=this.sim,k=s.k,life=s.life,rows=[],gens=new Map();
+    for(let id=0;id<s.count;id++)if(k.alive[id]){
+      const gen=k.gen[id];if(!gens.has(gen))gens.set(gen,{n:0,t:[0,0,0]});const g=gens.get(gen);g.n++;for(let a=0;a<3;a++)g.t[a]+=k.aptitude[id*3+a];
+      const f=s.friendOf(id);if(f>=0&&k.bond[id]>=.6&&!(f<id&&s.friendOf(f)===id&&k.bond[f]>=.6))rows.push('<li><button data-visit-kin="'+id+'" data-name-id="'+k.nameId[id]+'">'+s.nameOf(id)+'</button> looks for '+s.nameOf(f)+'.</li>');
+    }
+    let h='<h2>the little lives</h2><div class="sub">'+life.shares+' shared mouthfuls · '+life.plays+' playful encounters · '+life.lessons+' lessons · '+life.seeds+' seeds carried</div><h3>familiar faces</h3>'+(rows.length?'<ul>'+rows.slice(0,50).join('')+'</ul>':'<p>They are still getting to know one another. Friendships grow through repeated meetings.</p>');
+    h+='<h3>the generations</h3><p>Foraging changes what a meal provides. Empathy helps company satisfy them. Resilience slows strain. Children inherit a blend of their parents’ strengths, with small variation; survival and parenthood shape later generations.</p><table><thead><tr><th>Generation</th><th>Alive</th><th>Foraging</th><th>Empathy</th><th>Resilience</th></tr></thead><tbody>';
+    for(const [gen,g] of [...gens].sort((a,b)=>a[0]-b[0]))h+='<tr><td>'+gen+'</td><td>'+g.n+'</td>'+g.t.map(v=>'<td>'+Math.round(v/g.n*100)+'%</td>').join('')+'</tr>';
+    h+='</tbody></table><h3>things in the grass</h3><p>'+life.props.length+' of '+C.LIFE_PROPS+' objects placed. Beads last 120 days; leaves last 18. Put away removes either.</p>';return h;
+  }
+
   renderBook(fromDay = this._daysFrom || 0) {
     // the days chapter's window (0 = the whole book, >0 = the nights you were
     // away) is remembered here, because the tab handler calls this with no
@@ -387,6 +480,7 @@ export class UI {
     const body = $('pageBody');
     if (this.chapter === 'living') body.innerHTML = this.pageCensus() + `<div class="foot">a DIRTY BOY DEVS game</div>`;
     else if (this.chapter === 'yard') body.innerHTML = this.pageYard() + `<div class="foot">a DIRTY BOY DEVS game</div>`;
+    else if (this.chapter === 'life') body.innerHTML = this.pageLife();
     else if (this.chapter === 'know') body.innerHTML = this.pageKnow() + `<div class="foot">a DIRTY BOY DEVS game</div>`;
     else {
       // ⚠ A DEAD TOWN'S BOOK OPENS TO THE LAST PAGE, whichever way you open it.
@@ -440,7 +534,10 @@ export class UI {
       && k.gen[pid] < k.gen[cid] && k.born[pid] <= k.born[cid]) ? s.nameOf(pid) : null;
 
     let h = `<h2>the living</h2><div class="sub">${sub}</div><ol>`;
-    const shown = named.slice(0, 40);
+    const pageCount=Math.max(1,Math.ceil(named.length/40));
+    const page=Math.max(0,Math.min(pageCount-1,this.censusPage || 0));
+    this.censusPage=page;
+    const shown = named.slice(page*40,(page+1)*40);
     for (const id of shown) {
       const nm = s.nameOf(id);
       const mo = k.mother ? k.mother[id] : -1;
@@ -465,7 +562,7 @@ export class UI {
         else if (k.born && k.born[id] >= 0) fact = `born on day ${k.born[id]}`;
         else fact = `of generation ${k.gen[id]}`;
       }
-      h += `<li><span>${k.age[id].toFixed(0)}</span>${nm} — ${fact}.</li>`;
+      h += `<li><span>${k.age[id].toFixed(0)}</span><button class="book-person" data-visit-kin="${id}" data-name-id="${k.nameId[id]}">${nm}</button> — ${fact}.</li>`;
     }
     if (!shown.length && !unnamed) {
       h += eggs > 0
@@ -479,7 +576,11 @@ export class UI {
     h += '</ol>';
 
     const asides = [];
-    if (named.length > shown.length) asides.push('and the rest of them, unlisted.');
+    if(pageCount>1)h += '<div class="census-pages">'+
+      (page>0?'<button data-census-page="'+(page-1)+'">← earlier names</button>':'')+
+      '<span>page '+(page+1)+' of '+pageCount+'</span>'+
+      (page<pageCount-1?'<button data-census-page="'+(page+1)+'">more names →</button>':'')+'</div>';
+    if(shown.length)asides.push('touch a name to go and watch them.');
     const places = Object.values(s.placeNames || {});
     if (places.length) asides.push(`the ground answers to ${places.slice(0, 4).join(', ')}.`);
     if (asides.length) h += `<div class="sub" style="margin-top:14px">${asides.join(' ')}</div>`;

@@ -14,7 +14,7 @@
 //  · `samples` on the render target, or post silently costs you the canvas's
 //    MSAA and every edge in the game goes jaggy — a regression that is very
 //    easy to ship blind because nothing errors.
-//  · The bright-pass threshold is measured on LUMA of an already-clamped
+//  · The bright-pass threshold is measured on LUMA of a linear scene
 //    buffer. Set it too low and the GRASS blooms, because a lit green field is
 //    genuinely bright; the only things that should pass are the lanterns.
 //    Do not "fix" weak bloom by lowering the threshold — brighten the source.
@@ -96,11 +96,18 @@ const COMPOSITE_FRAG = `
 export class Post {
   constructor(renderer) {
     this.renderer = renderer;
+    this.hdr = renderer.extensions.has('EXT_color_buffer_float');
     this.ok = !!(renderer.capabilities && renderer.capabilities.isWebGL2);
+    this.samples = 4;
+    if (this.hdr && this.ok) {
+      const gl = renderer.getContext();
+      const supported = gl.getInternalformatParameter(gl.RENDERBUFFER, gl.RGBA16F, gl.SAMPLES);
+      this.samples = Math.max(0, ...Array.from(supported || []).filter(n => n <= 4));
+    }
     this.p = {
       // ⚠️ this is an RTS-ish readout, not a photograph — the lanterns near the
       // frame edge still have to be legible. Resist making it prettier.
-      blurMax: 0.52,
+      blurMax: 0.0,
       bandCenter: 0.47, bandHalf: 0.26, bandSoft: 0.30,
       bloom: 0.60, bloomThreshold: 0.42, bloomKnee: 0.22,   // LINEAR luma
       vignette: 0.16, sat: 1.13, lift: 0.010,
@@ -132,19 +139,22 @@ export class Post {
   setSize(w, h) {
     if (!this.ok || (this.size.x === w && this.size.y === h)) return;
     this.size.set(w, h);
-    const opt = { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: true };
+    // Linear night colors need more than 8 bits; otherwise dim slopes posterize.
+    const opt = { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: true,
+      type: this.hdr ? THREE.HalfFloatType : THREE.UnsignedByteType };
     [this.rtScene, this.rtHalfA, this.rtHalfB, this.rtQuartA, this.rtQuartB]
       .forEach(rt => rt && rt.dispose());
     this.rtScene = new THREE.WebGLRenderTarget(w, h, opt);
     // ⚠️ WITHOUT THIS THE WHOLE GAME GOES JAGGY. Rendering into a target skips
     // the canvas's own multisampling, and nothing warns you.
-    this.rtScene.samples = 4;
+    this.rtScene.samples = this.samples;
     const hw = Math.max(2, w >> 1), hh = Math.max(2, h >> 1);
     const qw = Math.max(2, w >> 2), qh = Math.max(2, h >> 2);
-    this.rtHalfA = new THREE.WebGLRenderTarget(hw, hh, opt);
-    this.rtHalfB = new THREE.WebGLRenderTarget(hw, hh, opt);
-    this.rtQuartA = new THREE.WebGLRenderTarget(qw, qh, opt);
-    this.rtQuartB = new THREE.WebGLRenderTarget(qw, qh, opt);
+    const flatOpt = { ...opt, depthBuffer: false };
+    this.rtHalfA = new THREE.WebGLRenderTarget(hw, hh, flatOpt);
+    this.rtHalfB = new THREE.WebGLRenderTarget(hw, hh, flatOpt);
+    this.rtQuartA = new THREE.WebGLRenderTarget(qw, qh, flatOpt);
+    this.rtQuartB = new THREE.WebGLRenderTarget(qw, qh, flatOpt);
   }
 
   _pass(mat, target) {
@@ -167,7 +177,7 @@ export class Post {
   render(scene, camera) {
     const r = this.renderer, p = this.p;
     if (!this.ok) { r.setRenderTarget(null); r.render(scene, camera); return; }
-    const sz = r.getSize(new THREE.Vector2());
+    const sz = r.getDrawingBufferSize(new THREE.Vector2());
     this.setSize(Math.max(2, sz.x | 0), Math.max(2, sz.y | 0));
 
     r.setRenderTarget(this.rtScene);
@@ -182,7 +192,7 @@ export class Post {
     const bloom = this._blur(this.rtQuartA, this.rtQuartB, this.rtQuartA, 1.6);
 
     // defocus: the whole frame, softened, to be mixed back by the band
-    const soft = this._blur(this.rtScene, this.rtHalfA, this.rtHalfB, 2.1);
+    const soft = p.blurMax > 0 ? this._blur(this.rtScene, this.rtHalfA, this.rtHalfB, 2.1) : this.rtScene;
 
     const u = this.mComp.uniforms;
     u.tSharp.value = this.rtScene.texture;

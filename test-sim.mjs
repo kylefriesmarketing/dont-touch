@@ -11,11 +11,22 @@ let pass = 0, fail = 0;
 // records where the time actually goes, so the expensive tests can be found and
 // made to share a fixture rather than each growing their own colony.
 const times = [];
+const filterArg = process.argv.find(a => a.startsWith('--filter='));
+const filter = filterArg ? new RegExp(filterArg.slice(9), 'i') : null;
+// Inclusive test-number range lets the full battery run in independent workers.
+const rangeArg = process.argv.find(a => a.startsWith('--range='));
+const range = rangeArg ? rangeArg.slice(8).split(':').map(Number) : null;
+if (range && (range.length !== 2 || !range.every(Number.isInteger) || range[0] < 1 || range[1] < range[0])) throw new Error('Use --range=first:last');
+let testNumber = 0;
 const t = (name, fn) => {
+  testNumber++;
+  if (range && (testNumber < range[0] || testNumber > range[1])) return;
+  if (filter && !filter.test(name)) return;
   const t0 = Date.now();
   try { const r = fn(); if (r === false) throw new Error('returned false'); pass++; }
   catch (e) { fail++; console.log(`  ✗ ${name}\n    ${e.message}`); }
   times.push([Date.now() - t0, name]);
+  if (process.argv.includes("--verbose")) console.log(`  ${((Date.now()-t0)/1000).toFixed(1)}s ${name}`);
 };
 const eq = (a, b, m) => { if (a !== b) throw new Error(`${m || ''} expected ${b}, got ${a}`); };
 const ok = (c, m) => { if (!c) throw new Error(m || 'assertion failed'); };
@@ -116,13 +127,16 @@ t('water is conserved under tilt (within evaporation)', () => {
   ok(after < before && after > before * 0.55, `water: ${before.toFixed(2)} -> ${after.toFixed(2)}`);
 });
 t('tilt moves water toward the low corner', () => {
-  const s = new Sim({ seed: 'b', founders: 0 });
-  const half = (w) => { let l = 0, r = 0; for (let i = 0; i < s.N * s.N; i++) ((i % s.N) < s.N / 2 ? (l += w[i]) : (r += w[i])); return [l, r]; };
-  const [l0, r0] = half(s.water);
-  s.setTilt(0.2, 0); run(s, 6);   // +x tilt lowers the small-x side: water goes left
-  const [l1, r1] = half(s.water);
-  ok((l1 / (l1 + r1)) > (l0 / (l0 + r0)), `water did not shift: ${(l0 / (l0 + r0)).toFixed(3)} -> ${(l1 / (l1 + r1)).toFixed(3)}`);
+  // Compare the same evolving basin with and without tilt. Rain and evaporation
+  // can change either half's fraction even on a perfectly level board.
+  const centroid = (s) => { let mass = 0, x = 0; for (let i=0;i<s.water.length;i++) { mass += s.water[i]; x += (i%s.N)*s.water[i]; } return x/mass; };
+  for (const N of [96,144,192]) {
+    const tilted = new Sim({seed:'b', founders:0, N}), control = new Sim({seed:'b', founders:0, N});
+    tilted.setTilt(.2,0); run(tilted,6); run(control,6);
+    ok(centroid(tilted) < centroid(control)-.5, 'tilt failed to move water downhill at N='+N);
+  }
 });
+
 t('breathing enough makes it rain', () => {
   const s = new Sim({ seed: 'c', founders: 0 });
   let dry = 0; for (let i = 0; i < s.N * s.N; i++) dry += s.water[i];
@@ -1127,7 +1141,8 @@ console.log('the weave');
 // which pushed the whole battery past ten minutes at N=96 — and a gate nobody
 // can afford to run is not a gate. Culture needs real time to happen, so grow
 // the town ONCE and ask it seven questions.
-const W = (() => {
+let weaveFixture;
+const getW = () => weaveFixture ||= (() => {
   const s = new Sim({ seed: 'bat0' });
   const glueSeen = [];
   for (let i = 0; i < C.TICKS_PER_DAY * 200; i++) {
@@ -1141,56 +1156,57 @@ const W = (() => {
 })();
 
 t('a town under pressure works something out', () => {
-  ok(W.s.prac.some(p => p.invented >= 0), 'nobody ever invented anything');
-  ok(W.s.works.length > 0, 'nothing was ever built');
-  ok(W.s.chronicle.some(e => e.kind === 'invented'), 'invention never reached the book');
+  ok(getW().s.prac.some(p => p.invented >= 0), 'nobody ever invented anything');
+  ok(getW().s.works.length > 0, 'nothing was ever built');
+  ok(getW().s.chronicle.some(e => e.kind === 'invented'), 'invention never reached the book');
 });
 t('what one works out, another can learn by watching', () => {
   let holders = 0;
-  for (let id = 0; id < W.s.count; id++) if (W.s.k.alive[id] && W.s.k.knows[id]) holders++;
+  for (let id = 0; id < getW().s.count; id++) if (getW().s.k.alive[id] && getW().s.k.knows[id]) holders++;
   ok(holders > 1, `only ${holders} kin carry any practice — it is not spreading`);
 });
 t('a practice outlives the one who thought of it', () => {
   // the bible's own acceptance test for culture (§7): somebody DOES it who
   // cannot have been taught by the inventor, because they were born after that
   // person died. This is the only thing k.born is read for.
-  ok(W.s.prac.some(p => p.tradition >= 0), 'no practice ever became a tradition');
-  ok(W.s.chronicle.some(e => e.kind === 'tradition'), 'tradition never reached the book');
+  ok(getW().s.prac.some(p => p.tradition >= 0), 'no practice ever became a tradition');
+  ok(getW().s.chronicle.some(e => e.kind === 'tradition'), 'tradition never reached the book');
 });
 t('what they build stands, and does something', () => {
-  const standing = W.s.works.filter(o => o.prog >= 0.9).length;
+  const standing = getW().s.works.filter(o => o.prog >= 0.9).length;
   ok(standing > 0, 'nothing they built ever finished');
-  for (const o of W.s.works) {
+  for (const o of getW().s.works) {
     ok(o.stock >= 0 && o.prog >= 0 && o.prog <= 1, 'a work has impossible state');
     ok(Number.isFinite(o.x) && Number.isFinite(o.y), 'a work is nowhere');
   }
 });
 t('the one who stays never builds', () => {
   // same class as the errand bug — making a thing means going to it
-  ok(W.glueSeen.length > 0, 'never sampled a glued kin');
-  ok(!W.glueSeen.includes(10), 'a glued kin went to build something');
+  ok(getW().glueSeen.length > 0, 'never sampled a glued kin');
+  ok(!getW().glueSeen.includes(10), 'a glued kin went to build something');
 });
 t('the weave round-trips through a save', () => {
-  ok(W.s.works.length > 0, 'nothing built, so this proves nothing');
-  saveEqual(W.s, 'weave');
-  const r = Sim.fromJSON(JSON.parse(JSON.stringify(W.s.toJSON())));
-  eq(r.works.length, W.s.works.length, 'works count');
-  eq(JSON.stringify(r.prac), JSON.stringify(W.s.prac), 'practice state');
+  ok(getW().s.works.length > 0, 'nothing built, so this proves nothing');
+  saveEqual(getW().s, 'weave');
+  const r = Sim.fromJSON(JSON.parse(JSON.stringify(getW().s.toJSON())));
+  eq(r.works.length, getW().s.works.length, 'works count');
+  eq(JSON.stringify(r.prac), JSON.stringify(getW().s.prac), 'practice state');
   let x = 0, y = 0;
-  for (let i = 0; i < W.s.count; i++) { x += W.s.k.knows[i]; y += r.k.knows[i]; }
+  for (let i = 0; i < getW().s.count; i++) { x += getW().s.k.knows[i]; y += r.k.knows[i]; }
   eq(y, x, 'who knows what');
-  eq(r.fingerprint(), W.s.fingerprint(), 'fingerprint');
+  eq(r.fingerprint(), getW().s.fingerprint(), 'fingerprint');
 });
 t('a restored town keeps building the same way', () => {
-  const a2 = Sim.fromJSON(JSON.parse(JSON.stringify(W.s.toJSON())));
-  const b2 = Sim.fromJSON(JSON.parse(JSON.stringify(W.s.toJSON())));
+  const a2 = Sim.fromJSON(JSON.parse(JSON.stringify(getW().s.toJSON())));
+  const b2 = Sim.fromJSON(JSON.parse(JSON.stringify(getW().s.toJSON())));
   run(a2, 20); run(b2, 20);
   eq(b2.fingerprint(), a2.fingerprint(), 'two restores of one save diverged');
 });
 
 // --- the town remembers the hand (bible §6.4 / §9) --------------------------
 console.log('memory of the hand');
-const MEM = (() => {
+let memoryFixture;
+const getMEM = () => memoryFixture ||= (() => {
   const s = new Sim({ seed: 'bat0' });
   run(s, 90);
   s.setHand(s.hearth.x, s.hearth.y);
@@ -1205,11 +1221,11 @@ t('the finger writes a memory, and the sign is the KIN’S OWN', () => {
   // Never assert this on DISTANCE — kin cluster around food and water and it
   // drowns the signal. The memory itself is the thing under test.
   const by = {};
-  for (let id = 0; id < MEM.count; id++) {
-    if (!MEM.k.alive[id] || MEM.k.memV[id] === 0) continue;
-    const g = MEM.k.genome.subarray(id * LOCI.length * 2, (id + 1) * LOCI.length * 2);
+  for (let id = 0; id < getMEM().count; id++) {
+    if (!getMEM().k.alive[id] || getMEM().k.memV[id] === 0) continue;
+    const g = getMEM().k.genome.subarray(id * LOCI.length * 2, (id + 1) * LOCI.length * 2);
     const h = expressed(g, L.hide);
-    (by[h] || (by[h] = [])).push(MEM.k.memV[id]);
+    (by[h] || (by[h] = [])).push(getMEM().k.memV[id]);
   }
   ok(Object.keys(by).length > 0, 'nobody remembers the hand at all');
   const mean = (a) => a.reduce((x, y) => x + y, 0) / a.length;
@@ -1221,12 +1237,12 @@ t('the finger writes a memory, and the sign is the KIN’S OWN', () => {
 });
 t('the hand reaches the town’s own record', () => {
   const kinds = ['scorch', 'drought', 'nonight', 'warmth', 'placename'];
-  ok(MEM.chronicle.some(e => kinds.includes(e.kind)), 'the hand never appears in the book');
+  ok(getMEM().chronicle.some(e => kinds.includes(e.kind)), 'the hand never appears in the book');
 });
 t('the town has no word for the player', () => {
   // P3: cruelty is simulated and visible, and NEVER addressed. If a line ever
   // says "you", the game has started telling the player what they are.
-  for (const s of [MEM, fixture('page', 240), W.s]) {
+  for (const s of [getMEM(), fixture('page', 240), getW().s]) {
     for (const e of s.chronicle) {
       ok(!/\byou(r|rs)?\b/i.test(e.text), `the record spoke to the player: "${e.text}"`);
     }
@@ -1234,13 +1250,13 @@ t('the town has no word for the player', () => {
 });
 t('memory round-trips, and a remembering town continues identically', () => {
   let held = 0;
-  for (let i = 0; i < MEM.count; i++) if (MEM.k.alive[i] && MEM.k.memV[i] !== 0) held++;
+  for (let i = 0; i < getMEM().count; i++) if (getMEM().k.alive[i] && getMEM().k.memV[i] !== 0) held++;
   ok(held > 0, 'nothing to round-trip');
-  saveEqual(MEM, 'memory');
-  const r = Sim.fromJSON(JSON.parse(JSON.stringify(MEM.toJSON())));
-  eq(r.fingerprint(), MEM.fingerprint(), 'fingerprint');
-  eq(JSON.stringify(r.placeNames), JSON.stringify(MEM.placeNames), 'place names');
-  const a2 = clone(MEM), b2 = clone(MEM);
+  saveEqual(getMEM(), 'memory');
+  const r = Sim.fromJSON(JSON.parse(JSON.stringify(getMEM().toJSON())));
+  eq(r.fingerprint(), getMEM().fingerprint(), 'fingerprint');
+  eq(JSON.stringify(r.placeNames), JSON.stringify(getMEM().placeNames), 'place names');
+  const a2 = clone(getMEM()), b2 = clone(getMEM());
   a2.setHand(a2.hearth.x, a2.hearth.y); b2.setHand(b2.hearth.x, b2.hearth.y);
   run(a2, 15); run(b2, 15);
   eq(b2.fingerprint(), a2.fingerprint(), 'two remembering towns diverged');
@@ -1884,7 +1900,7 @@ t('a town left in the dark eventually goes quiet', () => {
 
 // --- report ----------------------------------------------------------------
 console.log('');
-{
+if (!filter && !range) {
   const s = new Sim({ seed: 'report' });
   run(s, 300);
   console.log(`sample run (seed "report", 300 days):`);
